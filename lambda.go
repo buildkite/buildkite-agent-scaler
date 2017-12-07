@@ -1,17 +1,16 @@
 package main
 
 import (
-	"encoding/json"
 	"io/ioutil"
 	"log"
 	"os"
 	"time"
 
 	"github.com/buildkite/buildkite-ecs-agent-scaler/scaler"
-	"github.com/eawsy/aws-lambda-go/service/lambda/runtime"
+	"github.com/eawsy/aws-lambda-go-core/service/lambda/runtime"
 )
 
-func handle(evt json.RawMessage, ctx *runtime.Context) (interface{}, error) {
+func Handle(evt interface{}, ctx *runtime.Context) (interface{}, error) {
 	org := os.Getenv("BUILDKITE_ORG")
 	token := os.Getenv("BUILDKITE_TOKEN")
 	queue := os.Getenv("BUILDKITE_QUEUE")
@@ -40,8 +39,4 @@ func handle(evt json.RawMessage, ctx *runtime.Context) (interface{}, error) {
 
 	log.Printf("Finished in %s", time.Now().Sub(t))
 	return "", nil
-}
-
-func init() {
-	runtime.HandleFunc(handle)
 }
