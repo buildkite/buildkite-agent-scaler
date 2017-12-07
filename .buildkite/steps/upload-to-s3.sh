@@ -23,7 +23,7 @@ EXTRA_REGIONS=(
 NAME="ecs-agent-scaler"
 VERSION=$(awk -F\" '/const Version/ {print $2}' version/version.go)
 BASE_BUCKET=buildkite-lambdas
-BUCKET_PATH="/${NAME}/v${VERSION}"
+BUCKET_PATH="${NAME}/v${VERSION}"
 
 if [[ "${1:-}" != "release" ]] ; then
   BUCKET_PATH="${BUCKET_PATH}-${BUILDKITE_BUILD_NUMBER}"
@@ -33,7 +33,6 @@ fi
 echo "~~~ :buildkite: Downloading artifacts"
 mkdir -p dist/
 buildkite-agent artifact download "dist/*" dist/
-ls -al dist/
 
 echo "+++ :s3: Uploading lambda to ${BASE_BUCKET}/${BUCKET_PATH}/ in ${AWS_DEFAULT_REGION}"
 echo aws s3 sync --acl public-read ./dist "s3://${BASE_BUCKET}/${BUCKET_PATH}/"
