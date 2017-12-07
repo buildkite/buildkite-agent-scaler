@@ -23,28 +23,22 @@ EXTRA_REGIONS=(
 NAME="ecs-agent-scaler"
 VERSION=$(awk -F\" '/const Version/ {print $2}' version/version.go)
 BASE_BUCKET=buildkite-lambdas
-BUCKET_PATH="${NAME}/v${VERSION}"
+BUCKET_PATH="${NAME}/"
 
-if [[ "${1:-}" != "release" ]] ; then
-  BUCKET_PATH="${BUCKET_PATH}-${BUILDKITE_BUILD_NUMBER}"
-  echo "Uploading as $BUCKET_PATH"
+if [[ "${1:-}" == "release" ]] ; then
+  BUCKET_PATH="${BUCKET_PATH}/v${VERSION}"
+else
+  BUCKET_PATH="${BUCKET_PATH}/builds/${BUILDKITE_BUILD_NUMBER}"
 fi
 
 echo "~~~ :buildkite: Downloading artifacts"
-mkdir -p dist/
-buildkite-agent artifact download "dist/*" dist/
+buildkite-agent artifact download handler.zip .
 
 echo "--- :s3: Uploading lambda to ${BASE_BUCKET}/${BUCKET_PATH}/ in ${AWS_DEFAULT_REGION}"
-aws s3 sync --acl public-read ./dist "s3://${BASE_BUCKET}/${BUCKET_PATH}/"
-for f in dist/* ;
-	do echo "https://s3.amazonaws.com/${BASE_BUCKET}/${BUCKET_PATH}/$f"
-done
+aws s3 cp --acl public-read handler.zip "s3://${BASE_BUCKET}/${BUCKET_PATH}/handler.zip"
 
 for region in "${EXTRA_REGIONS[@]}" ; do
 	bucket="${BASE_BUCKET}-${region}"
 	echo "--- :s3: Copying files to ${bucket}"
-	aws --region "${region}" s3 sync --exclude "*" --include "*.zip" --delete --acl public-read "s3://${BASE_BUCKET}/${BUCKET_PATH}/" "s3://${bucket}/${BUCKET_PATH}/"
-	for f in dist/* ; do
-		echo "https://${bucket}.s3-${region}.amazonaws.com/${BUCKET_PATH}/$f"
-	done
+	aws --region "${region}" s3 cp --acl public-read "s3://${BASE_BUCKET}/${BUCKET_PATH}/handler.zip" "s3://${bucket}/${BUCKET_PATH}/handler.zip"
 done
