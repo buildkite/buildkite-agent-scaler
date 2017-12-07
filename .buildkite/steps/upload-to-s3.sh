@@ -34,16 +34,16 @@ echo "~~~ :buildkite: Downloading artifacts"
 mkdir -p dist/
 buildkite-agent artifact download "dist/*" dist/
 
-echo "+++ :s3: Uploading lambda to ${BASE_BUCKET}/${BUCKET_PATH}/ in ${AWS_DEFAULT_REGION}"
-echo aws s3 sync --acl public-read ./dist "s3://${BASE_BUCKET}/${BUCKET_PATH}/"
+echo "--- :s3: Uploading lambda to ${BASE_BUCKET}/${BUCKET_PATH}/ in ${AWS_DEFAULT_REGION}"
+aws s3 sync --acl public-read ./dist "s3://${BASE_BUCKET}/${BUCKET_PATH}/"
 for f in build/* ;
 	do echo "https://s3.amazonaws.com/${BASE_BUCKET}/${BUCKET_PATH}/$f"
 done
 
 for region in "${EXTRA_REGIONS[@]}" ; do
 	bucket="${BASE_BUCKET}-${region}"
-	echo "+++ :s3: Copying files to ${bucket}"
-	echo aws --region "${region}" s3 sync --exclude "*" --include "*.zip" --delete --acl public-read "s3://${BASE_BUCKET}/${BUCKET_PATH}/" "s3://${bucket}/${BUCKET_PATH}/"
+	echo "--- :s3: Copying files to ${bucket}"
+	aws --region "${region}" s3 sync --exclude "*" --include "*.zip" --delete --acl public-read "s3://${BASE_BUCKET}/${BUCKET_PATH}/" "s3://${bucket}/${BUCKET_PATH}/"
 	for f in build/* ; do
 		echo "https://${bucket}.s3-${region}.amazonaws.com/${BUCKET_PATH}/$f"
 	done
