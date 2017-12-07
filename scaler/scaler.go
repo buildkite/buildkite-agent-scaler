@@ -1,10 +1,7 @@
 package scaler
 
-package main
-
 import (
 	"errors"
-	"flag"
 	"fmt"
 	"log"
 	"regexp"
@@ -23,25 +20,25 @@ const (
 )
 
 type Params struct {
-  ECSCluster string
-  ECSService string
-  BuildkiteQueue string
-  BuildkiteOrg string
-  BuildkiteApiToken string
-  SpotFleetID string
+	ECSCluster        string
+	ECSService        string
+	BuildkiteQueue    string
+	BuildkiteOrg      string
+	BuildkiteApiToken string
+	SpotFleetID       string
 }
 
 func Run(params Params) error {
 	count, err := getScheduledJobCount(params.BuildkiteApiToken, params.BuildkiteOrg, params.BuildkiteQueue)
 	if err != nil {
-	return err
+		return err
 	}
 
 	sess := session.New()
 
 	currentCount, err := getAgentCount(sess, params.ECSCluster, params.ECSService)
 	if err != nil {
-	return err
+		return err
 	}
 
 	log.Printf("Changing agent count from %d to %d", currentCount, count)
@@ -49,12 +46,12 @@ func Run(params Params) error {
 	// naively, we will set the count to whatever we need. this will need some form of cooldown
 	// or step function to avoid huge delta change
 	if err = updateAgentCount(sess, params.ECSCluster, params.ECSService, count); err != nil {
-	return err
+		return err
 	}
 
 	resources, err := getContainerInstanceResources(sess, params.ECSCluster)
 	if err != nil {
-	return err
+		return err
 	}
 
 	var totalRequiredCPU int64 = (count * agentCPURequired)
@@ -74,11 +71,13 @@ func Run(params Params) error {
 	}
 
 	if desiredCapacity > 0 {
-		log.Printf("Scaling up spotfleet %q to %d", *spotFleet, desiredCapacity)
-		if err = updateSpotCapacity(sess, *spotFleet, desiredCapacity); err != nil {
-		return err
+		log.Printf("Scaling up spotfleet %q to %d", params.SpotFleetID, desiredCapacity)
+		if err = updateSpotCapacity(sess, params.SpotFleetID, desiredCapacity); err != nil {
+			return err
 		}
 	}
+
+	return nil
 }
 
 var queuePattern = regexp.MustCompile(`(?i)^queue=(.+?)$`)
