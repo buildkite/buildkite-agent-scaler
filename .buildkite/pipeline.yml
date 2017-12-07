@@ -1,7 +1,4 @@
 steps:
-  - name: ":linux: amd64"
-    command: .buildkite/steps/build-binary.sh linux amd64
-
   - wait
   - name: ":lambda:"
     command: .buildkite/steps/build-lambda.sh
