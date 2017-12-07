@@ -16,4 +16,4 @@ docker run --rm \
 mkdir -p dist/
 mv handler.zip "$dist_file"
 
-# buildkite-agent artifact upload "$dist_file"
+buildkite-agent artifact upload "$dist_file"
