@@ -1,0 +1,20 @@
+steps:
+  - name: ":hammer_and_wrench:"
+    command: ".buildkite/steps/test.sh"
+
+  - wait
+
+  - name: ":mac: amd64"
+    command: .buildkite/steps/build-binary.sh darwin amd64
+
+  - name: ":linux: amd64"
+    command: .buildkite/steps/build-binary.sh linux amd64
+
+  - name: ":lambda:"
+    command: .buildkite/steps/build-lambda.sh
+
+  - wait
+  - name: ":pipeline:"
+    command: .buildkite/steps/upload-release-steps.sh
+
+
