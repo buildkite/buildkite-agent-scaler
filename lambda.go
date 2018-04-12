@@ -1,16 +1,18 @@
 package main
 
 import (
+	"context"
 	"io/ioutil"
 	"log"
 	"os"
 	"time"
 
-	"github.com/buildkite/buildkite-ecs-agent-scaler/scaler"
-	"github.com/eawsy/aws-lambda-go-core/service/lambda/runtime"
+	"github.com/aws/aws-lambda-go/events"
+	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/buildkite/buildkite-agent-scaler/scaler"
 )
 
-func Handle(evt interface{}, ctx *runtime.Context) (interface{}, error) {
+func handler(ctx context.Context, snsEvent events.SNSEvent) (string, error) {
 	org := os.Getenv("BUILDKITE_ORG")
 	token := os.Getenv("BUILDKITE_TOKEN")
 	queue := os.Getenv("BUILDKITE_QUEUE")
@@ -39,4 +41,9 @@ func Handle(evt interface{}, ctx *runtime.Context) (interface{}, error) {
 
 	log.Printf("Finished in %s", time.Now().Sub(t))
 	return "", nil
+}
+
+func main() {
+	// Make the handler available for Remote Procedure Call by AWS Lambda
+	lambda.Start(handler)
 }

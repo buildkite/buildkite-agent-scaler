@@ -4,7 +4,7 @@ import (
 	"flag"
 	"log"
 
-	"github.com/buildkite/buildkite-ecs-agent-scaler/scaler"
+	"github.com/buildkite/buildkite-agent-scaler/scaler"
 )
 
 func main() {

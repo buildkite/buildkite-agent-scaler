@@ -3,6 +3,30 @@
 	"ignore": "test",
 	"package": [
 		{
+			"checksumSHA1": "H+nuubKZtdEPryI/ZiaF3W+hnus=",
+			"path": "github.com/aws/aws-lambda-go/events",
+			"revision": "16345c95f707776c585583dfe7be8dda7dd9aeb7",
+			"revisionTime": "2018-04-03T02:18:18Z"
+		},
+		{
+			"checksumSHA1": "guemqs6YweaJeTGD7nfVLwW1A/Q=",
+			"path": "github.com/aws/aws-lambda-go/lambda",
+			"revision": "16345c95f707776c585583dfe7be8dda7dd9aeb7",
+			"revisionTime": "2018-04-03T02:18:18Z"
+		},
+		{
+			"checksumSHA1": "d4ehJWLS4YsqFG825pgwdvKDB6A=",
+			"path": "github.com/aws/aws-lambda-go/lambda/messages",
+			"revision": "16345c95f707776c585583dfe7be8dda7dd9aeb7",
+			"revisionTime": "2018-04-03T02:18:18Z"
+		},
+		{
+			"checksumSHA1": "f9MhOwQHveaPVWO6trwfqHa+W0M=",
+			"path": "github.com/aws/aws-lambda-go/lambdacontext",
+			"revision": "16345c95f707776c585583dfe7be8dda7dd9aeb7",
+			"revisionTime": "2018-04-03T02:18:18Z"
+		},
+		{
 			"checksumSHA1": "Xg0rLw/w05L7wVGlVBtsZ2bnJGU=",
 			"path": "github.com/aws/aws-sdk-go/aws",
 			"revision": "8e3cbe8bc6116511806e5627b0dbc03d5b79ce0a",
@@ -183,12 +207,6 @@
 			"revisionTime": "2017-10-07T11:45:50Z"
 		},
 		{
-			"checksumSHA1": "5VlG9yrFXHqNqmsVErJS29xFQIc=",
-			"path": "github.com/eawsy/aws-lambda-go-core/service/lambda/runtime",
-			"revision": "e26eed6aa244a3d45aa693816a9c5faf39390fcd",
-			"revisionTime": "2017-03-02T23:45:08Z"
-		},
-		{
 			"checksumSHA1": "FCeEm2BWZV/n4oTy+SGd/k0Ab5c=",
 			"origin": "github.com/aws/aws-sdk-go/vendor/github.com/go-ini/ini",
 			"path": "github.com/go-ini/ini",
@@ -215,5 +233,5 @@
 			"revisionTime": "2017-06-11T01:16:46Z"
 		}
 	],
-	"rootPath": "github.com/buildkite/buildkite-ecs-agent-scaler"
+	"rootPath": "github.com/buildkite/buildkite-agent-scaler"
 }
