@@ -4,30 +4,31 @@ import (
 	"flag"
 	"log"
 
-	"github.com/buildkite/buildkite-agent-scaler/scaler"
+	"github.com/buildkite/buildkite-agent-scaler/scaler/asg"
 )
 
 func main() {
-	// aws params
-	var agentCluster = flag.String("cluster", "", "The ECS cluster to scale")
-	var agentService = flag.String("service", "", "The ECS service to scale")
-	var queue = flag.String("queue", "default", "The queue to watch in the metrics")
-	var spotFleet = flag.String("spot-fleet", "", "The spot fleet to adjust")
+	var (
+		// aws params
+		asgName           = flag.String("asg-name", "", "The name of the autoscaling group")
+		agentsPerInstance = flag.Int("agents-per-instance", 1, "The number of agents per instance")
 
-	// buildkite params
-	var buildkiteApiToken = flag.String("api-token", "", "A buildkite api token for metrics")
-	var buildkiteOrg = flag.String("org", "", "The buildkite organization slug")
+		// buildkite params
+		buildkiteQueue    = flag.String("queue", "default", "The queue to watch in the metrics")
+		buildkiteApiToken = flag.String("api-token", "", "A buildkite api token for metrics")
+		buildkiteOrgSlug  = flag.String("org", "", "The buildkite organization slug")
+	)
 	flag.Parse()
 
-	err := scaler.Run(scaler.Params{
-		ECSCluster:        *agentCluster,
-		ECSService:        *agentService,
-		BuildkiteQueue:    *queue,
-		BuildkiteOrg:      *buildkiteOrg,
-		BuildkiteApiToken: *buildkiteApiToken,
-		SpotFleetID:       *spotFleet,
+	scaler := asg.NewScaler(asg.Params{
+		BuildkiteQueue:       *buildkiteQueue,
+		BuildkiteOrgSlug:     *buildkiteOrgSlug,
+		BuildkiteApiToken:    *buildkiteApiToken,
+		AutoScalingGroupName: *asgName,
+		AgentsPerInstance:    *agentsPerInstance,
 	})
-	if err != nil {
+
+	if err := scaler.Run(); err != nil {
 		log.Fatal(err)
 	}
 }

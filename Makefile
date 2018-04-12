@@ -2,7 +2,7 @@ HANDLER ?= handler
 PACKAGE ?= $(HANDLER)
 
 build:
-	GOOS=linux GOARCH=amd64 go build -o $(HANDLER) lambda.go
+	GOOS=linux GOARCH=amd64 go build -o $(HANDLER) lambda/main.go
 	zip $(PACKAGE).zip $(HANDLER)
 
 .PHONY: build

@@ -1,7 +1,7 @@
-# Buildkite ECS Agent Scaler
+# Buildkite Agent Scaler
 
-An AWS lambda function that adjusts the capacity of an ECS service and the capacity of an underlying spotfleet based on metrics from the Buildkite API.
+An AWS lambda function that helps orchestrate autoscaling of Amazon Autoscaling Groups (ASG).
 
-Designed to be used with [https://github.com/buildkite/elastic-ci-stack-for-aws-ecs.
+It's function is to listen for SNS events, either from Buildkite or Scheduled Events and then check the agent metrics api and make adjustments to a the desired count of an ASG.
 
 **Still in active development, and not currently working**
