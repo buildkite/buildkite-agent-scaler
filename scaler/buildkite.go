@@ -1,78 +1,79 @@
 package scaler
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
-	"regexp"
+	"net/http"
+	"net/url"
 	"time"
 
-	"github.com/buildkite/go-buildkite/buildkite"
+	"github.com/buildkite/buildkite-agent-scaler/version"
+)
+
+const (
+	DefaultMetricsEndpoint = "https://agent.buildkite.com/v3"
 )
 
 type BuildkiteClient struct {
-	client *buildkite.Client
+	Endpoint   string
+	AgentToken string
+	UserAgent  string
+	Queue      string
 }
 
-func NewBuildkiteClient(accessToken string) (*BuildkiteClient, error) {
-	config, err := buildkite.NewTokenConfig(accessToken, false)
+func NewBuildkiteClient(agentToken string) *BuildkiteClient {
+	return &BuildkiteClient{
+		Endpoint:   DefaultMetricsEndpoint,
+		UserAgent:  fmt.Sprintf("buildkite-agent-scaler/%s", version.Version),
+		AgentToken: agentToken,
+	}
+}
+
+func (c *BuildkiteClient) GetScheduledJobCount(queue string) (int64, error) {
+	log.Printf("Collecting agent metrics for queue %q", queue)
+	t := time.Now()
+
+	endpoint, err := url.Parse(c.Endpoint)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
 
-	client := buildkite.NewClient(config.Client())
-	client.UserAgent = fmt.Sprintf(
-		"%s buildkite-agent-scaler/%s",
-		client.UserAgent, "dev",
-	)
+	endpoint.Path += "/metrics"
 
-	return &BuildkiteClient{client: client}, nil
-}
-
-func (bc *BuildkiteClient) GetScheduledJobCount(orgSlug string, queue string) (int64, error) {
-	t := time.Now()
-	log.Printf("Getting scheduled job count for org=%s, queue=%s", orgSlug, queue)
-
-	builds, _, err := bc.client.Builds.ListByOrg(orgSlug, &buildkite.BuildsListOptions{
-		State: []string{"scheduled"},
-	})
+	req, err := http.NewRequest("GET", endpoint.String(), nil)
 	if err != nil {
-		return 0, nil
+		return 0, err
+	}
+
+	req.Header.Set("User-Agent", c.UserAgent)
+	req.Header.Set("Authorization", fmt.Sprintf("Token %s", c.AgentToken))
+
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+
+	var resp struct {
+		Jobs struct {
+			Queues map[string]struct {
+				Scheduled int64 `json:"scheduled"`
+			} `json:"queues"`
+		} `json:"jobs"`
+	}
+
+	defer res.Body.Close()
+	err = json.NewDecoder(res.Body).Decode(&resp)
+	if err != nil {
+		return 0, err
 	}
 
 	var count int64
 
-	// intentionally only get the first page
-	for _, build := range builds {
-		for _, job := range build.Jobs {
-			if job.Type != nil && *job.Type == "waiter" {
-				continue
-			}
-
-			state := ""
-			if job.State != nil {
-				state = *job.State
-			}
-
-			if state == "scheduled" {
-				log.Printf("Adding job to stats (id=%q, pipeline=%q, queue=%q, type=%q, state=%q)",
-					*job.ID, *build.Pipeline.Name, queueFromJob(job), *job.Type, state)
-
-				count++
-			}
-		}
+	if queue, exists := resp.Jobs.Queues[queue]; exists {
+		count = queue.Scheduled
 	}
 
 	log.Printf("↳ Got %d (took %v)", count, time.Now().Sub(t))
 	return count, nil
-}
-
-var queuePattern = regexp.MustCompile(`(?i)^queue=(.+?)$`)
-
-func queueFromJob(j *buildkite.Job) string {
-	for _, m := range j.AgentQueryRules {
-		if match := queuePattern.FindStringSubmatch(m); match != nil {
-			return match[1]
-		}
-	}
-	return "default"
 }

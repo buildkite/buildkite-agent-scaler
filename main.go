@@ -14,19 +14,25 @@ func main() {
 		agentsPerInstance = flag.Int("agents-per-instance", 1, "The number of agents per instance")
 
 		// buildkite params
-		buildkiteQueue    = flag.String("queue", "default", "The queue to watch in the metrics")
-		buildkiteApiToken = flag.String("api-token", "", "A buildkite api token for metrics")
-		buildkiteOrgSlug  = flag.String("org", "", "The buildkite organization slug")
+		buildkiteQueue      = flag.String("queue", "default", "The queue to watch in the metrics")
+		buildkiteAgentToken = flag.String("agent-token", "", "A buildkite agent registration token")
+
+		// general params
+		dryRun = flag.Bool("dry-run", false, "Whether to just show what would be done")
 	)
 	flag.Parse()
 
 	scaler := asg.NewScaler(asg.Params{
 		BuildkiteQueue:       *buildkiteQueue,
-		BuildkiteOrgSlug:     *buildkiteOrgSlug,
-		BuildkiteApiToken:    *buildkiteApiToken,
+		BuildkiteAgentToken:  *buildkiteAgentToken,
 		AutoScalingGroupName: *asgName,
 		AgentsPerInstance:    *agentsPerInstance,
 	})
+
+	if *dryRun {
+		log.Printf("Running as a dry-run, no changes will be made")
+		scaler.ASG = &asg.DryRunASG{}
+	}
 
 	if err := scaler.Run(); err != nil {
 		log.Fatal(err)

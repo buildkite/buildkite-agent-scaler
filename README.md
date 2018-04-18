@@ -2,6 +2,12 @@
 
 An AWS lambda function that helps orchestrate autoscaling of Amazon Autoscaling Groups (ASG).
 
-It's function is to listen for SNS events, either from Buildkite or Scheduled Events and then check the agent metrics api and make adjustments to a the desired count of an ASG.
+This is designed to be run as regularly as possible, probably with a Cloudwatch Scheduled Event.
 
-**Still in active development, and not currently working**
+## Running locally
+
+```
+$ aws-vault exec my-profile -- buildkite-agent-scaler --asg-name elastic-runners-AgentAutoScaleGroup-DDJREG62FLNC --agent-token "$BUILDKITE_AGENT_TOKEN"
+```
+
+

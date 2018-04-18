@@ -13,8 +13,7 @@ import (
 type Params struct {
 	AutoScalingGroupName string
 	AgentsPerInstance    int
-	BuildkiteApiToken    string
-	BuildkiteOrgSlug     string
+	BuildkiteAgentToken  string
 	BuildkiteQueue       string
 }
 
@@ -34,9 +33,8 @@ func NewScaler(params Params) *Scaler {
 			name: params.AutoScalingGroupName,
 		},
 		Buildkite: &buildkiteDriver{
-			apiToken: params.BuildkiteApiToken,
-			orgSlug:  params.BuildkiteOrgSlug,
-			queue:    params.BuildkiteQueue,
+			agentToken: params.BuildkiteAgentToken,
+			queue:      params.BuildkiteQueue,
 		},
 		AgentsPerInstance: params.AgentsPerInstance,
 	}
@@ -83,16 +81,17 @@ func (a *asgDriver) SetDesiredCapacity(count int64) error {
 }
 
 type buildkiteDriver struct {
-	apiToken string
-	orgSlug  string
-	queue    string
+	agentToken string
+	queue      string
 }
 
 func (a *buildkiteDriver) GetScheduledJobCount() (int64, error) {
-	client, err := scaler.NewBuildkiteClient(a.apiToken)
-	if err != nil {
-		return 0, err
-	}
+	return scaler.NewBuildkiteClient(a.agentToken).GetScheduledJobCount(a.queue)
+}
 
-	return client.GetScheduledJobCount(a.orgSlug, a.queue)
+type DryRunASG struct {
+}
+
+func (a *DryRunASG) SetDesiredCapacity(count int64) error {
+	return nil
 }
