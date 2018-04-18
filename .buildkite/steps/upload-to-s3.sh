@@ -22,7 +22,7 @@ EXTRA_REGIONS=(
 
 VERSION=$(awk -F\" '/const Version/ {print $2}' version/version.go)
 BASE_BUCKET=buildkite-lambdas
-BUCKET_PATH="ecs-agent-scaler"
+BUCKET_PATH="buildkite-agent-scaler"
 
 if [[ "${1:-}" == "release" ]] ; then
   BUCKET_PATH="${BUCKET_PATH}/v${VERSION}"
