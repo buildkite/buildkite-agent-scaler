@@ -2,7 +2,7 @@ steps:
   - block: ":rocket: Release ${VERSION}?"
 
   - label: ":s3:"
-    command: ".buildkite/steps/upload-to-s3.sh release"
+    command: ".buildkite/steps/release-version.sh"
     branches: master
     agents:
       queue: "deploy"
