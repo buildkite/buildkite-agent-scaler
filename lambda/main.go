@@ -5,6 +5,7 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -13,11 +14,15 @@ import (
 )
 
 func handler(ctx context.Context, snsEvent events.SNSEvent) (string, error) {
-	buildkiteOrgSlug := os.Getenv("BUILDKITE_ORG")
-	buildkiteApiToken := os.Getenv("BUILDKITE_TOKEN")
+	buildkiteAgentToken := os.Getenv("BUILDKITE_TOKEN")
 	buildkiteQueue := os.Getenv("BUILDKITE_QUEUE")
 	quiet := os.Getenv("BUILDKITE_QUIET")
 	asgName := os.Getenv("BUILDKITE_ASG_NAME")
+
+	agentsPerInstance, err := strconv.Atoi(os.Getenv("BUILDKITE_AGENTS_PER_INSTANCE"))
+	if err != nil {
+		return "", err
+	}
 
 	if quiet == "1" || quiet == "false" {
 		log.SetOutput(ioutil.Discard)
@@ -27,9 +32,9 @@ func handler(ctx context.Context, snsEvent events.SNSEvent) (string, error) {
 
 	scaler := asg.NewScaler(asg.Params{
 		BuildkiteQueue:       buildkiteQueue,
-		BuildkiteOrgSlug:     buildkiteOrgSlug,
-		BuildkiteApiToken:    buildkiteApiToken,
+		BuildkiteAgentToken:  buildkiteAgentToken,
 		AutoScalingGroupName: asgName,
+		AgentsPerInstance:    agentsPerInstance,
 	})
 
 	if err := scaler.Run(); err != nil {

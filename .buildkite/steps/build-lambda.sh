@@ -8,6 +8,6 @@ docker run --rm \
   -e LDFLAGS='' \
   -v "$PWD:/go/src/github.com/buildkite/buildkite-agent-scaler" \
   -w /go/src/github.com/buildkite/buildkite-agent-scaler \
-  golang:1.10 make all
+  golang:1.10 make setup build
 
-# buildkite-agent artifact upload handler.zip
+buildkite-agent artifact upload handler.zip
