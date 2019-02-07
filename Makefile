@@ -3,7 +3,7 @@
 all: build
 
 clean:
-	-rm buildkite-agent-scaler.zip
+	-rm handler.zip
 
 # -----------------------------------------
 # Lambda management
@@ -11,9 +11,9 @@ clean:
 LAMBDA_S3_BUCKET := buildkite-aws-stack-lox
 LAMBDA_S3_BUCKET_PATH := /
 
-build: buildkite-agent-scaler.zip
+build: handler.zip
 
-buildkite-agent-scaler.zip: lambda/handler
+handler.zip: lambda/handler
 	zip -9 -v -j $@ "$<"
 
 lambda/handler: lambda/main.go
@@ -25,7 +25,7 @@ lambda/handler: lambda/main.go
 		go build -ldflags="$(FLAGS)" -o ./lambda/handler ./lambda
 	chmod +x lambda/handler
 
-lambda-sync: buildkite-agent-scaler.zip
+lambda-sync: handler.zip
 	aws s3 sync \
 		--acl public-read \
 		--exclude '*' --include '*.zip' \
@@ -34,4 +34,4 @@ lambda-sync: buildkite-agent-scaler.zip
 lambda-versions:
 	aws s3api head-object \
 		--bucket ${LAMBDA_S3_BUCKET} \
-		--key buildkite-agent-scaler.zip --query "VersionId" --output text
+		--key handler.zip --query "VersionId" --output text
