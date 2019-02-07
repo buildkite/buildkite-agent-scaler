@@ -3,6 +3,7 @@ package asg
 import (
 	"log"
 	"math"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -15,16 +16,24 @@ type Params struct {
 	AgentsPerInstance    int
 	BuildkiteAgentToken  string
 	BuildkiteQueue       string
+	UserAgent            string
 }
 
 type Scaler struct {
 	ASG interface {
+		Describe() (Details, error)
 		SetDesiredCapacity(count int64) error
 	}
 	Buildkite interface {
 		GetScheduledJobCount() (int64, error)
 	}
 	AgentsPerInstance int
+}
+
+type Details struct {
+	DesiredCount int64
+	MinSize      int64
+	MaxSize      int64
 }
 
 func NewScaler(params Params) *Scaler {
@@ -51,10 +60,41 @@ func (s *Scaler) Run() error {
 		desired = int64(math.Ceil(float64(count) / float64(s.AgentsPerInstance)))
 	}
 
-	log.Printf("Setting a desired capacity of %d", desired)
-	err = s.ASG.SetDesiredCapacity(desired)
+	current, err := s.ASG.Describe()
 	if err != nil {
 		return err
+	}
+
+	if desired > current.MaxSize {
+		log.Printf("⚠️  Desired count exceed MaxSize, capping at %d", current.MaxSize)
+		desired = current.MaxSize
+	} else if desired < current.MinSize {
+		log.Printf("⚠️  Desired count is less than MinSize, capping at %d", current.MinSize)
+		desired = current.MinSize
+	}
+
+	t := time.Now()
+
+	if desired > current.DesiredCount {
+		log.Printf("Scaling OUT 📈 to %d instances (currently %d)", desired, current.DesiredCount)
+
+		err = s.ASG.SetDesiredCapacity(desired)
+		if err != nil {
+			return err
+		}
+
+		log.Printf("↳ Set desired to %d (took %v)", desired, time.Now().Sub(t))
+	} else if current.DesiredCount > desired {
+		log.Printf("Scaling IN 📉 to %d instances (currently %d)", desired, current.DesiredCount)
+
+		err = s.ASG.SetDesiredCapacity(desired)
+		if err != nil {
+			return err
+		}
+
+		log.Printf("↳ Set desired to %d (took %v)", desired, time.Now().Sub(t))
+	} else {
+		log.Printf("No scaling required, currently %d", current.DesiredCount)
 	}
 
 	return nil
@@ -64,12 +104,33 @@ type asgDriver struct {
 	name string
 }
 
+func (a *asgDriver) Describe() (Details, error) {
+	svc := autoscaling.New(session.New())
+	input := &autoscaling.DescribeAutoScalingGroupsInput{
+		AutoScalingGroupNames: []*string{
+			aws.String(a.name),
+		},
+	}
+
+	result, err := svc.DescribeAutoScalingGroups(input)
+	if err != nil {
+		return Details{}, err
+	}
+
+	return Details{
+		DesiredCount: int64(*result.AutoScalingGroups[0].DesiredCapacity),
+		MinSize:      int64(*result.AutoScalingGroups[0].MinSize),
+		MaxSize:      int64(*result.AutoScalingGroups[0].MaxSize),
+	}, nil
+
+}
+
 func (a *asgDriver) SetDesiredCapacity(count int64) error {
 	svc := autoscaling.New(session.New())
 	input := &autoscaling.SetDesiredCapacityInput{
 		AutoScalingGroupName: aws.String(a.name),
 		DesiredCapacity:      aws.Int64(count),
-		HonorCooldown:        aws.Bool(true),
+		HonorCooldown:        aws.Bool(false),
 	}
 
 	_, err := svc.SetDesiredCapacity(input)
@@ -90,6 +151,10 @@ func (a *buildkiteDriver) GetScheduledJobCount() (int64, error) {
 }
 
 type DryRunASG struct {
+}
+
+func (a *DryRunASG) Describe() (Details, error) {
+	return Details{}, nil
 }
 
 func (a *DryRunASG) SetDesiredCapacity(count int64) error {

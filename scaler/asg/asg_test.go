@@ -53,6 +53,10 @@ type asgTestDriver struct {
 	desiredCapacity int64
 }
 
+func (d *asgTestDriver) Describe() (asg.Details, error) {
+	return asg.Details{MinSize: 0, MaxSize: 100}, nil
+}
+
 func (d *asgTestDriver) SetDesiredCapacity(count int64) error {
 	d.desiredCapacity = count
 	return d.err
