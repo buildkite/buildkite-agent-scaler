@@ -1,5 +1,5 @@
 ---
-Description: Autoscaler Lambda for ECS Service
+Description: Autoscaling Lambda for Buildkite Agents on an ALB
 
 Parameters:
   BuildkiteAgentToken:
@@ -13,6 +13,11 @@ Parameters:
     Type: String
     Default: default
     MinLength: 1
+
+  AgentAutoScaleGroup:
+    Description: The name of the ALB to autoscale
+    Type: String
+    Default: default
 
 Mappings:
   LambdaBucket:
@@ -31,8 +36,9 @@ Mappings:
     sa-east-1 : { Bucket: "buildkite-lambdas-sa-east-1" }
 
 Resources:
-  LambdaExecutionRole:
+  AutoscalingLambdaExecutionRole:
     Type: AWS::IAM::Role
+    Condition: UseLambdaAutoscaling
     Properties:
       Path: "/"
       AssumeRolePolicyDocument:
@@ -47,58 +53,72 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
       Policies:
-        - PolicyName: AccessToCloudwatchLogsForScalerLambda
+        - PolicyName: DescribeECSResources
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
             - Effect: Allow
               Action:
-                - logs:CreateLogStream
-                - logs:PutLogEvents
-              Resource:
-                - !GetAtt ECSLogGroup.Arn
+                - ecs:Describe*
+                - ecs:List*
+              Resource: '*'
+        - PolicyName: ModifySpotFleet
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
             - Effect: Allow
               Action:
-                - ecs:Describe*
-                - ecs:UpdateService
-              Resource:
-                - !Ref ECSAgentService
-                - !GetAtt ECSCluster.Arn
+                - ec2:DescribeSpotFleetRequests
+                - ec2:ModifySpotFleetRequest
+              Resource: '*'
 
-  ScalerFunction:
+
+  # This mirrors the group that would be created by the lambda, but enforces
+  # a retention period and also ensures it's removed when the stack is removed
+  AutoscalingLogGroup:
+    Type: "AWS::Logs::LogGroup"
+    Condition: UseLambdaAutoscaling
+    Properties:
+      LogGroupName: !Join ["/", ["/aws/lambda", !Ref AutoscalingFunction]]
+      RetentionInDays: 1
+
+  AutoscalingFunction:
     Type: AWS::Lambda::Function
-    DependsOn:
-    - LambdaExecutionRole
+    Condition: UseLambdaAutoscaling
     Properties:
       Code:
-        S3Bucket: { 'Fn::FindInMap': [LambdaBucket, { Ref: 'AWS::Region' }, 'Bucket'] }
-        S3Key: "ecs-agent-scaler/builds/20/handler.zip"
-      Role: !GetAtt LambdaExecutionRole.Arn
+        S3Bucket: !Ref AutoscalingLambdaBucket
+        S3Key: "ec2-agent-scaler.zip"
+        S3ObjectVersion: !Ref AutoscalingLambdaObjectVersion
+      Role: !GetAtt AutoscalingLambdaExecutionRole.Arn
       Timeout: 120
-      Handler: handler.Handle
-      Runtime: python2.7
+      Handler: handler
+      Runtime: go1.x
       MemorySize: 128
       Environment:
         Variables:
-          BUILDKITE_TOKEN: !Ref BuildkiteAgentToken
-          BUILDKITE_QUEUE: !Ref BuildkiteQueue
-          BUILDKITE_ECS_CLUSTER: !Ref ECSCluster
-          BUILDKITE_ECS_SERVICE: !Ref ECSAgentService
+          BUILDKITE_AGENT_TOKEN: !Ref BuildkiteAgentToken
+          BUILDKITE_QUEUE:       !Ref BuildkiteQueue
+          ASG_NAME:              !Ref AgentAutoScaleGroup
+          LAMBDA_TIMEOUT:        1m
+          LAMBDA_INTERVAL:       20s
 
-  ScheduledRule:
+  AutoscalingLambdaScheduledRule:
     Type: "AWS::Events::Rule"
+    Condition: UseLambdaAutoscaling
     Properties:
       Description: "ScheduledRule"
       ScheduleExpression: "rate(1 minute)"
-      State: "ENABLED"
+      State: !Ref AutoscalingLambdaScheduleState
       Targets:
-        - Arn: !GetAtt ScalerFunction.Arn
-          Id: "TargetScalerFunction"
+        - Arn: !GetAtt AutoscalingFunction.Arn
+          Id: "AutoscalingFunction"
 
-  PermissionForEventsToInvokeLambda:
+  PermissionForEventsToInvokeAutoscalingLambda:
     Type: "AWS::Lambda::Permission"
+    Condition: UseLambdaAutoscaling
     Properties:
-      FunctionName: { Ref: ScalerFunction }
+      FunctionName: !Ref AutoscalingFunction
       Action: "lambda:InvokeFunction"
       Principal: "events.amazonaws.com"
-      SourceArn: !GetAtt ScheduledRule.Arn
+      SourceArn: !GetAtt AutoscalingLambdaScheduledRule.Arn
