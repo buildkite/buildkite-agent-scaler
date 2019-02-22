@@ -74,7 +74,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		default:
 			scaler := asg.NewScaler(asg.Params{
 				BuildkiteQueue:       mustGetEnv(`BUILDKITE_QUEUE`),
-				BuildkiteAgentToken:  mustGetEnv(`BUILDKITE_TOKEN`),
+				BuildkiteAgentToken:  mustGetEnv(`BUILDKITE_AGENT_TOKEN`),
 				AutoScalingGroupName: mustGetEnv(`ASG_NAME`),
 				AgentsPerInstance:    mustGetEnvInt(`AGENTS_PER_INSTANCE`),
 			})
