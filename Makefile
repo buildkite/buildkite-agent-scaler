@@ -12,7 +12,7 @@ LAMBDA_S3_BUCKET := buildkite-aws-stack-lox
 LAMBDA_S3_BUCKET_PATH := /
 
 ifdef BUILDKITE_BUILD_NUMBER
-	LD_FLAGS := -s -w -X version.Build $(BUILDKITE_BUILD_NUMBER)
+	LD_FLAGS := -s -w -X version.Build=$(BUILDKITE_BUILD_NUMBER)
 endif
 
 ifndef BUILDKITE_BUILD_NUMBER
