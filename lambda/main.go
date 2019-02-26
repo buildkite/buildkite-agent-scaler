@@ -15,6 +15,8 @@ import (
 	"github.com/buildkite/buildkite-agent-scaler/version"
 )
 
+var invokeCount = 0
+
 func main() {
 	if os.Getenv(`DEBUG`) != "" {
 		_, err := Handler(context.Background(), json.RawMessage([]byte{}))
@@ -22,6 +24,8 @@ func main() {
 			log.Fatal(err)
 		}
 	} else {
+		invokeCount = invokeCount + 1
+		log.Printf("Invocation count %d", invokeCount)
 		lambda.Start(Handler)
 	}
 }
