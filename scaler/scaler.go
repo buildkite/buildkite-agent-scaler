@@ -75,11 +75,13 @@ func (s *Scaler) Run() error {
 		return err
 	}
 
-	err = s.metrics.Publish(map[string]int64{
-		`ScheduledJobsCount`: count,
-	})
-	if err != nil {
-		return err
+	if s.metrics != nil {
+		err = s.metrics.Publish(map[string]int64{
+			`ScheduledJobsCount`: count,
+		})
+		if err != nil {
+			return err
+		}
 	}
 
 	var desired int64

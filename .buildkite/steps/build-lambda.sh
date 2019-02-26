@@ -1,5 +1,5 @@
 #!/bin/bash
-set -eux
+set -eu
 
 make handler.zip
 
