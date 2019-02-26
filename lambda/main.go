@@ -80,10 +80,13 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 
 			if m := os.Getenv(`CLOUDWATCH_METRICS`); m == `true` || m == `1` {
 				log.Printf("Publishing cloudwatch metrics")
-				params.PublishCloudwatchMetrics = true
+				params.PublishCloudWatchMetrics = true
 			}
 
 			scaler, err := scaler.NewScaler(client, params)
+			if err != nil {
+				log.Fatal(err)
+			}
 
 			if err := scaler.Run(); err != nil {
 				log.Printf("Scaling error: %v", err)
