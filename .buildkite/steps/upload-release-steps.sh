@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-export VERSION=$(awk -F\" '/const Version/ {print $2}' version/version.go)
+VERSION=$(buildkite-agent meta-data get "version")
 
 git fetch --prune origin "+refs/tags/*:refs/tags/*"
 
