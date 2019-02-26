@@ -6,7 +6,6 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/cloudwatch"
-	"github.com/davecgh/go-spew/spew"
 )
 
 const (
@@ -45,8 +44,6 @@ func (cp *cloudWatchMetricsPublisher) Publish(metrics map[string]int64) error {
 			},
 		})
 	}
-
-	spew.Dump(datum)
 
 	_, err := svc.PutMetricData(&cloudwatch.PutMetricDataInput{
 		Namespace:  aws.String(cloudWatchMetricsNamespace),
