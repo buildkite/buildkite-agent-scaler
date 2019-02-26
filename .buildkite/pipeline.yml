@@ -2,6 +2,8 @@ steps:
   - wait
   - name: ":lambda:"
     command: .buildkite/steps/build-lambda.sh
+    artifact_paths:
+      - handler.zip
 
   - wait
   - label: ":s3:"

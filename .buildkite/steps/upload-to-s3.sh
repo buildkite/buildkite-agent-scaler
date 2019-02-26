@@ -20,7 +20,7 @@ EXTRA_REGIONS=(
 	sa-east-1
 )
 
-VERSION=$(awk -F\" '/const Version/ {print $2}' version/version.go)
+VERSION=$(buildkite-agent meta-data get "version")
 BASE_BUCKET=buildkite-lambdas
 BUCKET_PATH="buildkite-agent-scaler"
 
