@@ -24,7 +24,7 @@ type Client struct {
 func NewClient(agentToken string) *Client {
 	return &Client{
 		Endpoint:   DefaultMetricsEndpoint,
-		UserAgent:  fmt.Sprintf("buildkite-agent-scaler/%s", version.Version),
+		UserAgent:  fmt.Sprintf("buildkite-agent-scaler/%s", version.VersionString()),
 		AgentToken: agentToken,
 	}
 }

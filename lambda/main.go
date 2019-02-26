@@ -10,12 +10,9 @@ import (
 	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
-	"github.com/buildkite/buildkite-agent-scaler/metrics"
-	"github.com/buildkite/buildkite-agent-scaler/scaler/asg"
-)
-
-var (
-	Version string = "dev"
+	"github.com/buildkite/buildkite-agent-scaler/buildkite"
+	"github.com/buildkite/buildkite-agent-scaler/scaler"
+	"github.com/buildkite/buildkite-agent-scaler/version"
 )
 
 func main() {
@@ -30,7 +27,7 @@ func main() {
 }
 
 func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
-	log.Printf("buildkite-agent-scaler version %s", Version)
+	log.Printf("buildkite-agent-scaler version %s", version.VersionString())
 
 	var timeout <-chan time.Time = make(chan time.Time)
 	var interval time.Duration = 10 * time.Second
@@ -73,20 +70,20 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		case <-timeout:
 			return "", nil
 		default:
-			var p *metrics.CloudWatchPublisher
+			client := buildkite.NewClient(mustGetEnv(`BUILDKITE_AGENT_TOKEN`))
+
+			params := scaler.Params{
+				BuildkiteQueue:       mustGetEnv(`BUILDKITE_QUEUE`),
+				AutoScalingGroupName: mustGetEnv(`ASG_NAME`),
+				AgentsPerInstance:    mustGetEnvInt(`AGENTS_PER_INSTANCE`),
+			}
 
 			if m := os.Getenv(`CLOUDWATCH_METRICS`); m == `true` || m == `1` {
 				log.Printf("Publishing cloudwatch metrics")
-				p = metrics.NewCloudWatchPublisher()
+				params.PublishCloudwatchMetrics = true
 			}
 
-			scaler := asg.NewScaler(asg.Params{
-				BuildkiteQueue:       mustGetEnv(`BUILDKITE_QUEUE`),
-				BuildkiteAgentToken:  mustGetEnv(`BUILDKITE_AGENT_TOKEN`),
-				AutoScalingGroupName: mustGetEnv(`ASG_NAME`),
-				AgentsPerInstance:    mustGetEnvInt(`AGENTS_PER_INSTANCE`),
-				CloudWatchPublisher:  p,
-			})
+			scaler, err := scaler.NewScaler(client, params)
 
 			if err := scaler.Run(); err != nil {
 				log.Printf("Scaling error: %v", err)
