@@ -1,9 +1,7 @@
-package asg_test
+package scaler
 
 import (
 	"testing"
-
-	"github.com/buildkite/buildkite-agent-scaler/scaler/asg"
 )
 
 func TestScalingWithoutError(t *testing.T) {
@@ -19,20 +17,20 @@ func TestScalingWithoutError(t *testing.T) {
 		{13, 4, 4},
 	} {
 		t.Run("", func(t *testing.T) {
-			bd := &asgTestDriver{}
-			s := asg.Scaler{
-				ASG:               bd,
-				Buildkite:         &buildkiteTestDriver{count: tc.ScheduledJobs},
-				AgentsPerInstance: tc.AgentsPerInstance,
+			asg := &asgTestDriver{}
+			s := Scaler{
+				autoscaling:       asg,
+				bk:                &buildkiteTestDriver{count: tc.ScheduledJobs},
+				agentsPerInstance: tc.AgentsPerInstance,
 			}
 
 			if err := s.Run(); err != nil {
 				t.Fatal(err)
 			}
 
-			if bd.desiredCapacity != tc.DesiredCount {
+			if asg.desiredCapacity != tc.DesiredCount {
 				t.Fatalf("Expected desired capacity of %d, got %d",
-					tc.DesiredCount, bd.desiredCapacity,
+					tc.DesiredCount, asg.desiredCapacity,
 				)
 			}
 		})
@@ -53,8 +51,8 @@ type asgTestDriver struct {
 	desiredCapacity int64
 }
 
-func (d *asgTestDriver) Describe() (asg.Details, error) {
-	return asg.Details{MinSize: 0, MaxSize: 100}, nil
+func (d *asgTestDriver) Describe() (AutoscaleGroupDetails, error) {
+	return AutoscaleGroupDetails{MinSize: 0, MaxSize: 100}, nil
 }
 
 func (d *asgTestDriver) SetDesiredCapacity(count int64) error {

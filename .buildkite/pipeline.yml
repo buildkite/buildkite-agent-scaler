@@ -12,5 +12,6 @@ steps:
   - wait
   - name: ":pipeline:"
     command: .buildkite/steps/upload-release-steps.sh
+    branches: master
 
 

@@ -11,6 +11,14 @@ clean:
 LAMBDA_S3_BUCKET := buildkite-aws-stack-lox
 LAMBDA_S3_BUCKET_PATH := /
 
+ifdef BUILDKITE_BUILD_NUMBER
+	LD_FLAGS := -s -w -X version.Build=$(BUILDKITE_BUILD_NUMBER)
+endif
+
+ifndef BUILDKITE_BUILD_NUMBER
+	LD_FLAGS := -s -w
+endif
+
 build: handler.zip
 
 handler.zip: lambda/handler
@@ -22,7 +30,7 @@ lambda/handler: lambda/main.go
 		--volume $(PWD):/code \
 		--workdir /code \
 		--rm golang:1.11 \
-		go build -ldflags="$(FLAGS)" -o ./lambda/handler ./lambda
+		go build -ldflags="$(LD_FLAGS)" -o ./lambda/handler ./lambda
 	chmod +x lambda/handler
 
 lambda-sync: handler.zip
