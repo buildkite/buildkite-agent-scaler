@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/buildkite/buildkite-agent-scaler/metrics"
 	"github.com/buildkite/buildkite-agent-scaler/scaler/asg"
 )
 
@@ -72,11 +73,19 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		case <-timeout:
 			return "", nil
 		default:
+			var p *metrics.CloudWatchPublisher
+
+			if m := os.Getenv(`CLOUDWATCH_METRICS`); m == `true` || m == `1` {
+				log.Printf("Publishing cloudwatch metrics")
+				p = metrics.NewCloudWatchPublisher()
+			}
+
 			scaler := asg.NewScaler(asg.Params{
 				BuildkiteQueue:       mustGetEnv(`BUILDKITE_QUEUE`),
 				BuildkiteAgentToken:  mustGetEnv(`BUILDKITE_AGENT_TOKEN`),
 				AutoScalingGroupName: mustGetEnv(`ASG_NAME`),
 				AgentsPerInstance:    mustGetEnvInt(`AGENTS_PER_INSTANCE`),
+				CloudWatchPublisher:  p,
 			})
 
 			if err := scaler.Run(); err != nil {
