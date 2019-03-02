@@ -17,6 +17,10 @@ import (
 
 var invokeCount = 0
 
+// lastScaleDownTime stores the last time we scaled down the ASG
+// On a cold start this will be reset to Jan 1st, 1970
+var lastScaleInTime time.Time
+
 func main() {
 	if os.Getenv(`DEBUG`) != "" {
 		_, err := Handler(context.Background(), json.RawMessage([]byte{}))
@@ -35,6 +39,8 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 
 	var timeout <-chan time.Time = make(chan time.Time)
 	var interval time.Duration = 10 * time.Second
+	var scaleInCooldownPeriod time.Duration = 5 * time.Minute
+	var scaleInAdjustment int64 = -1
 
 	if intervalStr := os.Getenv(`LAMBDA_INTERVAL`); intervalStr != "" {
 		var err error
@@ -50,6 +56,26 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 			return "", err
 		}
 		timeout = time.After(timeoutDuration)
+	}
+
+	if scaleInCooldownPeriodStr := os.Getenv(`SCALE_IN_COOLDOWN_PERIOD`); scaleInCooldownPeriodStr != "" {
+		var err error
+		scaleInCooldownPeriod, err = time.ParseDuration(scaleInCooldownPeriodStr)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	if scaleInAdjustmentStr := os.Getenv(`SCALE_IN_ADJUSTMENT`); scaleInAdjustmentStr != "" {
+		var err error
+		scaleInAdjustment, err = strconv.ParseInt(scaleInAdjustmentStr, 10, 64)
+		if err != nil {
+			return "", err
+		}
+
+		if scaleInAdjustment >= 0 {
+			panic(fmt.Sprintf("Scale in adjustment (%d) must be negative", scaleInAdjustment))
+		}
 	}
 
 	var mustGetEnv = func(env string) string {
@@ -80,6 +106,11 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 				BuildkiteQueue:       mustGetEnv(`BUILDKITE_QUEUE`),
 				AutoScalingGroupName: mustGetEnv(`ASG_NAME`),
 				AgentsPerInstance:    mustGetEnvInt(`AGENTS_PER_INSTANCE`),
+				ScaleInParams: scaler.ScaleInParams{
+					CooldownPeriod:  scaleInCooldownPeriod,
+					Adjustment:      scaleInAdjustment,
+					LastScaleInTime: &lastScaleInTime,
+				},
 			}
 
 			if m := os.Getenv(`CLOUDWATCH_METRICS`); m == `true` || m == `1` {

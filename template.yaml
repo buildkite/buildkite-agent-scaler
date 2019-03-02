@@ -19,6 +19,17 @@ Parameters:
     Type: String
     Default: default
 
+  ScaleInCooldownPeriod:
+    Description: Cooldown period between scale in events
+    Type: String
+    Default: 5m
+
+  ScaleInAdjustment:
+    Description: Maximum adjustment to the desired capacity on scale in
+    Type: Number
+    MaxValue: -1
+    Default: -1
+
 Mappings:
   LambdaBucket:
     us-east-1 : { Bucket: "buildkite-lambdas" }
@@ -97,11 +108,13 @@ Resources:
       MemorySize: 128
       Environment:
         Variables:
-          BUILDKITE_AGENT_TOKEN: !Ref BuildkiteAgentToken
-          BUILDKITE_QUEUE:       !Ref BuildkiteQueue
-          ASG_NAME:              !Ref AgentAutoScaleGroup
-          LAMBDA_TIMEOUT:        1m
-          LAMBDA_INTERVAL:       20s
+          BUILDKITE_AGENT_TOKEN:    !Ref BuildkiteAgentToken
+          BUILDKITE_QUEUE:          !Ref BuildkiteQueue
+          ASG_NAME:                 !Ref AgentAutoScaleGroup
+          SCALE_IN_COOLDOWN_PERIOD: !Ref ScaleInCooldownPeriod
+          SCALE_IN_ADJUSTMENT:      !Ref ScaleInAdjustment
+          LAMBDA_TIMEOUT:           1m
+          LAMBDA_INTERVAL:          20s
 
   AutoscalingLambdaScheduledRule:
     Type: "AWS::Events::Rule"
