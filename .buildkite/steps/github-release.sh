@@ -10,4 +10,6 @@ VERSION=$(buildkite-agent meta-data get "version")
 buildkite-agent artifact download "handler.zip" .
 
 echo "--- 🚀 Releasing $VERSION"
-github-release "v$VERSION" handler.zip "$(git rev-parse HEAD)"
+github-release "v$VERSION" handler.zip \
+  --commit "$(git rev-parse HEAD)" \
+  --github-repository "buildkite/buildkite-agent-scaler"
