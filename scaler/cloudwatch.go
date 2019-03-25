@@ -14,19 +14,17 @@ const (
 
 // cloudWatchMetricsPublisher sends queue metrics to AWS CloudWatch
 type cloudWatchMetricsPublisher struct {
-	OrgSlug string
-	Queue   string
 }
 
 // Publish queue metrics to CloudWatch Metrics
-func (cp *cloudWatchMetricsPublisher) Publish(metrics map[string]int64) error {
+func (cp *cloudWatchMetricsPublisher) Publish(orgSlug, queue string, metrics map[string]int64) error {
 	svc := cloudwatch.New(session.New())
 
 	datum := []*cloudwatch.MetricDatum{}
 
 	for k, v := range metrics {
-		log.Printf("Publishing metric %s=%d [queue=%s,org=%s]",
-			k, v, cp.OrgSlug, cp.Queue)
+		log.Printf("Publishing metric %s=%d [org=%s,queue=%s]",
+			k, v, orgSlug, queue)
 
 		datum = append(datum, &cloudwatch.MetricDatum{
 			MetricName: aws.String(k),
@@ -35,11 +33,11 @@ func (cp *cloudWatchMetricsPublisher) Publish(metrics map[string]int64) error {
 			Dimensions: []*cloudwatch.Dimension{
 				&cloudwatch.Dimension{
 					Name:  aws.String("Org"),
-					Value: aws.String(cp.OrgSlug),
+					Value: aws.String(orgSlug),
 				},
 				&cloudwatch.Dimension{
 					Name:  aws.String("Queue"),
-					Value: aws.String(cp.Queue),
+					Value: aws.String(queue),
 				},
 			},
 		})
@@ -56,7 +54,7 @@ func (cp *cloudWatchMetricsPublisher) Publish(metrics map[string]int64) error {
 type dryRunMetricsPublisher struct {
 }
 
-func (p *dryRunMetricsPublisher) Publish(metrics map[string]int64) error {
+func (p *dryRunMetricsPublisher) Publish(orgSlug, queue string, metrics map[string]int64) error {
 	for k, v := range metrics {
 		log.Printf("Publishing metric %s=%d", k, v)
 	}

@@ -29,48 +29,44 @@ func NewClient(agentToken string) *Client {
 	}
 }
 
-func (c *Client) GetOrgSlug() (string, error) {
-	log.Printf("Querying agent metrics for org slug")
+type AgentMetrics struct {
+	OrgSlug       string
+	Queue         string
+	ScheduledJobs int64
+	RunningJobs   int64
+}
+
+func (c *Client) GetAgentMetrics(queue string) (AgentMetrics, error) {
+	log.Printf("Collecting agent metrics for queue %q", queue)
 
 	var resp struct {
 		Organization struct {
 			Slug string `json:"slug"`
 		} `json:"organization"`
-	}
-
-	d, err := c.queryMetrics(&resp)
-	if err != nil {
-		return "", err
-	}
-
-	log.Printf("↳ Got %q (took %v)", resp.Organization.Slug, d)
-	return resp.Organization.Slug, nil
-}
-
-func (c *Client) GetScheduledJobCount(queue string) (int64, error) {
-	log.Printf("Collecting agent metrics for queue %q", queue)
-
-	var resp struct {
 		Jobs struct {
 			Queues map[string]struct {
 				Scheduled int64 `json:"scheduled"`
+				Running   int64 `json:"running"`
 			} `json:"queues"`
 		} `json:"jobs"`
 	}
 
 	d, err := c.queryMetrics(&resp)
 	if err != nil {
-		return 0, err
+		return AgentMetrics{}, err
 	}
 
-	var count int64
+	var metrics AgentMetrics
+	metrics.OrgSlug = resp.Organization.Slug
+	metrics.Queue = queue
 
 	if queue, exists := resp.Jobs.Queues[queue]; exists {
-		count = queue.Scheduled
+		metrics.ScheduledJobs = queue.Scheduled
+		metrics.RunningJobs = queue.Running
 	}
 
-	log.Printf("↳ Got %d (took %v)", count, d)
-	return count, nil
+	log.Printf("↳ Got scheduled=%d, running=%d (took %v)", metrics.ScheduledJobs, metrics.RunningJobs, d)
+	return metrics, nil
 }
 
 func (c *Client) queryMetrics(into interface{}) (time.Duration, error) {
