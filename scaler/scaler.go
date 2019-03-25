@@ -22,8 +22,7 @@ type Params struct {
 	UserAgent                string
 	PublishCloudWatchMetrics bool
 	DryRun                   bool
-
-	ScaleInParams ScaleInParams
+	ScaleInParams            ScaleInParams
 }
 
 type Scaler struct {
