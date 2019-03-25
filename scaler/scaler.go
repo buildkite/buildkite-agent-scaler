@@ -9,6 +9,7 @@ import (
 )
 
 type ScaleInParams struct {
+	Disable         bool
 	CooldownPeriod  time.Duration
 	Adjustment      int64
 	LastScaleInTime *time.Time
@@ -117,6 +118,11 @@ func (s *Scaler) Run() error {
 
 		log.Printf("↳ Set desired to %d (took %v)", desired, time.Now().Sub(t))
 	} else if current.DesiredCount > desired {
+		if s.scaleInParams.Disable {
+			log.Printf("Skipping scale IN, disabled")
+			return nil
+		}
+
 		cooldownRemaining := s.scaleInParams.CooldownPeriod - time.Since(*s.scaleInParams.LastScaleInTime)
 
 		if cooldownRemaining > 0 {
