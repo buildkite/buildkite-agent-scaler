@@ -8,6 +8,12 @@ import (
 	"github.com/buildkite/buildkite-agent-scaler/buildkite"
 )
 
+type ScaleInParams struct {
+	CooldownPeriod  time.Duration
+	Adjustment      int64
+	LastScaleInTime *time.Time
+}
+
 type Params struct {
 	AutoScalingGroupName     string
 	AgentsPerInstance        int
@@ -16,6 +22,8 @@ type Params struct {
 	UserAgent                string
 	PublishCloudWatchMetrics bool
 	DryRun                   bool
+
+	ScaleInParams ScaleInParams
 }
 
 type Scaler struct {
@@ -30,6 +38,7 @@ type Scaler struct {
 		Publish(metrics map[string]int64) error
 	}
 	agentsPerInstance int
+	scaleInParams     ScaleInParams
 }
 
 func NewScaler(bk *buildkite.Client, params Params) (*Scaler, error) {
@@ -39,6 +48,7 @@ func NewScaler(bk *buildkite.Client, params Params) (*Scaler, error) {
 			queue:      params.BuildkiteQueue,
 		},
 		agentsPerInstance: params.AgentsPerInstance,
+		scaleInParams:     params.ScaleInParams,
 	}
 
 	orgSlug, err := bk.GetOrgSlug()
@@ -114,6 +124,18 @@ func (s *Scaler) Run() error {
 
 		log.Printf("↳ Set desired to %d (took %v)", desired, time.Now().Sub(t))
 	} else if current.DesiredCount > desired {
+		cooldownRemaining := s.scaleInParams.CooldownPeriod - time.Since(*s.scaleInParams.LastScaleInTime)
+
+		if cooldownRemaining > 0 {
+			log.Printf("⏲ Want to scale IN but in cooldown for %d seconds", cooldownRemaining/time.Second)
+			return nil
+		}
+
+		minimumDesired := current.DesiredCount + s.scaleInParams.Adjustment
+		if desired < minimumDesired {
+			desired = minimumDesired
+		}
+
 		log.Printf("Scaling IN 📉 to %d instances (currently %d)", desired, current.DesiredCount)
 
 		err = s.autoscaling.SetDesiredCapacity(desired)
@@ -121,6 +143,7 @@ func (s *Scaler) Run() error {
 			return err
 		}
 
+		*s.scaleInParams.LastScaleInTime = time.Now()
 		log.Printf("↳ Set desired to %d (took %v)", desired, time.Now().Sub(t))
 	} else {
 		log.Printf("No scaling required, currently %d", current.DesiredCount)
