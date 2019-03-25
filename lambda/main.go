@@ -118,6 +118,11 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 				params.PublishCloudWatchMetrics = true
 			}
 
+			if m := os.Getenv(`DISABLE_SCALE_IN`); m == `true` || m == `1` {
+				log.Printf("Disabling scale-in")
+				params.ScaleInParams.Disable = true
+			}
+
 			scaler, err := scaler.NewScaler(client, params)
 			if err != nil {
 				log.Fatal(err)
