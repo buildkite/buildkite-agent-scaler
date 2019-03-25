@@ -35,25 +35,20 @@ type Scaler struct {
 		GetAgentMetrics() (buildkite.AgentMetrics, error)
 	}
 	metrics interface {
-		Publish(metrics map[string]int64) error
+		Publish(orgSlug, queue string, metrics map[string]int64) error
 	}
 	agentsPerInstance int
 	scaleInParams     ScaleInParams
 }
 
-func NewScaler(bk *buildkite.Client, params Params) (*Scaler, error) {
+func NewScaler(client *buildkite.Client, params Params) (*Scaler, error) {
 	scaler := &Scaler{
 		bk: &buildkiteDriver{
-			agentToken: params.BuildkiteAgentToken,
-			queue:      params.BuildkiteQueue,
+			client: client,
+			queue:  params.BuildkiteQueue,
 		},
 		agentsPerInstance: params.AgentsPerInstance,
 		scaleInParams:     params.ScaleInParams,
-	}
-
-	orgSlug, err := bk.GetOrgSlug()
-	if err != nil {
-		return nil, err
 	}
 
 	if params.DryRun {
@@ -68,12 +63,8 @@ func NewScaler(bk *buildkite.Client, params Params) (*Scaler, error) {
 		}
 
 		if params.PublishCloudWatchMetrics {
-			scaler.metrics = &cloudWatchMetricsPublisher{
-				OrgSlug: orgSlug,
-				Queue:   params.BuildkiteQueue,
-			}
+			scaler.metrics = &cloudWatchMetricsPublisher{}
 		}
-
 	}
 
 	return scaler, nil
@@ -86,7 +77,7 @@ func (s *Scaler) Run() error {
 	}
 
 	if s.metrics != nil {
-		err = s.metrics.Publish(map[string]int64{
+		err = s.metrics.Publish(metrics.OrgSlug, metrics.Queue, map[string]int64{
 			`ScheduledJobsCount`: metrics.ScheduledJobs,
 			`RunningJobsCount`:   metrics.RunningJobs,
 		})
@@ -156,10 +147,10 @@ func (s *Scaler) Run() error {
 }
 
 type buildkiteDriver struct {
-	agentToken string
-	queue      string
+	client *buildkite.Client
+	queue  string
 }
 
 func (a *buildkiteDriver) GetAgentMetrics() (buildkite.AgentMetrics, error) {
-	return buildkite.NewClient(a.agentToken).GetAgentMetrics(a.queue)
+	return a.client.GetAgentMetrics(a.queue)
 }

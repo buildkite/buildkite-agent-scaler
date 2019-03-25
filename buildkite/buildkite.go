@@ -29,25 +29,9 @@ func NewClient(agentToken string) *Client {
 	}
 }
 
-func (c *Client) GetOrgSlug() (string, error) {
-	log.Printf("Querying agent metrics for org slug")
-
-	var resp struct {
-		Organization struct {
-			Slug string `json:"slug"`
-		} `json:"organization"`
-	}
-
-	d, err := c.queryMetrics(&resp)
-	if err != nil {
-		return "", err
-	}
-
-	log.Printf("↳ Got %q (took %v)", resp.Organization.Slug, d)
-	return resp.Organization.Slug, nil
-}
-
 type AgentMetrics struct {
+	OrgSlug       string
+	Queue         string
 	ScheduledJobs int64
 	RunningJobs   int64
 }
@@ -56,6 +40,9 @@ func (c *Client) GetAgentMetrics(queue string) (AgentMetrics, error) {
 	log.Printf("Collecting agent metrics for queue %q", queue)
 
 	var resp struct {
+		Organization struct {
+			Slug string `json:"slug"`
+		} `json:"organization"`
 		Jobs struct {
 			Queues map[string]struct {
 				Scheduled int64 `json:"scheduled"`
@@ -70,6 +57,8 @@ func (c *Client) GetAgentMetrics(queue string) (AgentMetrics, error) {
 	}
 
 	var metrics AgentMetrics
+	metrics.OrgSlug = resp.Organization.Slug
+	metrics.Queue = queue
 
 	if queue, exists := resp.Jobs.Queues[queue]; exists {
 		metrics.ScheduledJobs = queue.Scheduled
