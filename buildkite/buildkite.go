@@ -47,30 +47,37 @@ func (c *Client) GetOrgSlug() (string, error) {
 	return resp.Organization.Slug, nil
 }
 
-func (c *Client) GetScheduledJobCount(queue string) (int64, error) {
+type AgentMetrics struct {
+	ScheduledJobs int64
+	RunningJobs   int64
+}
+
+func (c *Client) GetAgentMetrics(queue string) (AgentMetrics, error) {
 	log.Printf("Collecting agent metrics for queue %q", queue)
 
 	var resp struct {
 		Jobs struct {
 			Queues map[string]struct {
 				Scheduled int64 `json:"scheduled"`
+				Running   int64 `json:"running"`
 			} `json:"queues"`
 		} `json:"jobs"`
 	}
 
 	d, err := c.queryMetrics(&resp)
 	if err != nil {
-		return 0, err
+		return AgentMetrics{}, err
 	}
 
-	var count int64
+	var metrics AgentMetrics
 
 	if queue, exists := resp.Jobs.Queues[queue]; exists {
-		count = queue.Scheduled
+		metrics.ScheduledJobs = queue.Scheduled
+		metrics.RunningJobs = queue.Running
 	}
 
-	log.Printf("↳ Got %d (took %v)", count, d)
-	return count, nil
+	log.Printf("↳ Got scheduled=%d, running=%d (took %v)", metrics.ScheduledJobs, metrics.RunningJobs, d)
+	return metrics, nil
 }
 
 func (c *Client) queryMetrics(into interface{}) (time.Duration, error) {

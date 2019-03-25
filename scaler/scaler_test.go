@@ -3,25 +3,29 @@ package scaler
 import (
 	"testing"
 	"time"
+
+	"github.com/buildkite/buildkite-agent-scaler/buildkite"
 )
 
 func TestScalingOutWithoutError(t *testing.T) {
 	for _, tc := range []struct {
-		ScheduledJobs     int64
+		Metrics           buildkite.AgentMetrics
 		AgentsPerInstance int
 		DesiredCount      int64
 	}{
-		{0, 1, 0},
-		{10, 1, 10},
-		{10, 4, 3},
-		{12, 4, 3},
-		{13, 4, 4},
+		{buildkite.AgentMetrics{ScheduledJobs: 0}, 1, 0},
+		{buildkite.AgentMetrics{ScheduledJobs: 10}, 1, 10},
+		{buildkite.AgentMetrics{ScheduledJobs: 10}, 4, 3},
+		{buildkite.AgentMetrics{ScheduledJobs: 12}, 4, 3},
+		{buildkite.AgentMetrics{ScheduledJobs: 13}, 4, 4},
+		{buildkite.AgentMetrics{ScheduledJobs: 10, RunningJobs: 2}, 4, 3},
+		{buildkite.AgentMetrics{ScheduledJobs: 2, RunningJobs: 8}, 4, 3},
 	} {
 		t.Run("", func(t *testing.T) {
 			asg := &asgTestDriver{}
 			s := Scaler{
 				autoscaling:       asg,
-				bk:                &buildkiteTestDriver{count: tc.ScheduledJobs},
+				bk:                &buildkiteTestDriver{metrics: tc.Metrics},
 				agentsPerInstance: tc.AgentsPerInstance,
 			}
 
@@ -81,7 +85,7 @@ func TestScalingInWithoutError(t *testing.T) {
 			asg := &asgTestDriver{desiredCapacity: tc.currentDesiredCapacity}
 			s := Scaler{
 				autoscaling:       asg,
-				bk:                &buildkiteTestDriver{count: 0},
+				bk:                &buildkiteTestDriver{metrics: buildkite.AgentMetrics{}},
 				agentsPerInstance: 1,
 				scaleInParams: ScaleInParams{
 					CooldownPeriod:  tc.coolDownPeriod,
@@ -104,12 +108,12 @@ func TestScalingInWithoutError(t *testing.T) {
 }
 
 type buildkiteTestDriver struct {
-	count int64
-	err   error
+	metrics buildkite.AgentMetrics
+	err     error
 }
 
-func (d *buildkiteTestDriver) GetScheduledJobCount() (int64, error) {
-	return d.count, d.err
+func (d *buildkiteTestDriver) GetAgentMetrics() (buildkite.AgentMetrics, error) {
+	return d.metrics, d.err
 }
 
 type asgTestDriver struct {

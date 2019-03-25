@@ -32,7 +32,7 @@ type Scaler struct {
 		SetDesiredCapacity(count int64) error
 	}
 	bk interface {
-		GetScheduledJobCount() (int64, error)
+		GetAgentMetrics() (buildkite.AgentMetrics, error)
 	}
 	metrics interface {
 		Publish(metrics map[string]int64) error
@@ -80,19 +80,22 @@ func NewScaler(bk *buildkite.Client, params Params) (*Scaler, error) {
 }
 
 func (s *Scaler) Run() error {
-	count, err := s.bk.GetScheduledJobCount()
+	metrics, err := s.bk.GetAgentMetrics()
 	if err != nil {
 		return err
 	}
 
 	if s.metrics != nil {
 		err = s.metrics.Publish(map[string]int64{
-			`ScheduledJobsCount`: count,
+			`ScheduledJobsCount`: metrics.ScheduledJobs,
+			`RunningJobsCount`:   metrics.RunningJobs,
 		})
 		if err != nil {
 			return err
 		}
 	}
+
+	count := metrics.ScheduledJobs + metrics.RunningJobs
 
 	var desired int64
 	if count > 0 {
@@ -157,6 +160,6 @@ type buildkiteDriver struct {
 	queue      string
 }
 
-func (a *buildkiteDriver) GetScheduledJobCount() (int64, error) {
-	return buildkite.NewClient(a.agentToken).GetScheduledJobCount(a.queue)
+func (a *buildkiteDriver) GetAgentMetrics() (buildkite.AgentMetrics, error) {
+	return buildkite.NewClient(a.agentToken).GetAgentMetrics(a.queue)
 }
