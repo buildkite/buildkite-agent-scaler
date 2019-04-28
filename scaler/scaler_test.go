@@ -8,34 +8,118 @@ import (
 )
 
 func TestScalingOutWithoutError(t *testing.T) {
+	metrics := buildkite.AgentMetrics{
+		ScheduledJobs: 10,
+		RunningJobs:   2,
+	}
+
 	for _, tc := range []struct {
-		Metrics           buildkite.AgentMetrics
-		AgentsPerInstance int
-		DesiredCount      int64
+		agentsPerInstance       int
+		currentDesiredCapacity  int64
+		params                  ScaleOutParams
+		expectedDesiredCapacity int64
 	}{
-		{buildkite.AgentMetrics{ScheduledJobs: 0}, 1, 0},
-		{buildkite.AgentMetrics{ScheduledJobs: 10}, 1, 10},
-		{buildkite.AgentMetrics{ScheduledJobs: 10}, 4, 3},
-		{buildkite.AgentMetrics{ScheduledJobs: 12}, 4, 3},
-		{buildkite.AgentMetrics{ScheduledJobs: 13}, 4, 4},
-		{buildkite.AgentMetrics{ScheduledJobs: 10, RunningJobs: 2}, 4, 3},
-		{buildkite.AgentMetrics{ScheduledJobs: 2, RunningJobs: 8}, 4, 3},
+		// Basic scale out
+		{
+			agentsPerInstance:       1,
+			expectedDesiredCapacity: 12,
+		},
+		// Scale-out with multiple agents per instance
+		{
+			agentsPerInstance:       4,
+			expectedDesiredCapacity: 3,
+		},
+		{
+			agentsPerInstance:       2,
+			expectedDesiredCapacity: 6,
+		},
+		// Scale-out with multiple agents per instance
+		// where it doesn't divide evenly
+		{
+			agentsPerInstance:       5,
+			expectedDesiredCapacity: 3,
+		},
+		{
+			agentsPerInstance:       20,
+			expectedDesiredCapacity: 1,
+		},
+		// Scale-out with a minimum bound
+		{
+			agentsPerInstance: 1,
+			params: ScaleOutParams{
+				MinAdjustment: 4,
+			},
+			expectedDesiredCapacity: 4,
+		},
+		// Cool-down period is enforced
+		{
+			agentsPerInstance: 1,
+			params: ScaleOutParams{
+				LastScaleOut:   time.Now(),
+				CooldownPeriod: 5 * time.Minute,
+			},
+			currentDesiredCapacity:  4,
+			expectedDesiredCapacity: 4,
+		},
+		// Cool-down period is enforced, regardless of min scale out
+		{
+			agentsPerInstance: 1,
+			params: ScaleOutParams{
+				MinAdjustment:  10,
+				MaxAdjustment:  20,
+				LastScaleOut:   time.Now(),
+				CooldownPeriod: 5 * time.Minute,
+			},
+			currentDesiredCapacity:  4,
+			expectedDesiredCapacity: 4,
+		},
+		// Cool-down period is passed
+		{
+			agentsPerInstance: 1,
+			params: ScaleOutParams{
+				LastScaleOut:   time.Now().Add(-10 * time.Minute),
+				CooldownPeriod: 5 * time.Minute,
+			},
+			currentDesiredCapacity:  4,
+			expectedDesiredCapacity: 12,
+		},
+		// Cool-down period is passed, max scale out is applied
+		{
+			agentsPerInstance: 1,
+			params: ScaleOutParams{
+				MaxAdjustment:  2,
+				LastScaleOut:   time.Now().Add(-10 * time.Minute),
+				CooldownPeriod: 5 * time.Minute,
+			},
+			currentDesiredCapacity:  4,
+			expectedDesiredCapacity: 6,
+		},
+		// Scale out disabled
+		{
+			agentsPerInstance: 1,
+			params: ScaleOutParams{
+				Disable: true,
+			},
+			currentDesiredCapacity:  1,
+			expectedDesiredCapacity: 1,
+		},
 	} {
 		t.Run("", func(t *testing.T) {
-			asg := &asgTestDriver{}
+			asg := &asgTestDriver{desiredCapacity: tc.currentDesiredCapacity}
 			s := Scaler{
 				autoscaling:       asg,
-				bk:                &buildkiteTestDriver{metrics: tc.Metrics},
-				agentsPerInstance: tc.AgentsPerInstance,
+				bk:                &buildkiteTestDriver{metrics: metrics},
+				agentsPerInstance: tc.agentsPerInstance,
+				scaleOutParams:    tc.params,
 			}
 
 			if err := s.Run(); err != nil {
 				t.Fatal(err)
 			}
 
-			if asg.desiredCapacity != tc.DesiredCount {
+			if asg.desiredCapacity != tc.expectedDesiredCapacity {
 				t.Fatalf("Expected desired capacity of %d, got %d",
-					tc.DesiredCount, asg.desiredCapacity,
+					tc.expectedDesiredCapacity, asg.desiredCapacity,
 				)
 			}
 		})
@@ -44,39 +128,46 @@ func TestScalingOutWithoutError(t *testing.T) {
 
 func TestScalingInWithoutError(t *testing.T) {
 	testCases := []struct {
-		currentDesiredCapacity int64
-		coolDownPeriod         time.Duration
-		lastScaleInTime        time.Time
-		adjustment             int64
-
+		currentDesiredCapacity  int64
+		scheduledJobs           int64
+		params                  ScaleInParams
 		expectedDesiredCapacity int64
 	}{
+		// We're inside cooldown
 		{
 			currentDesiredCapacity: 10,
-			coolDownPeriod:         5 * time.Minute,
-			lastScaleInTime:        time.Now(),
-			adjustment:             -1,
-
-			// We're inside cooldown
+			params: ScaleInParams{
+				CooldownPeriod: 5 * time.Minute,
+				LastScaleIn:    time.Now(),
+			},
 			expectedDesiredCapacity: 10,
 		},
+		// We're out of cooldown but we can only adjust by -2
 		{
 			currentDesiredCapacity: 10,
-			coolDownPeriod:         5 * time.Minute,
-			lastScaleInTime:        time.Now().Add(-10 * time.Minute),
-			adjustment:             -2,
-
-			// We're out of cooldown but we can only adjust by -2
+			params: ScaleInParams{
+				CooldownPeriod: 5 * time.Minute,
+				LastScaleIn:    time.Now().Add(-10 * time.Minute),
+				MaxAdjustment:  -2,
+			},
 			expectedDesiredCapacity: 8,
 		},
+		// We're allowed to adjust the whole amount
 		{
-			currentDesiredCapacity: 10,
-			coolDownPeriod:         5 * time.Minute,
-			lastScaleInTime:        time.Now().Add(-10 * time.Minute),
-			adjustment:             -100,
-
-			// We're allowed to adjust the whole amount
+			currentDesiredCapacity: 20,
+			scheduledJobs:          10,
+			params: ScaleInParams{
+				MinAdjustment: -100,
+			},
 			expectedDesiredCapacity: 0,
+		},
+		// Scale in disabled
+		{
+			params: ScaleInParams{
+				Disable: true,
+			},
+			currentDesiredCapacity:  1,
+			expectedDesiredCapacity: 1,
 		},
 	}
 
@@ -84,14 +175,12 @@ func TestScalingInWithoutError(t *testing.T) {
 		t.Run("", func(t *testing.T) {
 			asg := &asgTestDriver{desiredCapacity: tc.currentDesiredCapacity}
 			s := Scaler{
-				autoscaling:       asg,
-				bk:                &buildkiteTestDriver{metrics: buildkite.AgentMetrics{}},
+				autoscaling: asg,
+				bk: &buildkiteTestDriver{metrics: buildkite.AgentMetrics{
+					ScheduledJobs: tc.scheduledJobs,
+				}},
 				agentsPerInstance: 1,
-				scaleInParams: ScaleInParams{
-					CooldownPeriod:  tc.coolDownPeriod,
-					Adjustment:      tc.adjustment,
-					LastScaleInTime: &tc.lastScaleInTime,
-				},
+				scaleInParams:     tc.params,
 			}
 
 			if err := s.Run(); err != nil {

@@ -20,8 +20,11 @@ func main() {
 		buildkiteQueue      = flag.String("queue", "default", "The queue to watch in the metrics")
 		buildkiteAgentToken = flag.String("agent-token", "", "A buildkite agent registration token")
 
-		// scale in params
-		scaleInAdjustment = flag.Int64("scale-in-adjustment", -1, "Maximum adjustment to the desired capacity on scale in")
+		// scale in/out params
+		scaleInMinAdjustment  = flag.Int64("scale-in-min", 0, "A lower bound for negative desired count changes")
+		scaleInMaxAdjustment  = flag.Int64("scale-in-max", 0, "An upper bound for negative desired count changes")
+		scaleOutMinAdjustment = flag.Int64("scale-out-min", 0, "A lower bound for positive desired count changes")
+		scaleOutMaxAdjustment = flag.Int64("scale-out-max", 0, "An upper bound for positive desired count changes")
 
 		// general params
 		dryRun = flag.Bool("dry-run", false, "Whether to just show what would be done")
@@ -37,10 +40,12 @@ func main() {
 		PublishCloudWatchMetrics: *cwMetrics,
 		DryRun:                   *dryRun,
 		ScaleInParams: scaler.ScaleInParams{
-			// We run in one-shot so cooldown isn't implemented
-			CooldownPeriod:  time.Duration(0),
-			Adjustment:      *scaleInAdjustment,
-			LastScaleInTime: &time.Time{},
+			MinAdjustment: *scaleInMinAdjustment,
+			MaxAdjustment: *scaleInMaxAdjustment,
+		},
+		ScaleOutParams: scaler.ScaleOutParams{
+			MinAdjustment: *scaleOutMinAdjustment,
+			MaxAdjustment: *scaleOutMaxAdjustment,
 		},
 	})
 	if err != nil {

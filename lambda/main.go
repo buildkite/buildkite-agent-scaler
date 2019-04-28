@@ -15,11 +15,11 @@ import (
 	"github.com/buildkite/buildkite-agent-scaler/version"
 )
 
-var invokeCount = 0
-
-// lastScaleDownTime stores the last time we scaled down the ASG
-// On a cold start this will be reset to Jan 1st, 1970
-var lastScaleInTime time.Time
+// Stores the last time we scaled in/out in global lambda state
+// On a cold start this will be reset to a zero value
+var (
+	lastScaleIn, lastScaleOut time.Time
+)
 
 func main() {
 	if os.Getenv(`DEBUG`) != "" {
@@ -28,8 +28,6 @@ func main() {
 			log.Fatal(err)
 		}
 	} else {
-		invokeCount = invokeCount + 1
-		log.Printf("Invocation count %d", invokeCount)
 		lambda.Start(Handler)
 	}
 }
@@ -37,44 +35,78 @@ func main() {
 func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 	log.Printf("buildkite-agent-scaler version %s", version.VersionString())
 
-	var timeout <-chan time.Time = make(chan time.Time)
-	var interval time.Duration = 10 * time.Second
-	var scaleInCooldownPeriod time.Duration = 5 * time.Minute
-	var scaleInAdjustment int64 = -1
+	var (
+		timeout  <-chan time.Time = make(chan time.Time)
+		interval time.Duration    = 10 * time.Second
 
-	if intervalStr := os.Getenv(`LAMBDA_INTERVAL`); intervalStr != "" {
-		var err error
-		interval, err = time.ParseDuration(intervalStr)
-		if err != nil {
+		scaleInCooldownPeriod  time.Duration
+		scaleInMax, scaleInMin int64
+
+		scaleOutCooldownPeriod   time.Duration
+		scaleOutMax, scaleOutMin int64
+
+		err error
+	)
+
+	if v := os.Getenv(`LAMBDA_INTERVAL`); v != "" {
+		if interval, err = time.ParseDuration(v); err != nil {
 			return "", err
 		}
 	}
 
-	if timeoutStr := os.Getenv(`LAMBDA_TIMEOUT`); timeoutStr != "" {
-		timeoutDuration, err := time.ParseDuration(timeoutStr)
-		if err != nil {
+	if v := os.Getenv(`LAMBDA_INTERVAL`); v != "" {
+		if timeoutDuration, err := time.ParseDuration(v); err != nil {
 			return "", err
-		}
-		timeout = time.After(timeoutDuration)
-	}
-
-	if scaleInCooldownPeriodStr := os.Getenv(`SCALE_IN_COOLDOWN_PERIOD`); scaleInCooldownPeriodStr != "" {
-		var err error
-		scaleInCooldownPeriod, err = time.ParseDuration(scaleInCooldownPeriodStr)
-		if err != nil {
-			return "", err
+		} else {
+			timeout = time.After(timeoutDuration)
 		}
 	}
 
-	if scaleInAdjustmentStr := os.Getenv(`SCALE_IN_ADJUSTMENT`); scaleInAdjustmentStr != "" {
-		var err error
-		scaleInAdjustment, err = strconv.ParseInt(scaleInAdjustmentStr, 10, 64)
-		if err != nil {
+	if v := os.Getenv(`SCALE_IN_COOLDOWN_PERIOD`); v != "" {
+		if scaleInCooldownPeriod, err = time.ParseDuration(v); err != nil {
 			return "", err
 		}
+	}
 
-		if scaleInAdjustment >= 0 {
-			panic(fmt.Sprintf("Scale in adjustment (%d) must be negative", scaleInAdjustment))
+	if v := os.Getenv(`SCALE_IN_MAX`); v != "" {
+		if scaleInMax, err = strconv.ParseInt(v, 10, 64); err != nil {
+			return "", err
+		}
+		if scaleInMax >= 0 {
+			panic(fmt.Sprintf("SCALE_IN_MAX (%d) must be negative", scaleInMax))
+		}
+	}
+
+	if v := os.Getenv(`SCALE_IN_MIN`); v != "" {
+		if scaleInMin, err = strconv.ParseInt(v, 10, 64); err != nil {
+			return "", err
+		}
+		if scaleInMax >= 0 {
+			panic(fmt.Sprintf("SCALE_IN_MIN (%d) must be negative", scaleInMax))
+		}
+	}
+
+	if v := os.Getenv(`SCALE_OUT_COOLDOWN_PERIOD`); v != "" {
+		if scaleOutCooldownPeriod, err = time.ParseDuration(v); err != nil {
+			return "", err
+		}
+	}
+
+	if v := os.Getenv(`SCALE_OUT_MAX`); v != "" {
+		if scaleOutMax, err = strconv.ParseInt(v, 10, 64); err != nil {
+			return "", err
+		}
+		if scaleOutMax < 0 {
+			panic(fmt.Sprintf("SCALE_OUT_MAX (%d) must be positive", scaleOutMax))
+		}
+	}
+
+	if v := os.Getenv(`SCALE_OUT_MIN`); v != "" {
+		if scaleOutMin, err = strconv.ParseInt(v, 10, 64); err != nil {
+			return "", err
+		}
+		if scaleOutMin < 0 {
+			panic(fmt.Sprintf("SCALE_OUT_MIN (%d) must be positive", scaleOutMin))
 		}
 	}
 
@@ -107,9 +139,16 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 				AutoScalingGroupName: mustGetEnv(`ASG_NAME`),
 				AgentsPerInstance:    mustGetEnvInt(`AGENTS_PER_INSTANCE`),
 				ScaleInParams: scaler.ScaleInParams{
-					CooldownPeriod:  scaleInCooldownPeriod,
-					Adjustment:      scaleInAdjustment,
-					LastScaleInTime: &lastScaleInTime,
+					CooldownPeriod: scaleInCooldownPeriod,
+					MaxAdjustment:  scaleInMax,
+					MinAdjustment:  scaleInMin,
+					LastScaleIn:    lastScaleIn,
+				},
+				ScaleOutParams: scaler.ScaleOutParams{
+					CooldownPeriod: scaleOutCooldownPeriod,
+					MaxAdjustment:  scaleOutMax,
+					MinAdjustment:  scaleOutMin,
+					LastScaleOut:   lastScaleOut,
 				},
 			}
 
@@ -131,6 +170,10 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 			if err := scaler.Run(); err != nil {
 				log.Printf("Scaling error: %v", err)
 			}
+
+			// Persist the times back into the global state
+			lastScaleIn = scaler.LastScaleIn()
+			lastScaleOut = scaler.LastScaleOut()
 
 			log.Printf("Waiting for %v", interval)
 			time.Sleep(interval)
