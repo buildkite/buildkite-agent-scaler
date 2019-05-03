@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -100,7 +101,24 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		case <-timeout:
 			return "", nil
 		default:
-			client := buildkite.NewClient(mustGetEnv(`BUILDKITE_AGENT_TOKEN`))
+			token := os.Getenv(`BUILDKITE_AGENT_TOKEN`)
+			ssmTokenKey := os.Getenv("BUILDKITE_AGENT_TOKEN_SSM_KEY")
+
+			if ssmTokenKey != "" {
+				var err error
+				token, err = scaler.RetrieveFromParameterStore(ssmTokenKey)
+				if err != nil {
+					return "", err
+				}
+			}
+
+			if token == "" {
+				return "", errors.New(
+					"Must provide either BUILDKITE_AGENT_TOKEN or BUILDKITE_AGENT_TOKEN_SSM_KEY",
+				)
+			}
+
+			client := buildkite.NewClient(token)
 
 			params := scaler.Params{
 				BuildkiteQueue:       mustGetEnv(`BUILDKITE_QUEUE`),
