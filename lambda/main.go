@@ -81,6 +81,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		if scaleOutCooldownPeriod, err = time.ParseDuration(v); err != nil {
 			return "", err
 		}
+		scaleOutFactor = math.Abs(scaleOutFactor)
 	}
 
 	if v := os.Getenv(`SCALE_OUT_FACTOR`); v != "" {
@@ -177,6 +178,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 				log.Printf("Increasing poll interval to %v based on rate limit",
 					interval)
 			}
+
 			// Persist the times back into the global state
 			lastScaleIn = scaler.LastScaleIn()
 			lastScaleOut = scaler.LastScaleOut()
