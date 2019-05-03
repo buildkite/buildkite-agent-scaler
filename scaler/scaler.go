@@ -8,11 +8,11 @@ import (
 	"github.com/buildkite/buildkite-agent-scaler/buildkite"
 )
 
-type ScaleInParams struct {
-	Disable         bool
-	CooldownPeriod  time.Duration
-	Adjustment      int64
-	LastScaleInTime *time.Time
+type ScaleParams struct {
+	Disable        bool
+	CooldownPeriod time.Duration
+	Factor         float64
+	LastEvent      time.Time
 }
 
 type Params struct {
@@ -23,7 +23,8 @@ type Params struct {
 	UserAgent                string
 	PublishCloudWatchMetrics bool
 	DryRun                   bool
-	ScaleInParams            ScaleInParams
+	ScaleInParams            ScaleParams
+	ScaleOutParams           ScaleParams
 }
 
 type Scaler struct {
@@ -38,7 +39,8 @@ type Scaler struct {
 		Publish(orgSlug, queue string, metrics map[string]int64) error
 	}
 	agentsPerInstance int
-	scaleInParams     ScaleInParams
+	scaleInParams     ScaleParams
+	scaleOutParams    ScaleParams
 }
 
 func NewScaler(client *buildkite.Client, params Params) (*Scaler, error) {
@@ -49,6 +51,7 @@ func NewScaler(client *buildkite.Client, params Params) (*Scaler, error) {
 		},
 		agentsPerInstance: params.AgentsPerInstance,
 		scaleInParams:     params.ScaleInParams,
+		scaleOutParams:    params.ScaleOutParams,
 	}
 
 	if params.DryRun {
@@ -106,49 +109,134 @@ func (s *Scaler) Run() (time.Duration, error) {
 		desired = current.MinSize
 	}
 
-	t := time.Now()
-
 	if desired > current.DesiredCount {
-		log.Printf("Scaling OUT 📈 to %d instances (currently %d)", desired, current.DesiredCount)
+		return metrics.PollDuration, s.scaleOut(desired, current)
+	}
 
-		err = s.autoscaling.SetDesiredCapacity(desired)
-		if err != nil {
-			return metrics.PollDuration, err
-		}
+	if current.DesiredCount > desired {
+		return metrics.PollDuration, s.scaleIn(desired, current)
+	}
 
-		log.Printf("↳ Set desired to %d (took %v)", desired, time.Now().Sub(t))
-	} else if current.DesiredCount > desired {
-		if s.scaleInParams.Disable {
-			log.Printf("Skipping scale IN, disabled")
-			return metrics.PollDuration, nil
-		}
+	log.Printf("No scaling required, currently %d", current.DesiredCount)
+	return metrics.PollDuration, nil
+}
 
-		cooldownRemaining := s.scaleInParams.CooldownPeriod - time.Since(*s.scaleInParams.LastScaleInTime)
+func (s *Scaler) scaleIn(desired int64, current AutoscaleGroupDetails) error {
+	if s.scaleInParams.Disable {
+		return nil
+	}
+
+	// If we've scaled down before, check if a cooldown should be enforced
+	if !s.scaleInParams.LastEvent.IsZero() {
+		cooldownRemaining := s.scaleInParams.CooldownPeriod - time.Since(s.scaleInParams.LastEvent)
 
 		if cooldownRemaining > 0 {
 			log.Printf("⏲ Want to scale IN but in cooldown for %d seconds", cooldownRemaining/time.Second)
-			return metrics.PollDuration, nil
+			return nil
 		}
-
-		minimumDesired := current.DesiredCount + s.scaleInParams.Adjustment
-		if desired < minimumDesired {
-			desired = minimumDesired
-		}
-
-		log.Printf("Scaling IN 📉 to %d instances (currently %d)", desired, current.DesiredCount)
-
-		err = s.autoscaling.SetDesiredCapacity(desired)
-		if err != nil {
-			return metrics.PollDuration, err
-		}
-
-		*s.scaleInParams.LastScaleInTime = time.Now()
-		log.Printf("↳ Set desired to %d (took %v)", desired, time.Now().Sub(t))
-	} else {
-		log.Printf("No scaling required, currently %d", current.DesiredCount)
 	}
 
-	return metrics.PollDuration, nil
+	// Calculate the change in the desired count, will be negative
+	change := desired - current.DesiredCount
+
+	// Apply scaling factor if one is given
+	if factor := s.scaleInParams.Factor; factor != 0 {
+		// Use Floor to avoid never reaching upper bound
+		factoredChange := int64(math.Floor(float64(change) * factor))
+
+		if factoredChange < change {
+			log.Printf("👮‍️ Increasing scale-in of %d by factor of %0.2f",
+				change, factor)
+		} else if factoredChange > change {
+			log.Printf("👮‍️ Decreasing scale-in of %d by factor of %0.2f",
+				change, factor)
+		} else {
+			log.Printf("👮‍️ Scale-in factor of %0.2f was ignored",
+				factor)
+		}
+
+		desired = current.DesiredCount + factoredChange
+	}
+
+	// Correct negative values if we get them
+	if desired < 0 {
+		desired = 0
+	}
+
+	log.Printf("Scaling IN 📉 to %d instances (currently %d)", desired, current.DesiredCount)
+
+	if err := s.setDesiredCapacity(desired); err != nil {
+		return err
+	}
+
+	s.scaleInParams.LastEvent = time.Now()
+	return nil
+}
+
+func (s *Scaler) scaleOut(desired int64, current AutoscaleGroupDetails) error {
+	if s.scaleOutParams.Disable {
+		return nil
+	}
+
+	// If we've scaled out before, check if a cooldown should be enforced
+	if !s.scaleOutParams.LastEvent.IsZero() {
+		cooldownRemaining := s.scaleOutParams.CooldownPeriod - time.Since(s.scaleOutParams.LastEvent)
+
+		if cooldownRemaining > 0 {
+			log.Printf("⏲ Want to scale OUT but in cooldown for %d seconds", cooldownRemaining/time.Second)
+			return nil
+		}
+	}
+
+	// Calculate the change in the desired count, will be positive
+	change := desired - current.DesiredCount
+
+	// Apply scaling factor if one is given
+	if s.scaleOutParams.Factor != 0 {
+		// Use Ceil to avoid never reaching upper bound
+		factoredChange := int64(math.Ceil(float64(change) * s.scaleOutParams.Factor))
+
+		if factoredChange > change {
+			log.Printf("👮‍️ Increasing scale-out of %d by factor of %0.2f",
+				change, s.scaleOutParams.Factor)
+		} else if factoredChange < change {
+			log.Printf("👮‍️ Decreasing scale-out of %d by factor of %0.2f",
+				change, s.scaleOutParams.Factor)
+		} else {
+			log.Printf("👮‍️ Scale-out factor of %0.2f was ignored",
+				s.scaleOutParams.Factor)
+		}
+
+		desired = current.DesiredCount + factoredChange
+	}
+
+	log.Printf("Scaling OUT 📈 to %d instances (currently %d)", desired, current.DesiredCount)
+
+	if err := s.setDesiredCapacity(desired); err != nil {
+		return err
+	}
+
+	s.scaleOutParams.LastEvent = time.Now()
+	return nil
+}
+
+func (s *Scaler) setDesiredCapacity(desired int64) error {
+	t := time.Now()
+
+	if err := s.autoscaling.SetDesiredCapacity(desired); err != nil {
+		return err
+	}
+
+	log.Printf("↳ Set desired to %d (took %v)", desired, time.Now().Sub(t))
+	return nil
+}
+
+func (s *Scaler) LastScaleOut() time.Time {
+	return s.scaleOutParams.LastEvent
+}
+
+func (s *Scaler) LastScaleIn() time.Time {
+	return s.scaleInParams.LastEvent
 }
 
 type buildkiteDriver struct {
