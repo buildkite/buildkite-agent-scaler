@@ -70,10 +70,10 @@ func NewScaler(client *buildkite.Client, params Params) (*Scaler, error) {
 	return scaler, nil
 }
 
-func (s *Scaler) Run() error {
+func (s *Scaler) Run() (time.Duration, error) {
 	metrics, err := s.bk.GetAgentMetrics()
 	if err != nil {
-		return err
+		return metrics.PollDuration, err
 	}
 
 	if s.metrics != nil {
@@ -82,7 +82,7 @@ func (s *Scaler) Run() error {
 			`RunningJobsCount`:   metrics.RunningJobs,
 		})
 		if err != nil {
-			return err
+			return metrics.PollDuration, err
 		}
 	}
 
@@ -95,7 +95,7 @@ func (s *Scaler) Run() error {
 
 	current, err := s.autoscaling.Describe()
 	if err != nil {
-		return err
+		return metrics.PollDuration, err
 	}
 
 	if desired > current.MaxSize {
@@ -113,21 +113,21 @@ func (s *Scaler) Run() error {
 
 		err = s.autoscaling.SetDesiredCapacity(desired)
 		if err != nil {
-			return err
+			return metrics.PollDuration, err
 		}
 
 		log.Printf("↳ Set desired to %d (took %v)", desired, time.Now().Sub(t))
 	} else if current.DesiredCount > desired {
 		if s.scaleInParams.Disable {
 			log.Printf("Skipping scale IN, disabled")
-			return nil
+			return metrics.PollDuration, nil
 		}
 
 		cooldownRemaining := s.scaleInParams.CooldownPeriod - time.Since(*s.scaleInParams.LastScaleInTime)
 
 		if cooldownRemaining > 0 {
 			log.Printf("⏲ Want to scale IN but in cooldown for %d seconds", cooldownRemaining/time.Second)
-			return nil
+			return metrics.PollDuration, nil
 		}
 
 		minimumDesired := current.DesiredCount + s.scaleInParams.Adjustment
@@ -139,7 +139,7 @@ func (s *Scaler) Run() error {
 
 		err = s.autoscaling.SetDesiredCapacity(desired)
 		if err != nil {
-			return err
+			return metrics.PollDuration, err
 		}
 
 		*s.scaleInParams.LastScaleInTime = time.Now()
@@ -148,7 +148,7 @@ func (s *Scaler) Run() error {
 		log.Printf("No scaling required, currently %d", current.DesiredCount)
 	}
 
-	return nil
+	return metrics.PollDuration, nil
 }
 
 type buildkiteDriver struct {

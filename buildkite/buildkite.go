@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/buildkite/buildkite-agent-scaler/version"
@@ -13,6 +14,7 @@ import (
 
 const (
 	DefaultMetricsEndpoint = "https://agent.buildkite.com/v3"
+	PollDurationHeader     = `Buildkite-Agent-Metrics-Poll-Duration`
 )
 
 type Client struct {
@@ -34,6 +36,7 @@ type AgentMetrics struct {
 	Queue         string
 	ScheduledJobs int64
 	RunningJobs   int64
+	PollDuration  time.Duration
 }
 
 func (c *Client) GetAgentMetrics(queue string) (AgentMetrics, error) {
@@ -51,25 +54,30 @@ func (c *Client) GetAgentMetrics(queue string) (AgentMetrics, error) {
 		} `json:"jobs"`
 	}
 
-	d, err := c.queryMetrics(&resp)
+	t := time.Now()
+	pollDuration, err := c.queryMetrics(&resp)
 	if err != nil {
 		return AgentMetrics{}, err
 	}
 
+	queryDuration := time.Now().Sub(t)
+
 	var metrics AgentMetrics
 	metrics.OrgSlug = resp.Organization.Slug
 	metrics.Queue = queue
+	metrics.PollDuration = pollDuration
 
 	if queue, exists := resp.Jobs.Queues[queue]; exists {
 		metrics.ScheduledJobs = queue.Scheduled
 		metrics.RunningJobs = queue.Running
 	}
 
-	log.Printf("↳ Got scheduled=%d, running=%d (took %v)", metrics.ScheduledJobs, metrics.RunningJobs, d)
+	log.Printf("↳ Got scheduled=%d, running=%d (took %v)",
+		metrics.ScheduledJobs, metrics.RunningJobs, queryDuration)
 	return metrics, nil
 }
 
-func (c *Client) queryMetrics(into interface{}) (time.Duration, error) {
+func (c *Client) queryMetrics(into interface{}) (pollDuration time.Duration, err error) {
 	endpoint, err := url.Parse(c.Endpoint)
 	if err != nil {
 		return time.Duration(0), err
@@ -85,15 +93,21 @@ func (c *Client) queryMetrics(into interface{}) (time.Duration, error) {
 	req.Header.Set("User-Agent", c.UserAgent)
 	req.Header.Set("Authorization", fmt.Sprintf("Token %s", c.AgentToken))
 
-	t := time.Now()
-
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return time.Duration(0), err
 	}
 
-	d := time.Now().Sub(t)
+	// Check if we get a poll duration header from server
+	if pollSeconds := res.Header.Get(PollDurationHeader); pollSeconds != "" {
+		pollSecondsInt, err := strconv.ParseInt(pollSeconds, 10, 64)
+		if err != nil {
+			log.Printf("Failed to parse %s header: %v", PollDurationHeader, err)
+		} else {
+			pollDuration = time.Duration(pollSecondsInt) * time.Second
+		}
+	}
 
 	defer res.Body.Close()
-	return d, json.NewDecoder(res.Body).Decode(into)
+	return pollDuration, json.NewDecoder(res.Body).Decode(into)
 }
