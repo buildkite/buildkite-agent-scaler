@@ -1,6 +1,6 @@
 # Buildkite Agent Scaler
 
-An AWS lambda function that handles the scaling of an of Amazon Autoscaling Groups (ASG) based on metrics provided by the Buildkite Agent Metrics API.
+An AWS lambda function that handles the scaling of an [Amazon Autoscaling Group](https://docs.aws.amazon.com/autoscaling/ec2/userguide/AutoScalingGroup.html) (ASG) based on metrics provided by the Buildkite Agent Metrics API.
 
 In practice, we've seen 300% faster initial scale-ups with this lambda vs native AutoScaling rules. 🚀
 
@@ -17,9 +17,9 @@ The lambda (or cli version) polls the Buildkite Metrics API every 10 seconds, an
 
 ## Gracefully scaling in
 
-Whilst the lambda does support scaling in via setting `DesiredCount`, Amazon ASGs appear to not send [Lifecycle Events][] before terminating instances, so jobs in progress are interrupted.
+Whilst the lambda does support scaling in via setting `DesiredCount`, Amazon ASGs appear to not send [Lifecycle Hooks][] before terminating instances, so jobs in progress are interrupted.
 
-Instead, in the [Elastic Stack][] we run the scaler with scale-in disabled (`DISABLE_SCALE_IN`) and rely on the recent Agent addition of `--disconnect-after-idle-timeout` in the Agent combined with a [systemd PostStop script]() to terminate the instance and atomically decrease the `DesiredCount` after the agent has been idle for a time period. We've found it to work really well, and is less complicated than relying on `lifecycled` and Lifecycle Events.
+Instead, in the [Elastic Stack][] we run the scaler with scale-in disabled (`DISABLE_SCALE_IN`) and rely on the [recent addition in buildkite-agent v3.10.0](https://github.com/buildkite/agent/releases/tag/v3.10.0) of `--disconnect-after-idle-timeout` in the Agent combined with a [systemd PostStop script](https://github.com/buildkite/elastic-ci-stack-for-aws/blob/00c45ab47160b1d1d44c0b3bea8456456444c60e/packer/linux/conf/bin/bk-install-elastic-stack.sh#L136-L143) to terminate the instance and atomically decrease the `DesiredCount` after the agent has been idle for a time period. We've found it to work really well, and is less complicated than relying on `[lifecycled][]` and [Lifecycle Hooks][].
 
 See the [forum post](https://forum.buildkite.community/t/experimental-lambda-based-scaler/425) for more details.
 
@@ -71,3 +71,5 @@ Copyright (c) 2014-2019 Buildkite Pty Ltd. See [LICENSE](./LICENSE.txt) for deta
 
 [Elastic Stack]: https://github.com/buildkite/elastic-ci-stack-for-aws
 [buildkite-agent-metrics]: https://github.com/buildkite/buildkite-agent-metrics
+[Lifecycle Hooks]: https://docs.aws.amazon.com/autoscaling/ec2/userguide/lifecycle-hooks.html
+[lifecycled]: https://github.com/buildkite/lifecycled
