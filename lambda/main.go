@@ -128,8 +128,15 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 				log.Fatal(err)
 			}
 
-			if err := scaler.Run(); err != nil {
+			minPollDuration, err := scaler.Run()
+			if err != nil {
 				log.Printf("Scaling error: %v", err)
+			}
+
+			if interval < minPollDuration {
+				interval = minPollDuration
+				log.Printf("Increasing poll interval to %v based on rate limit",
+					interval)
 			}
 
 			log.Printf("Waiting for %v", interval)
