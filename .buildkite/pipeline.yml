@@ -5,6 +5,8 @@ steps:
       - docker#v3.1.0:
           image: "golang:1.12"
           workdir: /go/src/github.com/buildkite/buildkite-agent-scaler
+          environment:
+            - GO111MODULE=off
 
   - wait
   - name: ":lambda:"
