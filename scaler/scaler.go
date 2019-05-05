@@ -23,6 +23,7 @@ type Params struct {
 	UserAgent                string
 	PublishCloudWatchMetrics bool
 	DryRun                   bool
+	IncludeWaiting           bool
 	ScaleInParams            ScaleParams
 	ScaleOutParams           ScaleParams
 }
@@ -38,6 +39,7 @@ type Scaler struct {
 	metrics interface {
 		Publish(orgSlug, queue string, metrics map[string]int64) error
 	}
+	includeWaiting    bool
 	agentsPerInstance int
 	scaleInParams     ScaleParams
 	scaleOutParams    ScaleParams
@@ -49,6 +51,7 @@ func NewScaler(client *buildkite.Client, params Params) (*Scaler, error) {
 			client: client,
 			queue:  params.BuildkiteQueue,
 		},
+		includeWaiting:    params.IncludeWaiting,
 		agentsPerInstance: params.AgentsPerInstance,
 		scaleInParams:     params.ScaleInParams,
 		scaleOutParams:    params.ScaleOutParams,
@@ -83,13 +86,24 @@ func (s *Scaler) Run() (time.Duration, error) {
 		err = s.metrics.Publish(metrics.OrgSlug, metrics.Queue, map[string]int64{
 			`ScheduledJobsCount`: metrics.ScheduledJobs,
 			`RunningJobsCount`:   metrics.RunningJobs,
+			`WaitingJobsCount`:   metrics.WaitingJobs,
 		})
 		if err != nil {
 			return metrics.PollDuration, err
 		}
 	}
 
-	count := metrics.ScheduledJobs + metrics.RunningJobs
+	count := metrics.ScheduledJobs
+
+	// If waiting jobs are greater than running jobs then optionally
+	// use waiting jobs for scaling so that we have instances booted
+	// by the time we get to them. This is a gamble, as if the instances
+	// scale down before the jobs get scheduled, it's a huge waste.
+	if s.includeWaiting && metrics.WaitingJobs > metrics.RunningJobs {
+		count += metrics.WaitingJobs
+	} else {
+		count += metrics.RunningJobs
+	}
 
 	var desired int64
 	if count > 0 {
