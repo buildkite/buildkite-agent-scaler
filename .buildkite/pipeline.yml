@@ -1,4 +1,7 @@
 steps:
+  - name: ":golang:"
+    command: .buildkite/steps/tests.sh
+
   - wait
   - name: ":lambda:"
     command: .buildkite/steps/build-lambda.sh
