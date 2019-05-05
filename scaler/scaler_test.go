@@ -110,7 +110,7 @@ func TestScalingOutWithoutError(t *testing.T) {
 				scaleOutParams:    tc.params,
 			}
 
-			if err := s.Run(); err != nil {
+			if _, err := s.Run(); err != nil {
 				t.Fatal(err)
 			}
 
@@ -188,7 +188,7 @@ func TestScalingInWithoutError(t *testing.T) {
 				scaleInParams:     tc.params,
 			}
 
-			if err := s.Run(); err != nil {
+			if _, err := s.Run(); err != nil {
 				t.Fatal(err)
 			}
 
