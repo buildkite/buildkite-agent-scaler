@@ -23,7 +23,7 @@ type Params struct {
 	UserAgent                string
 	PublishCloudWatchMetrics bool
 	DryRun                   bool
-	IgnoreWaiting            bool
+	IncludeWaiting           bool
 	ScaleInParams            ScaleParams
 	ScaleOutParams           ScaleParams
 }
@@ -39,7 +39,7 @@ type Scaler struct {
 	metrics interface {
 		Publish(orgSlug, queue string, metrics map[string]int64) error
 	}
-	ignoreWaiting     bool
+	includeWaiting    bool
 	agentsPerInstance int
 	scaleInParams     ScaleParams
 	scaleOutParams    ScaleParams
@@ -51,7 +51,7 @@ func NewScaler(client *buildkite.Client, params Params) (*Scaler, error) {
 			client: client,
 			queue:  params.BuildkiteQueue,
 		},
-		ignoreWaiting:     params.IgnoreWaiting,
+		includeWaiting:    params.IncludeWaiting,
 		agentsPerInstance: params.AgentsPerInstance,
 		scaleInParams:     params.ScaleInParams,
 		scaleOutParams:    params.ScaleOutParams,
@@ -95,7 +95,7 @@ func (s *Scaler) Run() (time.Duration, error) {
 
 	count := metrics.ScheduledJobs + metrics.RunningJobs
 
-	if !s.ignoreWaiting {
+	if s.includeWaiting {
 		count += metrics.WaitingJobs
 	} else {
 		log.Printf("💸 Ignoring %d waiting jobs", metrics.WaitingJobs)

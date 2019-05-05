@@ -23,7 +23,6 @@ func TestScalingOutWithoutError(t *testing.T) {
 			},
 			params: Params{
 				AgentsPerInstance: 1,
-				IgnoreWaiting:     true,
 			},
 			expectedDesiredCapacity: 12,
 		},
@@ -36,6 +35,7 @@ func TestScalingOutWithoutError(t *testing.T) {
 			},
 			params: Params{
 				AgentsPerInstance: 1,
+				IncludeWaiting:     true,
 			},
 			expectedDesiredCapacity: 12,
 		},
@@ -185,7 +185,7 @@ func TestScalingOutWithoutError(t *testing.T) {
 				bk:                &buildkiteTestDriver{metrics: tc.metrics},
 				agentsPerInstance: tc.params.AgentsPerInstance,
 				scaleOutParams:    tc.params.ScaleOutParams,
-				ignoreWaiting:     tc.params.IgnoreWaiting,
+				includeWaiting:     tc.params.IncludeWaiting,
 			}
 
 			if _, err := s.Run(); err != nil {

@@ -17,9 +17,9 @@ func main() {
 		ssmTokenKey       = flag.String("agent-token-ssm-key", "", "The AWS SSM Parameter Store key for the agent token")
 
 		// buildkite params
-		buildkiteQueue         = flag.String("queue", "default", "The queue to watch in the metrics")
-		buildkiteAgentToken    = flag.String("agent-token", "", "A buildkite agent registration token")
-		buildkiteIgnoreWaiting = flag.Bool("ignore-waiting", false, "Whether to ignore jobs behind a wait step for scaling")
+		buildkiteQueue      = flag.String("queue", "default", "The queue to watch in the metrics")
+		buildkiteAgentToken = flag.String("agent-token", "", "A buildkite agent registration token")
+		includeWaiting      = flag.Bool("include-waiting", false, "Whether to include jobs behind a wait step for scaling")
 
 		// scale in/out params
 		scaleInFactor  = flag.Float64("scale-in-factor", 1.0, "A factor to apply to scale ins")
@@ -46,7 +46,7 @@ func main() {
 		AgentsPerInstance:        *agentsPerInstance,
 		PublishCloudWatchMetrics: *cwMetrics,
 		DryRun:                   *dryRun,
-		IgnoreWaiting:            *buildkiteIgnoreWaiting,
+		IncludeWaiting:           *includeWaiting,
 		ScaleInParams:            scaler.ScaleParams{Factor: *scaleInFactor},
 		ScaleOutParams:           scaler.ScaleParams{Factor: *scaleOutFactor},
 	})
