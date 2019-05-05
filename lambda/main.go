@@ -47,7 +47,8 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		scaleOutCooldownPeriod time.Duration
 		scaleOutFactor         float64
 
-		err error
+		ignoreWaiting bool
+		err           error
 	)
 
 	if v := os.Getenv(`LAMBDA_INTERVAL`); v != "" {
@@ -89,6 +90,12 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 			return "", err
 		}
 		scaleOutFactor = math.Abs(scaleOutFactor)
+	}
+
+	if v := os.Getenv(`IGNORE_WAITING`); v != "" {
+		if v == "true" || v == "1" {
+			ignoreWaiting = true
+		}
 	}
 
 	var mustGetEnv = func(env string) string {
@@ -136,6 +143,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 				BuildkiteQueue:       mustGetEnv(`BUILDKITE_QUEUE`),
 				AutoScalingGroupName: mustGetEnv(`ASG_NAME`),
 				AgentsPerInstance:    mustGetEnvInt(`AGENTS_PER_INSTANCE`),
+				IgnoreWaiting:        ignoreWaiting,
 				ScaleInParams: scaler.ScaleParams{
 					CooldownPeriod: scaleInCooldownPeriod,
 					Factor:         scaleInFactor,

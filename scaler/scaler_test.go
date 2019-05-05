@@ -14,11 +14,25 @@ func TestScalingOutWithoutError(t *testing.T) {
 		currentDesiredCapacity  int64
 		expectedDesiredCapacity int64
 	}{
-		// Basic scale out
+		// Basic scale out without waiting jobs
 		{
 			metrics: buildkite.AgentMetrics{
 				ScheduledJobs: 10,
 				RunningJobs:   2,
+				WaitingJobs:   2,
+			},
+			params: Params{
+				AgentsPerInstance: 1,
+				IgnoreWaiting:     true,
+			},
+			expectedDesiredCapacity: 12,
+		},
+		// Basic scale out with waiting jobs
+		{
+			metrics: buildkite.AgentMetrics{
+				ScheduledJobs: 8,
+				RunningJobs:   2,
+				WaitingJobs:   2,
 			},
 			params: Params{
 				AgentsPerInstance: 1,
@@ -171,6 +185,7 @@ func TestScalingOutWithoutError(t *testing.T) {
 				bk:                &buildkiteTestDriver{metrics: tc.metrics},
 				agentsPerInstance: tc.params.AgentsPerInstance,
 				scaleOutParams:    tc.params.ScaleOutParams,
+				ignoreWaiting:     tc.params.IgnoreWaiting,
 			}
 
 			if _, err := s.Run(); err != nil {

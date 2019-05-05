@@ -37,6 +37,7 @@ type AgentMetrics struct {
 	ScheduledJobs int64
 	RunningJobs   int64
 	PollDuration  time.Duration
+	WaitingJobs   int64
 }
 
 func (c *Client) GetAgentMetrics(queue string) (AgentMetrics, error) {
@@ -50,6 +51,7 @@ func (c *Client) GetAgentMetrics(queue string) (AgentMetrics, error) {
 			Queues map[string]struct {
 				Scheduled int64 `json:"scheduled"`
 				Running   int64 `json:"running"`
+				Waiting   int64 `json:"waiting"`
 			} `json:"queues"`
 		} `json:"jobs"`
 	}
@@ -70,10 +72,11 @@ func (c *Client) GetAgentMetrics(queue string) (AgentMetrics, error) {
 	if queue, exists := resp.Jobs.Queues[queue]; exists {
 		metrics.ScheduledJobs = queue.Scheduled
 		metrics.RunningJobs = queue.Running
+		metrics.WaitingJobs = queue.Waiting
 	}
 
-	log.Printf("↳ Got scheduled=%d, running=%d (took %v)",
-		metrics.ScheduledJobs, metrics.RunningJobs, queryDuration)
+	log.Printf("↳ Got scheduled=%d, running=%d, waiting=%d (took %v)",
+		metrics.ScheduledJobs, metrics.RunningJobs, metrics.WaitingJobs, queryDuration)
 	return metrics, nil
 }
 
