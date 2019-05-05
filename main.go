@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"log"
-	"time"
 
 	"github.com/buildkite/buildkite-agent-scaler/buildkite"
 	"github.com/buildkite/buildkite-agent-scaler/scaler"
@@ -21,8 +20,9 @@ func main() {
 		buildkiteQueue      = flag.String("queue", "default", "The queue to watch in the metrics")
 		buildkiteAgentToken = flag.String("agent-token", "", "A buildkite agent registration token")
 
-		// scale in params
-		scaleInAdjustment = flag.Int64("scale-in-adjustment", -1, "Maximum adjustment to the desired capacity on scale in")
+		// scale in/out params
+		scaleInFactor  = flag.Float64("scale-in-factor", 1.0, "A factor to apply to scale ins")
+		scaleOutFactor = flag.Float64("scale-out-factor", 1.0, "A factor to apply to scale outs")
 
 		// general params
 		dryRun = flag.Bool("dry-run", false, "Whether to just show what would be done")
@@ -45,12 +45,8 @@ func main() {
 		AgentsPerInstance:        *agentsPerInstance,
 		PublishCloudWatchMetrics: *cwMetrics,
 		DryRun:                   *dryRun,
-		ScaleInParams: scaler.ScaleInParams{
-			// We run in one-shot so cooldown isn't implemented
-			CooldownPeriod:  time.Duration(0),
-			Adjustment:      *scaleInAdjustment,
-			LastScaleInTime: &time.Time{},
-		},
+		ScaleInParams:            scaler.ScaleParams{Factor: *scaleInFactor},
+		ScaleOutParams:           scaler.ScaleParams{Factor: *scaleOutFactor},
 	})
 	if err != nil {
 		log.Fatal(err)
