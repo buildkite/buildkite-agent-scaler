@@ -82,7 +82,6 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		if scaleOutCooldownPeriod, err = time.ParseDuration(v); err != nil {
 			return "", err
 		}
-		scaleOutFactor = math.Abs(scaleOutFactor)
 	}
 
 	if v := os.Getenv(`SCALE_OUT_FACTOR`); v != "" {
