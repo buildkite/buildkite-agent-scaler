@@ -4,6 +4,7 @@ steps:
     plugins:
       - docker#v3.1.0:
           image: "golang:1.12"
+          workdir: /go/src/github.com/buildkite/buildkite-agent-scaler
 
   - wait
   - name: ":lambda:"
