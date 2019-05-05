@@ -15,6 +15,7 @@ func main() {
 		asgName           = flag.String("asg-name", "", "The name of the autoscaling group")
 		agentsPerInstance = flag.Int("agents-per-instance", 1, "The number of agents per instance")
 		cwMetrics         = flag.Bool("cloudwatch-metrics", false, "Whether to publish cloudwatch metrics")
+		ssmTokenKey       = flag.String("agent-token-ssm-key", "", "The AWS SSM Parameter Store key for the agent token")
 
 		// buildkite params
 		buildkiteQueue      = flag.String("queue", "default", "The queue to watch in the metrics")
@@ -27,6 +28,14 @@ func main() {
 		dryRun = flag.Bool("dry-run", false, "Whether to just show what would be done")
 	)
 	flag.Parse()
+
+	if *ssmTokenKey != "" {
+		token, err := scaler.RetrieveFromParameterStore(*ssmTokenKey)
+		if err != nil {
+			log.Fatal(err)
+		}
+		buildkiteAgentToken = &token
+	}
 
 	client := buildkite.NewClient(*buildkiteAgentToken)
 
