@@ -31,13 +31,13 @@ func TestScalingOutWithoutError(t *testing.T) {
 			metrics: buildkite.AgentMetrics{
 				ScheduledJobs: 8,
 				RunningJobs:   2,
-				WaitingJobs:   2,
+				WaitingJobs:   20,
 			},
 			params: Params{
 				AgentsPerInstance: 1,
-				IncludeWaiting:     true,
+				IncludeWaiting:    true,
 			},
-			expectedDesiredCapacity: 12,
+			expectedDesiredCapacity: 28,
 		},
 		// Scale-out with multiple agents per instance
 		{
@@ -185,7 +185,7 @@ func TestScalingOutWithoutError(t *testing.T) {
 				bk:                &buildkiteTestDriver{metrics: tc.metrics},
 				agentsPerInstance: tc.params.AgentsPerInstance,
 				scaleOutParams:    tc.params.ScaleOutParams,
-				includeWaiting:     tc.params.IncludeWaiting,
+				includeWaiting:    tc.params.IncludeWaiting,
 			}
 
 			if _, err := s.Run(); err != nil {

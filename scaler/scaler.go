@@ -93,12 +93,16 @@ func (s *Scaler) Run() (time.Duration, error) {
 		}
 	}
 
-	count := metrics.ScheduledJobs + metrics.RunningJobs
+	count := metrics.ScheduledJobs
 
-	if s.includeWaiting {
+	// If waiting jobs are greater than running jobs then optionally
+	// use waiting jobs for scaling so that we have instances booted
+	// by the time we get to them. This is a gamble, as if the instances
+	// scale down before the jobs get scheduled, it's a huge waste.
+	if s.includeWaiting && metrics.WaitingJobs > metrics.RunningJobs {
 		count += metrics.WaitingJobs
 	} else {
-		log.Printf("💸 Ignoring %d waiting jobs", metrics.WaitingJobs)
+		count += metrics.RunningJobs
 	}
 
 	var desired int64
