@@ -56,7 +56,7 @@ func main() {
 		log.Printf("Running as a dry-run, no changes will be made")
 	}
 
-	if err := scaler.Run(); err != nil {
+	if _, err := scaler.Run(); err != nil {
 		log.Fatal(err)
 	}
 }
