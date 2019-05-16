@@ -44,8 +44,6 @@ It's entrypoint is `handler`, it requires a `go1.x` environment and requires the
 - `BUILDKITE_QUEUE`
 - `AGENTS_PER_INSTANCE`
 - `ASG_NAME`
-- `MIN_SIZE`
-- `MAX_SIZE`
 
 ```bash
 aws lambda create-function \
