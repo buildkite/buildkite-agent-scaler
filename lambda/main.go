@@ -57,7 +57,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		}
 	}
 
-	if v := os.Getenv(`LAMBDA_INTERVAL`); v != "" {
+	if v := os.Getenv(`LAMBDA_TIMEOUT`); v != "" {
 		if timeoutDuration, err := time.ParseDuration(v); err != nil {
 			return "", err
 		} else {
