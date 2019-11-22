@@ -102,6 +102,9 @@ func (c *Client) queryMetrics(into interface{}) (pollDuration time.Duration, err
 		return time.Duration(0), err
 	}
 	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return time.Duration(0), fmt.Errorf("%s %s: %s", method, endpoint, res.Status)
+	}
 
 	// Check if we get a poll duration header from server
 	if pollSeconds := res.Header.Get(PollDurationHeader); pollSeconds != "" {
