@@ -86,9 +86,10 @@ func (c *Client) queryMetrics(into interface{}) (pollDuration time.Duration, err
 		return time.Duration(0), err
 	}
 
+	method := http.MethodGet
 	endpoint.Path += "/metrics"
 
-	req, err := http.NewRequest("GET", endpoint.String(), nil)
+	req, err := http.NewRequest(method, endpoint.String(), nil)
 	if err != nil {
 		return time.Duration(0), err
 	}
