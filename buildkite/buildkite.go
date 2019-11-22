@@ -100,6 +100,7 @@ func (c *Client) queryMetrics(into interface{}) (pollDuration time.Duration, err
 	if err != nil {
 		return time.Duration(0), err
 	}
+	defer res.Body.Close()
 
 	// Check if we get a poll duration header from server
 	if pollSeconds := res.Header.Get(PollDurationHeader); pollSeconds != "" {
@@ -111,6 +112,5 @@ func (c *Client) queryMetrics(into interface{}) (pollDuration time.Duration, err
 		}
 	}
 
-	defer res.Body.Close()
 	return pollDuration, json.NewDecoder(res.Body).Decode(into)
 }
