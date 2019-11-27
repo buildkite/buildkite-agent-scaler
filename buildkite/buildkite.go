@@ -86,9 +86,10 @@ func (c *Client) queryMetrics(into interface{}) (pollDuration time.Duration, err
 		return time.Duration(0), err
 	}
 
+	method := http.MethodGet
 	endpoint.Path += "/metrics"
 
-	req, err := http.NewRequest("GET", endpoint.String(), nil)
+	req, err := http.NewRequest(method, endpoint.String(), nil)
 	if err != nil {
 		return time.Duration(0), err
 	}
@@ -99,6 +100,10 @@ func (c *Client) queryMetrics(into interface{}) (pollDuration time.Duration, err
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return time.Duration(0), err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return time.Duration(0), fmt.Errorf("%s %s: %s", method, endpoint, res.Status)
 	}
 
 	// Check if we get a poll duration header from server
@@ -111,6 +116,5 @@ func (c *Client) queryMetrics(into interface{}) (pollDuration time.Duration, err
 		}
 	}
 
-	defer res.Body.Close()
 	return pollDuration, json.NewDecoder(res.Body).Decode(into)
 }
