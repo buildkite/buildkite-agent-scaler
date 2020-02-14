@@ -5,7 +5,7 @@ steps:
     command: ".buildkite/steps/release-version.sh"
     branches: master
     agents:
-      queue: "deploy"
+      queue: "deploy-legacy"
     concurrency: 1
     concurrency_group: 'release'
 
@@ -14,6 +14,6 @@ steps:
     command: ".buildkite/steps/github-release.sh"
     branches: master
     agents:
-      queue: "deploy"
+      queue: "deploy-legacy"
     concurrency: 1
     concurrency_group: 'release'
