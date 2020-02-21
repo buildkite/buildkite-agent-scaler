@@ -1,28 +1,16 @@
+env:
+  SEGMENT_CONTEXTS: 'ecr'
 steps:
   - name: ":golang:"
     command: ".buildkite/steps/tests.sh"
     plugins:
       - docker#v3.1.0:
-          image: "golang:1.12"
+          image: "golang:1.13"
           workdir: /go/src/github.com/buildkite/buildkite-agent-scaler
           environment:
             - GO111MODULE=off
 
   - wait
-  - name: ":lambda:"
-    command: .buildkite/steps/build-lambda.sh
-    artifact_paths:
-      - handler.zip
-
-  - wait
-  - label: ":s3:"
-    command: ".buildkite/steps/upload-to-s3.sh"
-    agents:
-      queue: "deploy-legacy"
-
-  - wait
-  - name: ":pipeline:"
-    command: .buildkite/steps/upload-release-steps.sh
-    branches: master
-
-
+  - name: ":docker:"
+    command: .buildkite/steps/build-docker.sh
+    # branches: master

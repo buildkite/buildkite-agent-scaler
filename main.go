@@ -3,9 +3,14 @@ package main
 import (
 	"flag"
 	"log"
+	"os"
 
 	"github.com/buildkite/buildkite-agent-scaler/buildkite"
 	"github.com/buildkite/buildkite-agent-scaler/scaler"
+)
+
+const (
+	buildkiteAgentTokenEnv = "BUILDKITE_AGENT_TOKEN"
 )
 
 func main() {
@@ -36,6 +41,13 @@ func main() {
 			log.Fatal(err)
 		}
 		buildkiteAgentToken = &token
+	}
+
+	if *buildkiteAgentToken == "" {
+		token := os.Getenv(buildkiteAgentTokenEnv)
+		if token != "" {
+			buildkiteAgentToken = &token
+		}
 	}
 
 	client := buildkite.NewClient(*buildkiteAgentToken)
