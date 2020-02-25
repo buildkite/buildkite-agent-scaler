@@ -1,3 +1,5 @@
+env:
+  SEGMENT_CONTEXTS: 'aws-credentials'
 steps:
   - block: ":rocket: Release ${VERSION}?"
 
