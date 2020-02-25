@@ -8,8 +8,8 @@ clean:
 # -----------------------------------------
 # Lambda management
 
-LAMBDA_S3_BUCKET := buildkite-aws-stack-lox
-LAMBDA_S3_BUCKET_PATH := /
+LAMBDA_S3_BUCKET := segment-lambdas-ci
+LAMBDA_S3_BUCKET_PATH := /buildkite-agent-scaler
 
 ifdef BUILDKITE_BUILD_NUMBER
 	LD_FLAGS := -s -w -X version.Build=$(BUILDKITE_BUILD_NUMBER)
@@ -29,9 +29,8 @@ lambda/handler: lambda/main.go
 		--volume go-module-cache:/go/pkg/mod \
 		--volume $(PWD):/go/src/github.com/buildkite/buildkite-agent-scaler \
 		--workdir /go/src/github.com/buildkite/buildkite-agent-scaler \
-		--rm golang:1.12 \
+		--rm golang:1.13 \
 		go build -ldflags="$(LD_FLAGS)" -o ./lambda/handler ./lambda
-	chmod +x lambda/handler
 
 lambda-sync: handler.zip
 	aws s3 sync \

@@ -1,10 +1,10 @@
 env:
-  SEGMENT_CONTEXTS: 'ecr'
+  SEGMENT_CONTEXTS: 'aws-credentials,ecr'
 steps:
   - name: ":golang:"
     command: ".buildkite/steps/tests.sh"
     plugins:
-      - docker#v3.1.0:
+      - docker#v3.5.0:
           image: "golang:1.13"
           workdir: /go/src/github.com/buildkite/buildkite-agent-scaler
           environment:
@@ -13,4 +13,17 @@ steps:
   - wait
   - name: ":docker:"
     command: .buildkite/steps/build-docker.sh
-    # branches: master
+
+  - name: ":lambda:"
+    command: .buildkite/steps/build-lambda.sh
+    artifact_paths:
+      - handler.zip
+
+  - wait
+  - label: ":s3:"
+    command: .buildkite/steps/upload-to-s3.sh
+
+  - wait
+  - name: ":pipeline:"
+    command: .buildkite/steps/upload-release-steps.sh
+    branches: master

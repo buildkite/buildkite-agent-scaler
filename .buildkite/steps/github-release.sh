@@ -12,4 +12,4 @@ buildkite-agent artifact download "handler.zip" .
 echo "--- 🚀 Releasing $VERSION"
 github-release "v$VERSION" handler.zip \
   --commit "$(git rev-parse HEAD)" \
-  --github-repository "buildkite/buildkite-agent-scaler"
+  --github-repository "segmentio/buildkite-agent-scaler"
