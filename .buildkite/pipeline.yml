@@ -18,7 +18,7 @@ steps:
   - label: ":s3:"
     command: ".buildkite/steps/upload-to-s3.sh"
     agents:
-      queue: "deploy-legacy"
+      queue: "deploy"
 
   - wait
   - name: ":pipeline:"
