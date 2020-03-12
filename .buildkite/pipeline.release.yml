@@ -6,14 +6,5 @@ steps:
   - label: ":s3:"
     command: ".buildkite/steps/release-version.sh"
     branches: master
-    agents:
-      queue: "deploy"
     concurrency: 1
     concurrency_group: 'release'
-
-  - wait
-  - label: ":github:"
-    command: ".buildkite/steps/github-release.sh"
-    branches: master
-    agents:
-      queue: "deploy"

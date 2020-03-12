@@ -11,6 +11,8 @@ func TestScalingOutWithoutError(t *testing.T) {
 	for _, tc := range []struct {
 		params                  Params
 		metrics                 buildkite.AgentMetrics
+		currentMinSize          int64
+		currentMaxSize          int64
 		currentDesiredCapacity  int64
 		expectedDesiredCapacity int64
 	}{
@@ -175,9 +177,26 @@ func TestScalingOutWithoutError(t *testing.T) {
 			currentDesiredCapacity:  1,
 			expectedDesiredCapacity: 1,
 		},
+		// Scale out capped by max size *after* factor applied
+		{
+			metrics: buildkite.AgentMetrics{
+				ScheduledJobs: 10,
+				RunningJobs:   2,
+			},
+			params: Params{
+				AgentsPerInstance: 1,
+				ScaleOutParams: ScaleParams{
+					Factor: 2.0,
+				},
+			},
+			currentMaxSize:          2,
+			expectedDesiredCapacity: 2,
+		},
 	} {
 		t.Run("", func(t *testing.T) {
 			asg := &asgTestDriver{
+				minSize:         tc.currentMinSize,
+				maxSize:         tc.currentMaxSize,
 				desiredCapacity: tc.currentDesiredCapacity,
 			}
 			s := Scaler{
@@ -205,6 +224,8 @@ func TestScalingInWithoutError(t *testing.T) {
 	testCases := []struct {
 		params                  Params
 		metrics                 buildkite.AgentMetrics
+		currentMinSize          int64
+		currentMaxSize          int64
 		currentDesiredCapacity  int64
 		expectedDesiredCapacity int64
 	}{
@@ -268,11 +289,27 @@ func TestScalingInWithoutError(t *testing.T) {
 			currentDesiredCapacity:  1,
 			expectedDesiredCapacity: 1,
 		},
+		// Scale in capped by min size *after* factor applied
+		{
+			params: Params{
+				AgentsPerInstance: 1,
+				ScaleInParams: ScaleParams{
+					CooldownPeriod: 5 * time.Minute,
+					LastEvent:      time.Now().Add(-10 * time.Minute),
+					Factor:         10.00,
+				},
+			},
+			currentMinSize:          1,
+			currentDesiredCapacity:  2,
+			expectedDesiredCapacity: 1,
+		},
 	}
 
 	for _, tc := range testCases {
 		t.Run("", func(t *testing.T) {
 			asg := &asgTestDriver{
+				minSize:         tc.currentMinSize,
+				maxSize:         tc.currentMaxSize,
 				desiredCapacity: tc.currentDesiredCapacity,
 			}
 			s := Scaler{
@@ -306,14 +343,21 @@ func (d *buildkiteTestDriver) GetAgentMetrics() (buildkite.AgentMetrics, error) 
 
 type asgTestDriver struct {
 	err             error
+	minSize         int64
+	maxSize         int64
 	desiredCapacity int64
 }
 
 func (d *asgTestDriver) Describe() (AutoscaleGroupDetails, error) {
+	// provide a default so we don't have to set it in every test case
+	if d.maxSize == 0 {
+		d.maxSize = 100
+	}
+
 	return AutoscaleGroupDetails{
 		DesiredCount: d.desiredCapacity,
-		MinSize:      0,
-		MaxSize:      100,
+		MinSize:      d.minSize,
+		MaxSize:      d.maxSize,
 	}, nil
 }
 

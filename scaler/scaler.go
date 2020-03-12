@@ -177,6 +177,11 @@ func (s *Scaler) scaleIn(desired int64, current AutoscaleGroupDetails) error {
 		desired = 0
 	}
 
+	if desired < current.MinSize {
+		log.Printf("⚠️  Factored desired count is less than MinSize, capping at %d", current.MinSize)
+		desired = current.MinSize
+	}
+
 	log.Printf("Scaling IN 📉 to %d instances (currently %d)", desired, current.DesiredCount)
 
 	if err := s.setDesiredCapacity(desired); err != nil {
@@ -222,6 +227,11 @@ func (s *Scaler) scaleOut(desired int64, current AutoscaleGroupDetails) error {
 		}
 
 		desired = current.DesiredCount + factoredChange
+	}
+
+	if desired > current.MaxSize {
+		log.Printf("⚠️  Factored desired count exceed MaxSize, capping at %d", current.MaxSize)
+		desired = current.MaxSize
 	}
 
 	log.Printf("Scaling OUT 📈 to %d instances (currently %d)", desired, current.DesiredCount)
