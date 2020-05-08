@@ -119,21 +119,17 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		case <-timeout:
 			return "", nil
 		default:
-			token := os.Getenv(`BUILDKITE_AGENT_TOKEN`)
 			ssmTokenKey := os.Getenv("BUILDKITE_AGENT_TOKEN_SSM_KEY")
-
-			if ssmTokenKey != "" {
-				var err error
-				token, err = scaler.RetrieveFromParameterStore(ssmTokenKey)
-				if err != nil {
-					return "", err
-				}
+			if ssmTokenKey == "" {
+				return "", errors.New(
+					"Must provide BUILDKITE_AGENT_TOKEN_SSM_KEY",
+				)
 			}
 
-			if token == "" {
-				return "", errors.New(
-					"Must provide either BUILDKITE_AGENT_TOKEN or BUILDKITE_AGENT_TOKEN_SSM_KEY",
-				)
+			var err error
+			token, err = scaler.RetrieveFromParameterStore(ssmTokenKey)
+			if err != nil {
+				return "", err
 			}
 
 			client := buildkite.NewClient(token)
