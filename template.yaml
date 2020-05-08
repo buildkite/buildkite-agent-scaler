@@ -1,12 +1,17 @@
 ---
-Description: Autoscaling Lambda for Buildkite Agents on an ALB
+Description: Autoscaling Lambda for Buildkite Agents
+
+Transform: AWS::Serverless-2016-10-31
 
 Parameters:
-  BuildkiteAgentToken:
-    Description: Buildkite agent token
+  AutoscalingLambdaExecutionRole:
+    Description: IAM Role ARN
     Type: String
-    NoEcho: true
-    MinLength: 1
+    Default: ''
+
+  BuildkiteAgentTokenParameter:
+    Description: Buildkite agent token parameter
+    Type: AWS::SSM::Parameter::Name
 
   BuildkiteQueue:
     Description: Queue name that agents will use, targeted in pipeline steps using "queue={value}"
@@ -14,42 +19,42 @@ Parameters:
     Default: default
     MinLength: 1
 
-  AgentAutoScaleGroup:
+  AgentsPerInstance:
+    Description: ""
+    Type: Number
+
+  MinSize:
+    Description: ""
+    Type: String
+
+  MaxSize:
+    Description: ""
+    Type: String
+
+  AutoScaleGroup:
     Description: The name of the ALB to autoscale
     Type: String
     Default: default
 
-  ScaleInCooldownPeriod:
-    Description: Cooldown period between scale in events
-    Type: String
-    Default: 5m
-
-  ScaleInAdjustment:
-    Description: Maximum adjustment to the desired capacity on scale in
+  ScaleOutFactor:
+    Description: ""
     Type: Number
-    MaxValue: -1
-    Default: -1
 
-Mappings:
-  LambdaBucket:
-    us-east-1 : { Bucket: "buildkite-lambdas" }
-    us-east-2 : { Bucket: "buildkite-lambdas-us-east-2" }
-    us-west-1 : { Bucket: "buildkite-lambdas-us-west-1" }
-    us-west-2 : { Bucket: "buildkite-lambdas-us-west-2" }
-    eu-west-1 : { Bucket: "buildkite-lambdas-eu-west-1" }
-    eu-west-2 : { Bucket: "buildkite-lambdas-eu-west-2" }
-    eu-central-1 : { Bucket: "buildkite-lambdas-eu-central-1" }
-    ap-northeast-1 : { Bucket: "buildkite-lambdas-ap-northeast-1" }
-    ap-northeast-2 : { Bucket: "buildkite-lambdas-ap-northeast-2" }
-    ap-southeast-1 : { Bucket: "buildkite-lambdas-ap-southeast-1" }
-    ap-southeast-2 : { Bucket: "buildkite-lambdas-ap-southeast-2" }
-    ap-south-1 : { Bucket: "buildkite-lambdas-ap-south-1" }
-    sa-east-1 : { Bucket: "buildkite-lambdas-sa-east-1" }
+  ScaleOutForWaitingJobs:
+    Description: ""
+    Type: String
+    AllowedValues:
+      - "true"
+      - "false"
+    Default: "false"
+
+Conditions:
+  CreateRole: !Equals [ !Ref AutoscalingLambdaExecutionRole, '' ]
 
 Resources:
-  AutoscalingLambdaExecutionRole:
+  ExecutionRole:
     Type: AWS::IAM::Role
-    Condition: UseLambdaAutoscaling
+    Condition: CreateRole
     Properties:
       Path: "/"
       AssumeRolePolicyDocument:
@@ -64,74 +69,78 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
       Policies:
-        - PolicyName: DescribeECSResources
+        - PolicyName: AutoScalingGroups
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-            - Effect: Allow
-              Action:
-                - ecs:Describe*
-                - ecs:List*
-              Resource: '*'
-        - PolicyName: ModifySpotFleet
+              - Effect: Allow
+                Action:
+                  - autoscaling:DescribeAutoScalingGroups
+                  - autoscaling:SetDesiredCapacity
+                Resource: '*'
+        - PolicyName: WriteCloudwatchMetrics
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-            - Effect: Allow
-              Action:
-                - ec2:DescribeSpotFleetRequests
-                - ec2:ModifySpotFleetRequest
-              Resource: '*'
-
-
-  # This mirrors the group that would be created by the lambda, but enforces
-  # a retention period and also ensures it's removed when the stack is removed
-  AutoscalingLogGroup:
-    Type: "AWS::Logs::LogGroup"
-    Condition: UseLambdaAutoscaling
-    Properties:
-      LogGroupName: !Join ["/", ["/aws/lambda", !Ref AutoscalingFunction]]
-      RetentionInDays: 1
+              - Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricData
+                Resource: '*'
+        - PolicyName: ReadAgentToken
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - ssm:GetParameter
+                  Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${BuildkiteAgentTokenParameter}
 
   AutoscalingFunction:
     Type: AWS::Lambda::Function
-    Condition: UseLambdaAutoscaling
     Properties:
       Code:
-        S3Bucket: !Ref AutoscalingLambdaBucket
-        S3Key: "ec2-agent-scaler.zip"
-        S3ObjectVersion: !Ref AutoscalingLambdaObjectVersion
-      Role: !GetAtt AutoscalingLambdaExecutionRole.Arn
+      Role: !If [ CreateRole, !Ref ExecutionRole, !Ref AutoscalingLambdaExecutionRole ]
       Timeout: 120
       Handler: handler
       Runtime: go1.x
       MemorySize: 128
       Environment:
         Variables:
-          BUILDKITE_AGENT_TOKEN:    !Ref BuildkiteAgentToken
-          BUILDKITE_QUEUE:          !Ref BuildkiteQueue
-          ASG_NAME:                 !Ref AgentAutoScaleGroup
-          SCALE_IN_COOLDOWN_PERIOD: !Ref ScaleInCooldownPeriod
-          SCALE_IN_ADJUSTMENT:      !Ref ScaleInAdjustment
-          LAMBDA_TIMEOUT:           1m
-          LAMBDA_INTERVAL:          20s
+          BUILDKITE_AGENT_TOKEN_SSM_KEY: !Ref BuildkiteAgentTokenParameter
+          BUILDKITE_QUEUE:               !Ref BuildkiteQueue
+          AGENTS_PER_INSTANCE:           !Ref AgentsPerInstance
+          CLOUDWATCH_METRICS:            "1"
+          DISABLE_SCALE_IN:              "1"
+          ASG_NAME:                      !Ref AutoScaleGroup
+          MIN_SIZE:                      !Ref MinSize
+          MAX_SIZE:                      !Ref MaxSize
+          SCALE_OUT_FACTOR:              !Ref ScaleOutFactor
+          INCLUDE_WAITING:               !Ref ScaleOutForWaitingJobs
+          LAMBDA_TIMEOUT:                "50s"
+          LAMBDA_INTERVAL:               "10s"
 
-  AutoscalingLambdaScheduledRule:
+  # This mirrors the group that would be created by the lambda, but enforces
+  # a retention period and also ensures it's removed when the stack is removed
+  LogGroup:
+    Type: "AWS::Logs::LogGroup"
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${!Ref AutoscalingFunction}"
+      RetentionInDays: 1
+
+  LambdaScheduledRule:
     Type: "AWS::Events::Rule"
-    Condition: UseLambdaAutoscaling
     Properties:
       Description: "ScheduledRule"
       ScheduleExpression: "rate(1 minute)"
-      State: !Ref AutoscalingLambdaScheduleState
+      State: ENABLED
       Targets:
         - Arn: !GetAtt AutoscalingFunction.Arn
           Id: "AutoscalingFunction"
 
-  PermissionForEventsToInvokeAutoscalingLambda:
+  PermissionForEventsToInvokeLambda:
     Type: "AWS::Lambda::Permission"
-    Condition: UseLambdaAutoscaling
     Properties:
       FunctionName: !Ref AutoscalingFunction
       Action: "lambda:InvokeFunction"
       Principal: "events.amazonaws.com"
-      SourceArn: !GetAtt AutoscalingLambdaScheduledRule.Arn
+      SourceArn: !GetAtt LambdaScheduledRule.Arn
