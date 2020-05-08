@@ -96,7 +96,7 @@ Resources:
                   Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${BuildkiteAgentTokenParameter}
 
   AutoscalingFunction:
-    Type: AWS::Lambda::Function
+    Type: AWS::Serverless::Function
     Properties:
       Code:
       Role: !If [ CreateRole, !Ref ExecutionRole, !Ref AutoscalingLambdaExecutionRole ]
@@ -118,6 +118,10 @@ Resources:
           INCLUDE_WAITING:               !Ref ScaleOutForWaitingJobs
           LAMBDA_TIMEOUT:                "50s"
           LAMBDA_INTERVAL:               "10s"
+      Events:
+        - Type: Schedule
+          Properties:
+            Schedule: "rate(1 minute)"
 
   # This mirrors the group that would be created by the lambda, but enforces
   # a retention period and also ensures it's removed when the stack is removed
@@ -126,21 +130,3 @@ Resources:
     Properties:
       LogGroupName: !Sub "/aws/lambda/${!Ref AutoscalingFunction}"
       RetentionInDays: 1
-
-  LambdaScheduledRule:
-    Type: "AWS::Events::Rule"
-    Properties:
-      Description: "ScheduledRule"
-      ScheduleExpression: "rate(1 minute)"
-      State: ENABLED
-      Targets:
-        - Arn: !GetAtt AutoscalingFunction.Arn
-          Id: "AutoscalingFunction"
-
-  PermissionForEventsToInvokeLambda:
-    Type: "AWS::Lambda::Permission"
-    Properties:
-      FunctionName: !Ref AutoscalingFunction
-      Action: "lambda:InvokeFunction"
-      Principal: "events.amazonaws.com"
-      SourceArn: !GetAtt LambdaScheduledRule.Arn
