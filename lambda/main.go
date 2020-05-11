@@ -119,15 +119,9 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		case <-timeout:
 			return "", nil
 		default:
-			ssmTokenKey := os.Getenv("BUILDKITE_AGENT_TOKEN_SSM_KEY")
-			if ssmTokenKey == "" {
-				return "", errors.New(
-					"Must provide BUILDKITE_AGENT_TOKEN_SSM_KEY",
-				)
-			}
+			ssmTokenKey := mustGetEnv("BUILDKITE_AGENT_TOKEN_SSM_KEY")
 
-			var err error
-			token, err = scaler.RetrieveFromParameterStore(ssmTokenKey)
+			token, err := scaler.RetrieveFromParameterStore(ssmTokenKey)
 			if err != nil {
 				return "", err
 			}
