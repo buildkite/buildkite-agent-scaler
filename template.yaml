@@ -98,7 +98,7 @@ Resources:
   AutoscalingFunction:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri:
+      CodeUri: handler.zip
       Role: !If [ CreateRole, !Ref ExecutionRole, !Ref AutoscalingLambdaExecutionRole ]
       Timeout: 120
       Handler: handler
