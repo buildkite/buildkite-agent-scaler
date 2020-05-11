@@ -76,29 +76,29 @@ Resources:
               - Effect: Allow
                 Action:
                   - autoscaling:DescribeAutoScalingGroups
+                  # *
                   - autoscaling:SetDesiredCapacity
+                  # # arn:aws:autoscaling:$region:$account:autoScalingGroup:$uuid:autoScalingGroupName/$name
                 Resource: '*'
         - PolicyName: WriteCloudwatchMetrics
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
-                Action:
-                  - cloudwatch:PutMetricData
+                Action: cloudwatch:PutMetricData
                 Resource: '*'
         - PolicyName: ReadAgentToken
-            PolicyDocument:
-              Version: '2012-10-17'
-              Statement:
-                - Effect: Allow
-                  Action:
-                    - ssm:GetParameter
-                  Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${BuildkiteAgentTokenParameter}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${BuildkiteAgentTokenParameter}
 
   AutoscalingFunction:
     Type: AWS::Serverless::Function
     Properties:
-      Code:
+      CodeUri:
       Role: !If [ CreateRole, !Ref ExecutionRole, !Ref AutoscalingLambdaExecutionRole ]
       Timeout: 120
       Handler: handler
