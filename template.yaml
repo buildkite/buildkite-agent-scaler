@@ -119,7 +119,8 @@ Resources:
           LAMBDA_TIMEOUT:                "50s"
           LAMBDA_INTERVAL:               "10s"
       Events:
-        - Type: Schedule
+        Timer:
+          Type: Schedule
           Properties:
             Schedule: "rate(1 minute)"
 
