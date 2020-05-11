@@ -21,6 +21,12 @@ endif
 
 build: handler.zip
 
+package: build
+	sam package \
+		--s3-bucket buildkite-sar-us-east-1 \
+		--s3-prefix buildkite-agent-scaler \
+		--output-template-file packaged.yml
+
 handler.zip: lambda/handler
 	zip -9 -v -j $@ "$<"
 
