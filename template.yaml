@@ -1,5 +1,5 @@
 ---
-Description: Autoscaling Lambda for Buildkite Agents
+Description: Autoscaling Lambda for elastic-ci stack Buildkite Agents
 
 Transform: AWS::Serverless-2016-10-31
 
@@ -32,7 +32,7 @@ Parameters:
     Type: String
 
   AutoScaleGroup:
-    Description: The name of the ALB to autoscale
+    Description: The name of the autoscale group to autoscale.
     Type: String
     Default: default
 
