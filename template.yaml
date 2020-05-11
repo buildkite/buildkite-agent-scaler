@@ -129,5 +129,5 @@ Resources:
   LogGroup:
     Type: "AWS::Logs::LogGroup"
     Properties:
-      LogGroupName: !Sub "/aws/lambda/${!Ref AutoscalingFunction}"
+      LogGroupName: !Sub "/aws/lambda/${AutoscalingFunction}"
       RetentionInDays: 1
