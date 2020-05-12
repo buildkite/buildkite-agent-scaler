@@ -28,7 +28,7 @@ create-application-version: packaged.yml
 		--semantic-version "$(VERSION)" \
 		--source-code-url "https://github.com/buildkite/buildkite-agent-scheduler/commit/$(git rev-parse HEAD)"
 
-packaged.yml: handler.zip
+packaged.yml: template.yaml handler.zip
 	sam package \
 		--s3-bucket buildkite-sar-us-east-1 \
 		--s3-prefix buildkite-agent-scaler \
