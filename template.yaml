@@ -131,3 +131,8 @@ Resources:
     Properties:
       LogGroupName: !Sub "/aws/lambda/${AutoscalingFunction}"
       RetentionInDays: 1
+
+Outputs:
+  ExecutionRoleName:
+    Description: Name of the Lambda IAM execution role.
+    Value: !Ref ExecutionRole
