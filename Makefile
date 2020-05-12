@@ -21,7 +21,14 @@ endif
 
 build: handler.zip
 
-package: build
+create-application-version: packaged.yml
+	aws serverlessrepo create-application-version \
+		--application-id arn:aws:serverlessrepo:us-east-1:253121499730:applications/buildkite-elastic-ci-scaler \
+		--template-body file://packaged.yml \
+		--semantic-version "$(VERSION)" \
+		--source-code-url "https://github.com/buildkite/buildkite-agent-scheduler/commit/$(git rev-parse HEAD)"
+
+packaged.yml: handler.zip
 	sam package \
 		--s3-bucket buildkite-sar-us-east-1 \
 		--s3-prefix buildkite-agent-scaler \
