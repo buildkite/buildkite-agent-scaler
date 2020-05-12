@@ -23,6 +23,7 @@ build: handler.zip
 
 create-application-version: packaged.yml
 	aws serverlessrepo create-application-version \
+		--region us-east-1 \
 		--application-id arn:aws:serverlessrepo:us-east-1:253121499730:applications/buildkite-elastic-ci-scaler \
 		--template-body file://packaged.yml \
 		--semantic-version "$(VERSION)" \
