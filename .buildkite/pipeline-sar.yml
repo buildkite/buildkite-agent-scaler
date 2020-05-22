@@ -1,0 +1,48 @@
+steps:
+  - name: ":golang:"
+    key: test
+    command: ".buildkite/steps/tests.sh"
+    plugins:
+      - docker#v3.1.0:
+          image: "golang:1.12"
+          workdir: /go/src/github.com/buildkite/buildkite-agent-scaler
+          environment:
+            - GO111MODULE=off
+
+  - name: ":hammer: :lambda:"
+    key: build
+    command: .buildkite/steps/build-lambda.sh
+    artifact_paths:
+      - handler.zip
+
+  - label: ":lambda: :right_arrow: :package:"
+    key: package
+    command:
+      - buildkite-agent artifact download handler.zip .
+      - sam package --region us-east-1 --s3-bucket buildkite-serverless-apps-us-east-1 --s3-prefix elastic-ci/agent-scaler --output-template-file packaged.yml
+      - buildkite-agent artifact upload 'packaged.yml'
+      - echo "--- Template"; echo "$(< packaged.yml)"
+    agents:
+      queue: on-demand
+      image: 172840064832.dkr.ecr.us-east-1.amazonaws.com/agent/sam
+      task-role: PublishBuildkiteAgentScalerServerlessRepo
+    depends_on:
+      - test
+      - build
+
+  - block: ":package: :right_arrow: :rocket:?"
+    key: release
+    depends_on:
+      - package
+
+  - label: ":package: :right_arrow: :aws:"
+    key: sar
+    command:
+      - buildkite-agent artifact download 'packaged.yml' .
+      - aws serverlessrepo create-application-version --application-id arn:aws:serverlessrepo:us-east-1:172840064832:applications/buildkite-elastic-ci-scaler --template-body file://packaged.yml --semantic-version "$(buildkite-agent meta-data get version)" --source-code-url "https://github.com/buildkite/buildkite-agent-scaler/tree/$(git rev-parse HEAD)/"
+    agents:
+      queue: on-demand
+      image: 172840064832.dkr.ecr.us-east-1.amazonaws.com/agent/sam
+      task-role: PublishBuildkiteAgentScalerServerlessRepo
+    depends_on:
+      - release
