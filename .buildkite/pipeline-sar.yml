@@ -15,7 +15,7 @@ steps:
     artifact_paths:
       - handler.zip
 
-  - label: ":lambda: :right_arrow: :package:"
+  - label: ":lambda: :arrow_right: :package:"
     key: package
     command:
       - buildkite-agent artifact download handler.zip .
@@ -30,12 +30,12 @@ steps:
       - test
       - build
 
-  - block: ":package: :right_arrow: :rocket:?"
+  - block: ":package: :arrow_right: :rocket:?"
     key: release
     depends_on:
       - package
 
-  - label: ":package: :right_arrow: :aws:"
+  - label: ":package: :arrow_right: :aws:"
     key: sar
     command:
       - buildkite-agent artifact download 'packaged.yml' .
