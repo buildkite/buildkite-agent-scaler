@@ -1,0 +1,21 @@
+agents:
+  queue: on-demand
+
+steps:
+  - label: ":package: :lambda:"
+    command:
+      - buildkite-agent artifact download handler.zip .
+      - sam package --region us-east-1 --s3-bucket buildkite-serverless-apps-us-east-1 --s3-prefix elastic-ci/agent-scaler --output-template-file packaged.yml
+      - buildkite-agent artifact upload 'packaged.yml'
+      - echo "--- Template"; echo "$(< packaged.yml)"
+    agents:
+      image: 172840064832.dkr.ecr.us-east-1.amazonaws.com/agent/sam
+      task-role: PublishBuildkiteAgentScalerServerlessRepo
+  - block: ":rocket: Release ${VERSION}?"
+  - label: ":package: :aws:"
+    command:
+      - buildkite-agent artifact download 'packaged.yml' .
+      - aws serverlessrepo create-application-version --application-id arn:aws:serverlessrepo:us-east-1:172840064832:applications/buildkite-elastic-ci-scaler --template-body file://packaged.yml --semantic-version "${VERSION}" --source-code-url "https://github.com/buildkite/buildkite-agent-scaler/tree/$(git rev-parse HEAD)/"
+    agents:
+      image: 172840064832.dkr.ecr.us-east-1.amazonaws.com/agent/sam
+      task-role: PublishBuildkiteAgentScalerServerlessRepo
