@@ -6,7 +6,7 @@ In practice, we've seen 300% faster initial scale-ups with this lambda vs native
 
 ## Why?
 
-The [Elastic Stack][] depends on being able to scale up quickly from zero instances in response to scheduled Buildkite jobs. Amazon's AutoScaling primatives have a number of limitations that we wanted more granular control over:
+The [Elastic CI Stack][] depends on being able to scale up quickly from zero instances in response to scheduled Buildkite jobs. Amazon's AutoScaling primatives have a number of limitations that we wanted more granular control over:
 
 * The median time for a scaling event to be triggered was 2 minutes, due to needing two samples with a minimum period of 60 seconds between.
 * Scaling can either be by a fixed rate, a fixed step size or tracking, but tracking doesn't work well with custom metrics like we use.
@@ -69,7 +69,7 @@ $ aws-vault exec my-profile -- go run . \
 
 Copyright (c) 2014-2019 Buildkite Pty Ltd. See [LICENSE](./LICENSE.txt) for details.
 
-[Elastic Stack]: https://github.com/buildkite/elastic-ci-stack-for-aws
+[Elastic CI Stack]: https://github.com/buildkite/elastic-ci-stack-for-aws
 [buildkite-agent-metrics]: https://github.com/buildkite/buildkite-agent-metrics
 [Lifecycle Hooks]: https://docs.aws.amazon.com/autoscaling/ec2/userguide/lifecycle-hooks.html
 [lifecycled]: https://github.com/buildkite/lifecycled
