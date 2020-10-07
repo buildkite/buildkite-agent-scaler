@@ -229,10 +229,10 @@ func (s *Scaler) scaleOut(desired int64, current AutoscaleGroupDetails) error {
 	if err != nil {
 		return metrics.PollDuration, err
 	}
-	desiredMax := math.Min(current.MaxSize, desired)
-	log.Printf("Scaling OUT 📈 to %d instances (currently %d)", desiredMax, current.DesiredCount)
+	desiredSafe := math.Min(current.MaxSize, desired)
+	log.Printf("Scaling OUT 📈 to %d instances (currently %d)", desiredSafe, current.DesiredCount)
 
-	if err := s.setDesiredCapacity(desiredMax); err != nil {
+	if err := s.setDesiredCapacity(desiredSafe); err != nil {
 		return err
 	}
 
