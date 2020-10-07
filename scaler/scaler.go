@@ -224,9 +224,15 @@ func (s *Scaler) scaleOut(desired int64, current AutoscaleGroupDetails) error {
 		desired = current.DesiredCount + factoredChange
 	}
 
-	log.Printf("Scaling OUT 📈 to %d instances (currently %d)", desired, current.DesiredCount)
+	// Ensure capacity does not exceed ASG MaxSize
+	current, err := s.autoscaling.Describe()
+	if err != nil {
+		return metrics.PollDuration, err
+	}
+	desiredMax := math.Min(current.MaxSize, desired)
+	log.Printf("Scaling OUT 📈 to %d instances (currently %d)", desiredMax, current.DesiredCount)
 
-	if err := s.setDesiredCapacity(desired); err != nil {
+	if err := s.setDesiredCapacity(desiredMax); err != nil {
 		return err
 	}
 
