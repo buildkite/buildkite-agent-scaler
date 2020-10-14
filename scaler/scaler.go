@@ -115,6 +115,12 @@ func (s *Scaler) Run() (time.Duration, error) {
 		return metrics.PollDuration, err
 	}
 
+	if desired > current {
+		desired = s.applyScaleOutFactor(desired)
+	} else if desired < current {
+		desired = s.applyScaleInFactor(desired)
+	}
+
 	if desired > current.MaxSize {
 		log.Printf("⚠️  Desired count exceed MaxSize, capping at %d", current.MaxSize)
 		desired = current.MaxSize
@@ -224,15 +230,9 @@ func (s *Scaler) scaleOut(desired int64, current AutoscaleGroupDetails) error {
 		desired = current.DesiredCount + factoredChange
 	}
 
-	// Ensure capacity does not exceed ASG MaxSize
-	current, err := s.autoscaling.Describe()
-	if err != nil {
-		return metrics.PollDuration, err
-	}
-	desiredSafe := math.Min(current.MaxSize, desired)
-	log.Printf("Scaling OUT 📈 to %d instances (currently %d)", desiredSafe, current.DesiredCount)
+	log.Printf("Scaling OUT 📈 to %d instances (currently %d)", desired, current.DesiredCount)
 
-	if err := s.setDesiredCapacity(desiredSafe); err != nil {
+	if err := s.setDesiredCapacity(desired); err != nil {
 		return err
 	}
 
