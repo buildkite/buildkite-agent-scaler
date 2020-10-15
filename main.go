@@ -4,6 +4,7 @@ import (
 	"flag"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/buildkite/buildkite-agent-scaler/buildkite"
 	"github.com/buildkite/buildkite-agent-scaler/scaler"
@@ -13,6 +14,16 @@ const (
 	buildkiteAgentTokenEnv = "BUILDKITE_AGENT_TOKEN"
 )
 
+type stringSliceFlag []string
+
+func (s *stringSliceFlag) String() string {
+	return strings.Join(*s, ",")
+}
+
+func (s *stringSliceFlag) Set(value string) error {
+	*s = append(*s, value)
+	return nil
+}
 func main() {
 	var (
 		// aws params
@@ -22,7 +33,7 @@ func main() {
 		ssmTokenKey       = flag.String("agent-token-ssm-key", "", "The AWS SSM Parameter Store key for the agent token")
 
 		// buildkite params
-		buildkiteQueue      = flag.String("queue", "default", "The queue to watch in the metrics")
+		buildkiteQueues     stringSliceFlag
 		buildkiteAgentToken = flag.String("agent-token", "", "A buildkite agent registration token")
 		includeWaiting      = flag.Bool("include-waiting", false, "Whether to include jobs behind a wait step for scaling")
 
@@ -33,6 +44,7 @@ func main() {
 		// general params
 		dryRun = flag.Bool("dry-run", false, "Whether to just show what would be done")
 	)
+	flag.Var(&buildkiteQueues, "queue", "The queue(s) to watch in the metrics")
 	flag.Parse()
 
 	if *ssmTokenKey != "" {
@@ -53,7 +65,7 @@ func main() {
 	client := buildkite.NewClient(*buildkiteAgentToken)
 
 	scaler, err := scaler.NewScaler(client, scaler.Params{
-		BuildkiteQueue:           *buildkiteQueue,
+		BuildkiteQueues:          buildkiteQueues,
 		AutoScalingGroupName:     *asgName,
 		AgentsPerInstance:        *agentsPerInstance,
 		PublishCloudWatchMetrics: *cwMetrics,

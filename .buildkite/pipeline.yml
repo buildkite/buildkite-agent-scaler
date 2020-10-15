@@ -4,11 +4,9 @@ steps:
   - name: ":golang:"
     command: ".buildkite/steps/tests.sh"
     plugins:
-      - docker#v3.5.0:
-          image: "golang:1.13"
+      - docker#v3.1.0:
+          image: "golang:1.15"
           workdir: /go/src/github.com/buildkite/buildkite-agent-scaler
-          environment:
-            - GO111MODULE=off
 
   - wait
   - name: ":docker:"

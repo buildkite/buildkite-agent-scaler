@@ -7,6 +7,11 @@ import (
 	"github.com/buildkite/buildkite-agent-scaler/buildkite"
 )
 
+const (
+	queue1 = "queue1"
+	queue2 = "queue2"
+)
+
 func TestScalingOutWithoutError(t *testing.T) {
 	for _, tc := range []struct {
 		params                  Params
@@ -19,9 +24,18 @@ func TestScalingOutWithoutError(t *testing.T) {
 		// Basic scale out without waiting jobs
 		{
 			metrics: buildkite.AgentMetrics{
-				ScheduledJobs: 10,
-				RunningJobs:   2,
-				WaitingJobs:   2,
+				Queues: map[string]buildkite.QueueMetrics{
+					queue1: buildkite.QueueMetrics{
+						ScheduledJobs: 7,
+						RunningJobs:   0,
+						WaitingJobs:   2,
+					},
+					queue2: buildkite.QueueMetrics{
+						ScheduledJobs: 3,
+						RunningJobs:   2,
+						WaitingJobs:   0,
+					},
+				},
 			},
 			params: Params{
 				AgentsPerInstance: 1,
@@ -31,9 +45,18 @@ func TestScalingOutWithoutError(t *testing.T) {
 		// Basic scale out with waiting jobs
 		{
 			metrics: buildkite.AgentMetrics{
-				ScheduledJobs: 8,
-				RunningJobs:   2,
-				WaitingJobs:   20,
+				Queues: map[string]buildkite.QueueMetrics{
+					queue1: buildkite.QueueMetrics{
+						ScheduledJobs: 6,
+						RunningJobs:   0,
+						WaitingJobs:   8,
+					},
+					queue2: buildkite.QueueMetrics{
+						ScheduledJobs: 2,
+						RunningJobs:   1,
+						WaitingJobs:   12,
+					},
+				},
 			},
 			params: Params{
 				AgentsPerInstance: 1,
@@ -44,8 +67,16 @@ func TestScalingOutWithoutError(t *testing.T) {
 		// Scale-out with multiple agents per instance
 		{
 			metrics: buildkite.AgentMetrics{
-				ScheduledJobs: 10,
-				RunningJobs:   2,
+				Queues: map[string]buildkite.QueueMetrics{
+					queue1: buildkite.QueueMetrics{
+						ScheduledJobs: 4,
+						RunningJobs:   1,
+					},
+					queue2: buildkite.QueueMetrics{
+						ScheduledJobs: 6,
+						RunningJobs:   1,
+					},
+				},
 			},
 			params: Params{
 				AgentsPerInstance: 4,
@@ -54,8 +85,16 @@ func TestScalingOutWithoutError(t *testing.T) {
 		},
 		{
 			metrics: buildkite.AgentMetrics{
-				ScheduledJobs: 10,
-				RunningJobs:   2,
+				Queues: map[string]buildkite.QueueMetrics{
+					queue1: buildkite.QueueMetrics{
+						ScheduledJobs: 5,
+						RunningJobs:   1,
+					},
+					queue2: buildkite.QueueMetrics{
+						ScheduledJobs: 5,
+						RunningJobs:   1,
+					},
+				},
 			},
 			params: Params{
 				AgentsPerInstance: 2,
@@ -66,8 +105,16 @@ func TestScalingOutWithoutError(t *testing.T) {
 		// where it doesn't divide evenly
 		{
 			metrics: buildkite.AgentMetrics{
-				ScheduledJobs: 10,
-				RunningJobs:   2,
+				Queues: map[string]buildkite.QueueMetrics{
+					queue1: buildkite.QueueMetrics{
+						ScheduledJobs: 5,
+						RunningJobs:   1,
+					},
+					queue2: buildkite.QueueMetrics{
+						ScheduledJobs: 5,
+						RunningJobs:   1,
+					},
+				},
 			},
 			params: Params{
 				AgentsPerInstance: 5,
@@ -76,8 +123,16 @@ func TestScalingOutWithoutError(t *testing.T) {
 		},
 		{
 			metrics: buildkite.AgentMetrics{
-				ScheduledJobs: 10,
-				RunningJobs:   2,
+				Queues: map[string]buildkite.QueueMetrics{
+					queue1: buildkite.QueueMetrics{
+						ScheduledJobs: 5,
+						RunningJobs:   1,
+					},
+					queue2: buildkite.QueueMetrics{
+						ScheduledJobs: 5,
+						RunningJobs:   1,
+					},
+				},
 			},
 			params: Params{
 				AgentsPerInstance: 20,
@@ -87,8 +142,16 @@ func TestScalingOutWithoutError(t *testing.T) {
 		// Scale-out with a factor of 50%
 		{
 			metrics: buildkite.AgentMetrics{
-				ScheduledJobs: 10,
-				RunningJobs:   2,
+				Queues: map[string]buildkite.QueueMetrics{
+					queue1: buildkite.QueueMetrics{
+						ScheduledJobs: 5,
+						RunningJobs:   1,
+					},
+					queue2: buildkite.QueueMetrics{
+						ScheduledJobs: 5,
+						RunningJobs:   1,
+					},
+				},
 			},
 			params: Params{
 				AgentsPerInstance: 1,
@@ -101,8 +164,16 @@ func TestScalingOutWithoutError(t *testing.T) {
 		// Scale-out with a factor of 10%
 		{
 			metrics: buildkite.AgentMetrics{
-				ScheduledJobs: 10,
-				RunningJobs:   2,
+				Queues: map[string]buildkite.QueueMetrics{
+					queue1: buildkite.QueueMetrics{
+						ScheduledJobs: 5,
+						RunningJobs:   1,
+					},
+					queue2: buildkite.QueueMetrics{
+						ScheduledJobs: 5,
+						RunningJobs:   1,
+					},
+				},
 			},
 			params: Params{
 				AgentsPerInstance: 1,
@@ -116,8 +187,16 @@ func TestScalingOutWithoutError(t *testing.T) {
 		// Cool-down period is enforced
 		{
 			metrics: buildkite.AgentMetrics{
-				ScheduledJobs: 10,
-				RunningJobs:   2,
+				Queues: map[string]buildkite.QueueMetrics{
+					queue1: buildkite.QueueMetrics{
+						ScheduledJobs: 5,
+						RunningJobs:   1,
+					},
+					queue2: buildkite.QueueMetrics{
+						ScheduledJobs: 5,
+						RunningJobs:   1,
+					},
+				},
 			},
 			params: Params{
 				AgentsPerInstance: 1,
@@ -132,8 +211,16 @@ func TestScalingOutWithoutError(t *testing.T) {
 		// Cool-down period is passed
 		{
 			metrics: buildkite.AgentMetrics{
-				ScheduledJobs: 10,
-				RunningJobs:   2,
+				Queues: map[string]buildkite.QueueMetrics{
+					queue1: buildkite.QueueMetrics{
+						ScheduledJobs: 5,
+						RunningJobs:   1,
+					},
+					queue2: buildkite.QueueMetrics{
+						ScheduledJobs: 5,
+						RunningJobs:   1,
+					},
+				},
 			},
 			params: Params{
 				AgentsPerInstance: 1,
@@ -148,8 +235,16 @@ func TestScalingOutWithoutError(t *testing.T) {
 		// Cool-down period is passed, factor is applied
 		{
 			metrics: buildkite.AgentMetrics{
-				ScheduledJobs: 10,
-				RunningJobs:   2,
+				Queues: map[string]buildkite.QueueMetrics{
+					queue1: buildkite.QueueMetrics{
+						ScheduledJobs: 5,
+						RunningJobs:   1,
+					},
+					queue2: buildkite.QueueMetrics{
+						ScheduledJobs: 5,
+						RunningJobs:   1,
+					},
+				},
 			},
 			params: Params{
 				AgentsPerInstance: 1,
@@ -165,8 +260,16 @@ func TestScalingOutWithoutError(t *testing.T) {
 		// Scale out disabled
 		{
 			metrics: buildkite.AgentMetrics{
-				ScheduledJobs: 10,
-				RunningJobs:   2,
+				Queues: map[string]buildkite.QueueMetrics{
+					queue1: buildkite.QueueMetrics{
+						ScheduledJobs: 5,
+						RunningJobs:   1,
+					},
+					queue2: buildkite.QueueMetrics{
+						ScheduledJobs: 5,
+						RunningJobs:   1,
+					},
+				},
 			},
 			params: Params{
 				AgentsPerInstance: 1,
@@ -180,8 +283,16 @@ func TestScalingOutWithoutError(t *testing.T) {
 		// Scale out capped by max size *after* factor applied
 		{
 			metrics: buildkite.AgentMetrics{
-				ScheduledJobs: 10,
-				RunningJobs:   2,
+				Queues: map[string]buildkite.QueueMetrics{
+					queue1: buildkite.QueueMetrics{
+						ScheduledJobs: 5,
+						RunningJobs:   1,
+					},
+					queue2: buildkite.QueueMetrics{
+						ScheduledJobs: 5,
+						RunningJobs:   1,
+					},
+				},
 			},
 			params: Params{
 				AgentsPerInstance: 1,
@@ -257,7 +368,14 @@ func TestScalingInWithoutError(t *testing.T) {
 		// With 500% factor, we scale all the way down despite scheduled jobs
 		{
 			metrics: buildkite.AgentMetrics{
-				ScheduledJobs: 10,
+				Queues: map[string]buildkite.QueueMetrics{
+					queue1: buildkite.QueueMetrics{
+						ScheduledJobs: 4,
+					},
+					queue2: buildkite.QueueMetrics{
+						ScheduledJobs: 6,
+					},
+				},
 			},
 			params: Params{
 				AgentsPerInstance: 1,

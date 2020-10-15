@@ -1,5 +1,7 @@
 module github.com/buildkite/buildkite-agent-scaler
 
+go 1.15
+
 require (
 	github.com/aws/aws-lambda-go v1.7.0
 	github.com/aws/aws-sdk-go v1.19.24
@@ -9,5 +11,3 @@ require (
 	golang.org/x/net v0.0.0-20181114220301-adae6a3d119a // indirect
 	golang.org/x/text v0.3.0 // indirect
 )
-
-go 1.13

@@ -6,7 +6,7 @@ In practice, we've seen 300% faster initial scale-ups with this lambda vs native
 
 ## Why?
 
-The [Elastic Stack][] depends on being able to scale up quickly from zero instances in response to scheduled Buildkite jobs. Amazon's AutoScaling primatives have a number of limitations that we wanted more granular control over:
+The [Elastic CI Stack][] depends on being able to scale up quickly from zero instances in response to scheduled Buildkite jobs. Amazon's AutoScaling primatives have a number of limitations that we wanted more granular control over:
 
 * The median time for a scaling event to be triggered was 2 minutes, due to needing two samples with a minimum period of 60 seconds between.
 * Scaling can either be by a fixed rate, a fixed step size or tracking, but tracking doesn't work well with custom metrics like we use.
@@ -40,10 +40,12 @@ An AWS Lambda bundle is created and published as part of the build process. The 
 
 It's entrypoint is `handler`, it requires a `go1.x` environment and requires the following env vars:
 
-- `BUILDKITE_AGENT_TOKEN`
+- `BUILDKITE_AGENT_TOKEN` or `BUILDKITE_AGENT_TOKEN_SSM_KEY`
 - `BUILDKITE_QUEUE`
 - `AGENTS_PER_INSTANCE`
 - `ASG_NAME`
+
+If `BUILDKITE_AGENT_TOKEN_SSM_KEY` is set, the token will be read from [AWS Systems Manager Parameter Store GetParameter](https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_GetParameter.html) which [can also read from AWS Secrets Manager](https://docs.aws.amazon.com/systems-manager/latest/userguide/integration-ps-secretsmanager.html).
 
 ```bash
 aws lambda create-function \
@@ -67,7 +69,7 @@ $ aws-vault exec my-profile -- go run . \
 
 Copyright (c) 2014-2019 Buildkite Pty Ltd. See [LICENSE](./LICENSE.txt) for details.
 
-[Elastic Stack]: https://github.com/buildkite/elastic-ci-stack-for-aws
+[Elastic CI Stack]: https://github.com/buildkite/elastic-ci-stack-for-aws
 [buildkite-agent-metrics]: https://github.com/buildkite/buildkite-agent-metrics
 [Lifecycle Hooks]: https://docs.aws.amazon.com/autoscaling/ec2/userguide/lifecycle-hooks.html
 [lifecycled]: https://github.com/buildkite/lifecycled

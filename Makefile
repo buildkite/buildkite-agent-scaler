@@ -29,7 +29,7 @@ lambda/handler: lambda/main.go
 		--volume go-module-cache:/go/pkg/mod \
 		--volume $(PWD):/go/src/github.com/buildkite/buildkite-agent-scaler \
 		--workdir /go/src/github.com/buildkite/buildkite-agent-scaler \
-		--rm golang:1.13 \
+		--rm golang:1.15 \
 		go build -ldflags="$(LD_FLAGS)" -o ./lambda/handler ./lambda
 
 lambda-sync: handler.zip

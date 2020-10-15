@@ -14,7 +14,7 @@ func TestHappy(t *testing.T) {
 	}))
 	c := NewClient("testtoken")
 	c.Endpoint = s.URL
-	m, err := c.GetAgentMetrics("default")
+	m, err := c.GetAgentMetrics([]string{"default"})
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 		return
@@ -31,7 +31,7 @@ func TestUnauthorizedResponse(t *testing.T) {
 	}))
 	c := NewClient("testtoken")
 	c.Endpoint = s.URL
-	_, err := c.GetAgentMetrics("default")
+	_, err := c.GetAgentMetrics([]string{"default"})
 	if err != nil {
 		t.Log("(expected error)", err)
 	} else {

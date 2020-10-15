@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
@@ -121,6 +122,8 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		default:
 			token := os.Getenv(`BUILDKITE_AGENT_TOKEN`)
 			ssmTokenKey := os.Getenv("BUILDKITE_AGENT_TOKEN_SSM_KEY")
+			queue := os.Getenv("BUILDKITE_QUEUE")
+			queues := os.Getenv("BUILDKITE_QUEUES")
 
 			if ssmTokenKey != "" {
 				var err error
@@ -136,10 +139,28 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 				)
 			}
 
+			// merge values for BUILDKITE_QUEUE and BUILDKITE_QUEUES into a single list of unique values
+			queuesSet := map[string]bool{}
+			if queue != "" {
+				queuesSet[queue] = true
+			}
+			if queues != "" {
+				queuesPcs := strings.Split(queues, ",")
+				for _, queue := range queuesPcs {
+					queuesSet[queue] = true
+				}
+			}
+			buildkiteQueues := make([]string, len(queuesSet))
+			idx := 0
+			for q := range queuesSet {
+				buildkiteQueues[idx] = q
+				idx++
+			}
+
 			client := buildkite.NewClient(token)
 
 			params := scaler.Params{
-				BuildkiteQueue:       mustGetEnv(`BUILDKITE_QUEUE`),
+				BuildkiteQueues:      buildkiteQueues,
 				AutoScalingGroupName: mustGetEnv(`ASG_NAME`),
 				AgentsPerInstance:    mustGetEnvInt(`AGENTS_PER_INSTANCE`),
 				IncludeWaiting:       includeWaiting,

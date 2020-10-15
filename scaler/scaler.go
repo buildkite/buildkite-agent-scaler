@@ -19,7 +19,7 @@ type Params struct {
 	AutoScalingGroupName     string
 	AgentsPerInstance        int
 	BuildkiteAgentToken      string
-	BuildkiteQueue           string
+	BuildkiteQueues          []string
 	UserAgent                string
 	PublishCloudWatchMetrics bool
 	DryRun                   bool
@@ -49,7 +49,7 @@ func NewScaler(client *buildkite.Client, params Params) (*Scaler, error) {
 	scaler := &Scaler{
 		bk: &buildkiteDriver{
 			client: client,
-			queue:  params.BuildkiteQueue,
+			queues: params.BuildkiteQueues,
 		},
 		includeWaiting:    params.IncludeWaiting,
 		agentsPerInstance: params.AgentsPerInstance,
@@ -83,26 +83,31 @@ func (s *Scaler) Run() (time.Duration, error) {
 	}
 
 	if s.metrics != nil {
-		err = s.metrics.Publish(metrics.OrgSlug, metrics.Queue, map[string]int64{
-			`ScheduledJobsCount`: metrics.ScheduledJobs,
-			`RunningJobsCount`:   metrics.RunningJobs,
-			`WaitingJobsCount`:   metrics.WaitingJobs,
-		})
-		if err != nil {
-			return metrics.PollDuration, err
+		for queue, queueMetrics := range metrics.Queues {
+			err = s.metrics.Publish(metrics.OrgSlug, queue, map[string]int64{
+				`ScheduledJobsCount`: queueMetrics.ScheduledJobs,
+				`RunningJobsCount`:   queueMetrics.RunningJobs,
+				`WaitingJobsCount`:   queueMetrics.WaitingJobs,
+			})
+			if err != nil {
+				return metrics.PollDuration, err
+			}
 		}
 	}
 
-	count := metrics.ScheduledJobs
+	var count int64
+	for _, metrics := range metrics.Queues {
+		count += metrics.ScheduledJobs
 
-	// If waiting jobs are greater than running jobs then optionally
-	// use waiting jobs for scaling so that we have instances booted
-	// by the time we get to them. This is a gamble, as if the instances
-	// scale down before the jobs get scheduled, it's a huge waste.
-	if s.includeWaiting && metrics.WaitingJobs > metrics.RunningJobs {
-		count += metrics.WaitingJobs
-	} else {
-		count += metrics.RunningJobs
+		// If waiting jobs are greater than running jobs then optionally
+		// use waiting jobs for scaling so that we have instances booted
+		// by the time we get to them. This is a gamble, as if the instances
+		// scale down before the jobs get scheduled, it's a huge waste.
+		if s.includeWaiting && metrics.WaitingJobs > metrics.RunningJobs {
+			count += metrics.WaitingJobs
+		} else {
+			count += metrics.RunningJobs
+		}
 	}
 
 	var desired int64
@@ -265,9 +270,9 @@ func (s *Scaler) LastScaleIn() time.Time {
 
 type buildkiteDriver struct {
 	client *buildkite.Client
-	queue  string
+	queues []string
 }
 
 func (a *buildkiteDriver) GetAgentMetrics() (buildkite.AgentMetrics, error) {
-	return a.client.GetAgentMetrics(a.queue)
+	return a.client.GetAgentMetrics(a.queues)
 }
