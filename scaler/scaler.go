@@ -115,12 +115,6 @@ func (s *Scaler) Run() (time.Duration, error) {
 		return metrics.PollDuration, err
 	}
 
-	if desired > current {
-		desired = s.applyScaleOutFactor(desired)
-	} else if desired < current {
-		desired = s.applyScaleInFactor(desired)
-	}
-
 	if desired > current.MaxSize {
 		log.Printf("⚠️  Desired count exceed MaxSize, capping at %d", current.MaxSize)
 		desired = current.MaxSize
@@ -176,6 +170,11 @@ func (s *Scaler) scaleIn(desired int64, current AutoscaleGroupDetails) error {
 		}
 
 		desired = current.DesiredCount + factoredChange
+
+		if desired < current.MinSize {
+			log.Printf("⚠️  Post scalein-factor desired count lower than MinSize, capping at %d", current.MinSize)
+			desired = current.MinSize
+		}
 	}
 
 	// Correct negative values if we get them
@@ -228,6 +227,11 @@ func (s *Scaler) scaleOut(desired int64, current AutoscaleGroupDetails) error {
 		}
 
 		desired = current.DesiredCount + factoredChange
+
+		if desired > current.MaxSize {
+			log.Printf("⚠️  Post scaleout-factor desired count exceed MaxSize, capping at %d", current.MaxSize)
+			desired = current.MaxSize
+		}
 	}
 
 	log.Printf("Scaling OUT 📈 to %d instances (currently %d)", desired, current.DesiredCount)
