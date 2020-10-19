@@ -111,6 +111,19 @@ func TestScalingOutWithoutError(t *testing.T) {
 			currentDesiredCapacity:  11,
 			expectedDesiredCapacity: 12,
 		},
+		// Scale-out with a factor too large
+		{
+			metrics: buildkite.AgentMetrics{
+				ScheduledJobs: 10,
+			},
+			params: Params{
+				AgentsPerInstance: 1,
+				ScaleOutParams: ScaleParams{
+					Factor: 500.0,
+				},
+			},
+			expectedDesiredCapacity: 100.0,
+		},
 		// Cool-down period is enforced
 		{
 			metrics: buildkite.AgentMetrics{
