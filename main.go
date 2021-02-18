@@ -22,8 +22,9 @@ func main() {
 		includeWaiting      = flag.Bool("include-waiting", false, "Whether to include jobs behind a wait step for scaling")
 
 		// scale in/out params
-		scaleInFactor  = flag.Float64("scale-in-factor", 1.0, "A factor to apply to scale ins")
-		scaleOutFactor = flag.Float64("scale-out-factor", 1.0, "A factor to apply to scale outs")
+		relativeScaling = flag.Bool("relative-scaling", false, "Whether to use relative scaling calculation")
+		scaleInFactor   = flag.Float64("scale-in-factor", 1.0, "A factor to apply to scale ins")
+		scaleOutFactor  = flag.Float64("scale-out-factor", 1.0, "A factor to apply to scale outs")
 
 		// general params
 		dryRun = flag.Bool("dry-run", false, "Whether to just show what would be done")
@@ -49,6 +50,7 @@ func main() {
 		IncludeWaiting:           *includeWaiting,
 		ScaleInParams:            scaler.ScaleParams{Factor: *scaleInFactor},
 		ScaleOutParams:           scaler.ScaleParams{Factor: *scaleOutFactor},
+		RelativeScaling:          *relativeScaling,
 	})
 	if err != nil {
 		log.Fatal(err)
