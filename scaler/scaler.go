@@ -41,8 +41,6 @@ type Scaler struct {
 		Publish(orgSlug, queue string, metrics map[string]int64) error
 	}
 	scaling ScalingCalculator
-	//includeWaiting    bool
-	//agentsPerInstance int
 	scaleInParams  ScaleParams
 	scaleOutParams ScaleParams
 }

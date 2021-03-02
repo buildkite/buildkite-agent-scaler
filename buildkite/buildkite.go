@@ -40,6 +40,7 @@ type AgentMetrics struct {
 	WaitingJobs   int64
 	IdleAgents    int64
 	BusyAgents    int64
+	TotalAgents   int64
 }
 
 func (c *Client) GetAgentMetrics(queue string) (AgentMetrics, error) {
@@ -81,6 +82,7 @@ func (c *Client) GetAgentMetrics(queue string) (AgentMetrics, error) {
 	if queue, exists := resp.Agents.Queues[queue]; exists {
 		metrics.IdleAgents = queue.Idle
 		metrics.BusyAgents = queue.Busy
+		metrics.TotalAgents = queue.Total
 	}
 
 	if queue, exists := resp.Jobs.Queues[queue]; exists {

@@ -21,6 +21,7 @@ func TestScalingOutWithoutError(t *testing.T) {
 				ScheduledJobs: 10,
 				RunningJobs:   2,
 				WaitingJobs:   2,
+				TotalAgents:   2,
 			},
 			params: Params{
 				AgentsPerInstance: 1,
@@ -34,6 +35,7 @@ func TestScalingOutWithoutError(t *testing.T) {
 				ScheduledJobs: 8,
 				RunningJobs:   2,
 				WaitingJobs:   20,
+				TotalAgents:   2,
 			},
 			params: Params{
 				AgentsPerInstance: 1,
@@ -48,6 +50,7 @@ func TestScalingOutWithoutError(t *testing.T) {
 				ScheduledJobs: 10,
 				RunningJobs:   2,
 				IdleAgents:    2,
+				TotalAgents:   4,
 			},
 			params: Params{
 				AgentsPerInstance: 4,
@@ -59,6 +62,7 @@ func TestScalingOutWithoutError(t *testing.T) {
 			metrics: buildkite.AgentMetrics{
 				ScheduledJobs: 10,
 				RunningJobs:   2,
+				TotalAgents:   2,
 			},
 			params: Params{
 				AgentsPerInstance: 2,
@@ -73,6 +77,7 @@ func TestScalingOutWithoutError(t *testing.T) {
 				ScheduledJobs: 10,
 				RunningJobs:   2,
 				IdleAgents:    3,
+				TotalAgents:   5,
 			},
 			params: Params{
 				AgentsPerInstance: 5,
@@ -85,6 +90,7 @@ func TestScalingOutWithoutError(t *testing.T) {
 				ScheduledJobs: 10,
 				RunningJobs:   2,
 				IdleAgents:    18,
+				TotalAgents:   20,
 			},
 			params: Params{
 				AgentsPerInstance: 20,
@@ -97,6 +103,7 @@ func TestScalingOutWithoutError(t *testing.T) {
 			metrics: buildkite.AgentMetrics{
 				ScheduledJobs: 10,
 				RunningJobs:   2,
+				TotalAgents:   2,
 			},
 			params: Params{
 				AgentsPerInstance: 1,
@@ -112,6 +119,7 @@ func TestScalingOutWithoutError(t *testing.T) {
 			metrics: buildkite.AgentMetrics{
 				ScheduledJobs: 10,
 				RunningJobs:   2,
+				TotalAgents:   11,
 			},
 			params: Params{
 				AgentsPerInstance: 1,
@@ -140,6 +148,7 @@ func TestScalingOutWithoutError(t *testing.T) {
 			metrics: buildkite.AgentMetrics{
 				ScheduledJobs: 10,
 				RunningJobs:   2,
+				TotalAgents:   4,
 			},
 			params: Params{
 				AgentsPerInstance: 1,
@@ -157,6 +166,7 @@ func TestScalingOutWithoutError(t *testing.T) {
 				ScheduledJobs: 10,
 				RunningJobs:   2,
 				IdleAgents:    2,
+				TotalAgents:   4,
 			},
 			params: Params{
 				AgentsPerInstance: 1,
@@ -174,6 +184,7 @@ func TestScalingOutWithoutError(t *testing.T) {
 				ScheduledJobs: 10,
 				RunningJobs:   2,
 				IdleAgents:    2,
+				TotalAgents:   4,
 			},
 			params: Params{
 				AgentsPerInstance: 1,
@@ -191,6 +202,7 @@ func TestScalingOutWithoutError(t *testing.T) {
 			metrics: buildkite.AgentMetrics{
 				ScheduledJobs: 10,
 				RunningJobs:   2,
+				TotalAgents:   1,
 			},
 			params: Params{
 				AgentsPerInstance: 1,
@@ -251,6 +263,31 @@ func TestScalingOutWithoutError(t *testing.T) {
 				)
 			}
 		})
+
+		t.Run("hybrid", func(t *testing.T) {
+			asg := &asgTestDriver{
+				desiredCapacity: tc.currentDesiredCapacity,
+			}
+			s := Scaler{
+				autoscaling:    asg,
+				bk:             &buildkiteTestDriver{metrics: tc.metrics},
+				scaleOutParams: tc.params.ScaleOutParams,
+				scaling: &HybridScaling{
+					includeWaiting:    tc.params.IncludeWaiting,
+					agentsPerInstance: tc.params.AgentsPerInstance,
+				},
+			}
+
+			if _, err := s.Run(); err != nil {
+				t.Fatal(err)
+			}
+
+			if asg.desiredCapacity != tc.expectedDesiredCapacity {
+				t.Fatalf("Expected desired capacity of %d, got %d",
+					tc.expectedDesiredCapacity, asg.desiredCapacity,
+				)
+			}
+		})
 	}
 }
 
@@ -263,6 +300,9 @@ func TestScalingInWithoutError(t *testing.T) {
 	}{
 		// We're inside cooldown
 		{
+			metrics: buildkite.AgentMetrics{
+				TotalAgents: 10,
+			},
 			params: Params{
 				AgentsPerInstance: 1,
 				ScaleInParams: ScaleParams{
@@ -276,7 +316,8 @@ func TestScalingInWithoutError(t *testing.T) {
 		// We're out of cooldown, apply factor
 		{
 			metrics: buildkite.AgentMetrics{
-				IdleAgents: 10,
+				IdleAgents:  10,
+				TotalAgents: 10,
 			},
 			params: Params{
 				AgentsPerInstance: 1,
@@ -294,6 +335,7 @@ func TestScalingInWithoutError(t *testing.T) {
 			metrics: buildkite.AgentMetrics{
 				ScheduledJobs: 10,
 				IdleAgents:    20,
+				TotalAgents:   20,
 			},
 			params: Params{
 				AgentsPerInstance: 1,
@@ -308,6 +350,7 @@ func TestScalingInWithoutError(t *testing.T) {
 		{
 			metrics: buildkite.AgentMetrics{
 				IdleAgents: 1,
+				TotalAgents:   1,
 			},
 			params: Params{
 				AgentsPerInstance: 1,
@@ -320,6 +363,9 @@ func TestScalingInWithoutError(t *testing.T) {
 		},
 		// Scale in disabled
 		{
+			metrics: buildkite.AgentMetrics{
+				TotalAgents:   1,
+			},
 			params: Params{
 				ScaleInParams: ScaleParams{
 					Disable: true,
@@ -364,6 +410,31 @@ func TestScalingInWithoutError(t *testing.T) {
 				autoscaling: asg,
 				bk:          &buildkiteTestDriver{metrics: tc.metrics},
 				scaling: &RelativeScaling{
+					includeWaiting:    tc.params.IncludeWaiting,
+					agentsPerInstance: tc.params.AgentsPerInstance,
+				},
+				scaleInParams: tc.params.ScaleInParams,
+			}
+
+			if _, err := s.Run(); err != nil {
+				t.Fatal(err)
+			}
+
+			if asg.desiredCapacity != tc.expectedDesiredCapacity {
+				t.Fatalf("Expected desired capacity of %d, got %d",
+					tc.expectedDesiredCapacity, asg.desiredCapacity,
+				)
+			}
+		})
+
+		t.Run("hybrid", func(t *testing.T) {
+			asg := &asgTestDriver{
+				desiredCapacity: tc.currentDesiredCapacity,
+			}
+			s := Scaler{
+				autoscaling: asg,
+				bk:          &buildkiteTestDriver{metrics: tc.metrics},
+				scaling: &HybridScaling{
 					includeWaiting:    tc.params.IncludeWaiting,
 					agentsPerInstance: tc.params.AgentsPerInstance,
 				},
