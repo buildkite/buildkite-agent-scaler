@@ -26,7 +26,6 @@ type Params struct {
 	IncludeWaiting           bool
 	ScaleInParams            ScaleParams
 	ScaleOutParams           ScaleParams
-	RelativeScaling          bool
 }
 
 type Scaler struct {
@@ -55,16 +54,9 @@ func NewScaler(client *buildkite.Client, params Params) (*Scaler, error) {
 		scaleOutParams: params.ScaleOutParams,
 	}
 
-	if params.RelativeScaling {
-		scaler.scaling = &RelativeScaling{
-			includeWaiting:    params.IncludeWaiting,
-			agentsPerInstance: params.AgentsPerInstance,
-		}
-	} else {
-		scaler.scaling = &AbsoluteScaling{
-			includeWaiting:    params.IncludeWaiting,
-			agentsPerInstance: params.AgentsPerInstance,
-		}
+	scaler.scaling = ScalingCalculator{
+		includeWaiting:    params.IncludeWaiting,
+		agentsPerInstance: params.AgentsPerInstance,
 	}
 
 	if params.DryRun {

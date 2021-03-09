@@ -170,11 +170,6 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 				params.ScaleOutParams.Disable = true
 			}
 
-			if m := os.Getenv(`RELATIVE_SCALING`); m == `true` || m == `1` {
-				log.Printf("Using relative scaling calculation")
-				params.RelativeScaling = true
-			}
-
 			scaler, err := scaler.NewScaler(client, params)
 			if err != nil {
 				log.Fatal(err)

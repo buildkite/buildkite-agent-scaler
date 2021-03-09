@@ -214,7 +214,7 @@ func TestScalingOutWithoutError(t *testing.T) {
 			expectedDesiredCapacity: 1,
 		},
 	} {
-		t.Run("absolute", func(t *testing.T) {
+		t.Run("", func(t *testing.T) {
 			asg := &asgTestDriver{
 				desiredCapacity: tc.currentDesiredCapacity,
 			}
@@ -222,57 +222,7 @@ func TestScalingOutWithoutError(t *testing.T) {
 				autoscaling:    asg,
 				bk:             &buildkiteTestDriver{metrics: tc.metrics},
 				scaleOutParams: tc.params.ScaleOutParams,
-				scaling: &AbsoluteScaling{
-					includeWaiting:    tc.params.IncludeWaiting,
-					agentsPerInstance: tc.params.AgentsPerInstance,
-				},
-			}
-
-			if _, err := s.Run(); err != nil {
-				t.Fatal(err)
-			}
-
-			if asg.desiredCapacity != tc.expectedDesiredCapacity {
-				t.Fatalf("Expected desired capacity of %d, got %d",
-					tc.expectedDesiredCapacity, asg.desiredCapacity,
-				)
-			}
-		})
-
-		t.Run("relative", func(t *testing.T) {
-			asg := &asgTestDriver{
-				desiredCapacity: tc.currentDesiredCapacity,
-			}
-			s := Scaler{
-				autoscaling:    asg,
-				bk:             &buildkiteTestDriver{metrics: tc.metrics},
-				scaleOutParams: tc.params.ScaleOutParams,
-				scaling: &RelativeScaling{
-					includeWaiting:    tc.params.IncludeWaiting,
-					agentsPerInstance: tc.params.AgentsPerInstance,
-				},
-			}
-
-			if _, err := s.Run(); err != nil {
-				t.Fatal(err)
-			}
-
-			if asg.desiredCapacity != tc.expectedDesiredCapacity {
-				t.Fatalf("Expected desired capacity of %d, got %d",
-					tc.expectedDesiredCapacity, asg.desiredCapacity,
-				)
-			}
-		})
-
-		t.Run("hybrid", func(t *testing.T) {
-			asg := &asgTestDriver{
-				desiredCapacity: tc.currentDesiredCapacity,
-			}
-			s := Scaler{
-				autoscaling:    asg,
-				bk:             &buildkiteTestDriver{metrics: tc.metrics},
-				scaleOutParams: tc.params.ScaleOutParams,
-				scaling: &HybridScaling{
+				scaling: ScalingCalculator{
 					includeWaiting:    tc.params.IncludeWaiting,
 					agentsPerInstance: tc.params.AgentsPerInstance,
 				},
@@ -384,57 +334,7 @@ func TestScalingInWithoutError(t *testing.T) {
 			s := Scaler{
 				autoscaling: asg,
 				bk:          &buildkiteTestDriver{metrics: tc.metrics},
-				scaling: &AbsoluteScaling{
-					includeWaiting:    tc.params.IncludeWaiting,
-					agentsPerInstance: tc.params.AgentsPerInstance,
-				},
-				scaleInParams: tc.params.ScaleInParams,
-			}
-
-			if _, err := s.Run(); err != nil {
-				t.Fatal(err)
-			}
-
-			if asg.desiredCapacity != tc.expectedDesiredCapacity {
-				t.Fatalf("Expected desired capacity of %d, got %d",
-					tc.expectedDesiredCapacity, asg.desiredCapacity,
-				)
-			}
-		})
-
-		t.Run("relative", func(t *testing.T) {
-			asg := &asgTestDriver{
-				desiredCapacity: tc.currentDesiredCapacity,
-			}
-			s := Scaler{
-				autoscaling: asg,
-				bk:          &buildkiteTestDriver{metrics: tc.metrics},
-				scaling: &RelativeScaling{
-					includeWaiting:    tc.params.IncludeWaiting,
-					agentsPerInstance: tc.params.AgentsPerInstance,
-				},
-				scaleInParams: tc.params.ScaleInParams,
-			}
-
-			if _, err := s.Run(); err != nil {
-				t.Fatal(err)
-			}
-
-			if asg.desiredCapacity != tc.expectedDesiredCapacity {
-				t.Fatalf("Expected desired capacity of %d, got %d",
-					tc.expectedDesiredCapacity, asg.desiredCapacity,
-				)
-			}
-		})
-
-		t.Run("hybrid", func(t *testing.T) {
-			asg := &asgTestDriver{
-				desiredCapacity: tc.currentDesiredCapacity,
-			}
-			s := Scaler{
-				autoscaling: asg,
-				bk:          &buildkiteTestDriver{metrics: tc.metrics},
-				scaling: &HybridScaling{
+				scaling: ScalingCalculator{
 					includeWaiting:    tc.params.IncludeWaiting,
 					agentsPerInstance: tc.params.AgentsPerInstance,
 				},
