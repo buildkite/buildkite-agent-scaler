@@ -34,13 +34,23 @@ func (sc *ScalingCalculator) DesiredCount(metrics *buildkite.AgentMetrics, asg *
 	}
 
 	// If there are less agents registered than we'd expect based on the size
-	// of the autoscaling group, then there may be instances not accepting jobs:
-	// possibly because they are in the process of draining jobs for a
-	// graceful shutdown. In this case, we should expand the asg further to accommodate.
-	anticipated := (asg.DesiredCount - asg.Pending) * int64(sc.agentsPerInstance)
-	shortfall := anticipated - metrics.TotalAgents
-	if shortfall > 0 {
-		desired += sc.perInstance(shortfall)
+	// of the autoscaling group, then there may be instances not accepting
+	// jobs: possibly because they are in the process of draining jobs for a
+	// graceful shutdown. In this case, we should expand the asg further to
+	// accommodate.
+	//
+	// Currently, restrict this behaviour to only occur when there are fewer
+	// than 2 instances (worth of agents) running. This will prevent any
+	// unexpected behaviour in large scaling groups. Since the effects of an
+	// instance not accepting jobs are more pronounced when there are fewer
+	// instances, this should cover the worst case scenario(s) where there may
+	// not be any instances accepting jobs.
+	if metrics.TotalAgents < int64(sc.agentsPerInstance) * 2 {
+		anticipated := (asg.DesiredCount - asg.Pending) * int64(sc.agentsPerInstance)
+		shortfall := anticipated - metrics.TotalAgents
+		if shortfall > 0 {
+			desired += sc.perInstance(shortfall)
+		}
 	}
 
 	return desired
