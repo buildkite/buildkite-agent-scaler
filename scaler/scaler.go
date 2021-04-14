@@ -196,7 +196,6 @@ func (s *Scaler) scaleOut(desired int64, current AutoscaleGroupDetails) error {
 
 	// Calculate the change in the desired count, will be positive
 	change := desired - current.DesiredCount
-	log.Printf("DEBUG: change=(%d-%d)=%d", desired, current.DesiredCount, change)
 
 	// Apply scaling factor if one is given
 	if s.scaleOutParams.Factor != 0 {
