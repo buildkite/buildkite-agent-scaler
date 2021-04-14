@@ -1,12 +1,15 @@
 package scaler
 
 import (
+	"strings"
+
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/autoscaling"
 )
 
 type AutoscaleGroupDetails struct {
+	Pending      int64
 	DesiredCount int64
 	MinSize      int64
 	MaxSize      int64
@@ -29,7 +32,18 @@ func (a *asgDriver) Describe() (AutoscaleGroupDetails, error) {
 		return AutoscaleGroupDetails{}, err
 	}
 
+	asg := result.AutoScalingGroups[0]
+
+	var pending int64
+	for _, instance := range asg.Instances {
+		lifecycleState := aws.StringValue(instance.LifecycleState)
+		if strings.HasPrefix(lifecycleState, "Pending") {
+			pending += 1
+		}
+	}
+
 	return AutoscaleGroupDetails{
+		Pending:      pending,
 		DesiredCount: int64(*result.AutoScalingGroups[0].DesiredCapacity),
 		MinSize:      int64(*result.AutoScalingGroups[0].MinSize),
 		MaxSize:      int64(*result.AutoScalingGroups[0].MaxSize),

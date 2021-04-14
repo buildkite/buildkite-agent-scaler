@@ -39,10 +39,9 @@ type Scaler struct {
 	metrics interface {
 		Publish(orgSlug, queue string, metrics map[string]int64) error
 	}
-	includeWaiting    bool
-	agentsPerInstance int
-	scaleInParams     ScaleParams
-	scaleOutParams    ScaleParams
+	scaling ScalingCalculator
+	scaleInParams  ScaleParams
+	scaleOutParams ScaleParams
 }
 
 func NewScaler(client *buildkite.Client, params Params) (*Scaler, error) {
@@ -51,10 +50,13 @@ func NewScaler(client *buildkite.Client, params Params) (*Scaler, error) {
 			client: client,
 			queue:  params.BuildkiteQueue,
 		},
+		scaleInParams:  params.ScaleInParams,
+		scaleOutParams: params.ScaleOutParams,
+	}
+
+	scaler.scaling = ScalingCalculator{
 		includeWaiting:    params.IncludeWaiting,
 		agentsPerInstance: params.AgentsPerInstance,
-		scaleInParams:     params.ScaleInParams,
-		scaleOutParams:    params.ScaleOutParams,
 	}
 
 	if params.DryRun {
@@ -93,45 +95,30 @@ func (s *Scaler) Run() (time.Duration, error) {
 		}
 	}
 
-	count := metrics.ScheduledJobs
-
-	// If waiting jobs are greater than running jobs then optionally
-	// use waiting jobs for scaling so that we have instances booted
-	// by the time we get to them. This is a gamble, as if the instances
-	// scale down before the jobs get scheduled, it's a huge waste.
-	if s.includeWaiting && metrics.WaitingJobs > metrics.RunningJobs {
-		count += metrics.WaitingJobs
-	} else {
-		count += metrics.RunningJobs
-	}
-
-	var desired int64
-	if count > 0 {
-		desired = int64(math.Ceil(float64(count) / float64(s.agentsPerInstance)))
-	}
-
-	current, err := s.autoscaling.Describe()
+	asg, err := s.autoscaling.Describe()
 	if err != nil {
 		return metrics.PollDuration, err
 	}
 
-	if desired > current.MaxSize {
-		log.Printf("⚠️  Desired count exceed MaxSize, capping at %d", current.MaxSize)
-		desired = current.MaxSize
-	} else if desired < current.MinSize {
-		log.Printf("⚠️  Desired count is less than MinSize, capping at %d", current.MinSize)
-		desired = current.MinSize
+	desired := s.scaling.DesiredCount(&metrics, &asg)
+
+	if desired > asg.MaxSize {
+		log.Printf("⚠️  Desired count exceed MaxSize, capping at %d", asg.MaxSize)
+		desired = asg.MaxSize
+	} else if desired < asg.MinSize {
+		log.Printf("⚠️  Desired count is less than MinSize, capping at %d", asg.MinSize)
+		desired = asg.MinSize
 	}
 
-	if desired > current.DesiredCount {
-		return metrics.PollDuration, s.scaleOut(desired, current)
+	if desired > asg.DesiredCount {
+		return metrics.PollDuration, s.scaleOut(desired, asg)
 	}
 
-	if current.DesiredCount > desired {
-		return metrics.PollDuration, s.scaleIn(desired, current)
+	if asg.DesiredCount > desired {
+		return metrics.PollDuration, s.scaleIn(desired, asg)
 	}
 
-	log.Printf("No scaling required, currently %d", current.DesiredCount)
+	log.Printf("No scaling required, currently %d", asg.DesiredCount)
 	return metrics.PollDuration, nil
 }
 
@@ -209,6 +196,7 @@ func (s *Scaler) scaleOut(desired int64, current AutoscaleGroupDetails) error {
 
 	// Calculate the change in the desired count, will be positive
 	change := desired - current.DesiredCount
+	log.Printf("DEBUG: change=(%d-%d)=%d", desired, current.DesiredCount, change)
 
 	// Apply scaling factor if one is given
 	if s.scaleOutParams.Factor != 0 {
