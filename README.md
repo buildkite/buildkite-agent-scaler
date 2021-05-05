@@ -25,10 +25,16 @@ See the [forum post](https://forum.buildkite.community/t/experimental-lambda-bas
 
 ## Publishing Cloudwatch Metrics
 
-The scaler collects it's own metrics and doesn't require the [buildkite-agent-metrics][]. It supports optionally publishing the metrics it collects back to Cloudwatch, although it only supports a subset of the metrics that the [buildkite-agent-metrics][] binary collects:
+The scaler collects it's own metrics and doesn't require the [buildkite-agent-metrics][].  
+It supports optionally publishing the metrics it collects back to Cloudwatch.  
 
+Binary collects:
 * Buildkite > (Org, Queue) > `ScheduledJobsCount`
-* Buildkite > (Org, Queue) > `RunningJobCount`
+* Buildkite > (Org, Queue) > `RunningJobsCount`
+* Buildkite > (Org, Queue) > `WaitingJobsCount`
+* Buildkite > (Org, Queue) > `IdleAgentCount`
+* Buildkite > (Org, Queue) > `BusyAgentCount`
+* Buildkite > (Org, Queue) > `TotalAgentCount`
 
 ## Running as an AWS Lambda
 
