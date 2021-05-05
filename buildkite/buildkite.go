@@ -91,8 +91,15 @@ func (c *Client) GetAgentMetrics(queue string) (AgentMetrics, error) {
 		metrics.WaitingJobs = queue.Waiting
 	}
 
-	log.Printf("↳ Got scheduled=%d, running=%d, waiting=%d (took %v)",
-		metrics.ScheduledJobs, metrics.RunningJobs, metrics.WaitingJobs, queryDuration)
+	log.Printf("↳ Got scheduled=%d, running=%d, waiting=%d, idleAgents=%d, busyAgents=%d, totalAgents=%d (took %v)",
+		metrics.ScheduledJobs,
+		metrics.RunningJobs,
+		metrics.WaitingJobs,
+		metrics.IdleAgents,
+		metrics.BusyAgents,
+		metrics.TotalAgents,
+		queryDuration)
+		
 	return metrics, nil
 }
 

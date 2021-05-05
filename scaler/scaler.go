@@ -89,6 +89,10 @@ func (s *Scaler) Run() (time.Duration, error) {
 			`ScheduledJobsCount`: metrics.ScheduledJobs,
 			`RunningJobsCount`:   metrics.RunningJobs,
 			`WaitingJobsCount`:   metrics.WaitingJobs,
+
+			`IdleAgentCount`:   metrics.IdleAgents,
+			`BusyAgentCount`:   metrics.BusyAgents,
+			`TotalAgentCount`:   metrics.TotalAgents,
 		})
 		if err != nil {
 			return metrics.PollDuration, err
