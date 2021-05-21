@@ -42,9 +42,18 @@ func (a *asgDriver) Describe() (AutoscaleGroupDetails, error) {
 		}
 	}
 
+	// There may be a race condition between increasing DesiredCapacity and
+	// actually seeing a pending instance in the list. In this case, treat the
+	// difference as pending instances that are yet to be created.
+	numInstances := int64(len(asg.Instances))
+	desired := int64(*result.AutoScalingGroups[0].DesiredCapacity)
+	if numInstances < desired {
+		pending += desired - numInstances
+	}
+
 	return AutoscaleGroupDetails{
 		Pending:      pending,
-		DesiredCount: int64(*result.AutoScalingGroups[0].DesiredCapacity),
+		DesiredCount: desired,
 		MinSize:      int64(*result.AutoScalingGroups[0].MinSize),
 		MaxSize:      int64(*result.AutoScalingGroups[0].MaxSize),
 	}, nil
