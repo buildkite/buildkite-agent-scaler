@@ -17,6 +17,8 @@ func (sc *ScalingCalculator) perInstance(count int64) int64 {
 }
 
 func (sc *ScalingCalculator) DesiredCount(metrics *buildkite.AgentMetrics, asg *AutoscaleGroupDetails) int64 {
+	log.Printf("Calculating desired instance count for Buildkite Jobs")
+
 	agentsRequired := metrics.ScheduledJobs
 
 	// If waiting jobs are greater than running jobs then optionally
@@ -34,7 +36,7 @@ func (sc *ScalingCalculator) DesiredCount(metrics *buildkite.AgentMetrics, asg *
 		desired = sc.perInstance(agentsRequired)
 	}
 
-	log.Printf("🧮 Agents required %d, Instances required %d", agentsRequired, desired)
+	log.Printf("↳ 🧮 Agents required %d, Instances required %d", agentsRequired, desired)
 
 	// If there are less agents registered than we'd expect based on the size
 	// of the autoscaling group, then there may be instances not accepting
@@ -56,7 +58,7 @@ func (sc *ScalingCalculator) DesiredCount(metrics *buildkite.AgentMetrics, asg *
 			topUpInstances := sc.perInstance(shortfall)
 			desired += topUpInstances
 
-			log.Printf("🧮 Fewer than 2 instances worth of agents running, expected %d agents for %d live instances, adding %d instances as top up", anticipated, asg.DesiredCount - asg.Pending, topUpInstances)
+			log.Printf("↳ 🧮 Fewer than %d agents running, expected %d agents for %d live instances, adding %d instances as top up", 2 * sc.agentsPerInstance, anticipated, asg.DesiredCount - asg.Pending, topUpInstances)
 		}
 	}
 
