@@ -1,6 +1,7 @@
 package scaler
 
 import (
+	"log"
 	"math"
 
 	"github.com/buildkite/buildkite-agent-scaler/buildkite"
@@ -48,15 +49,14 @@ func (sc *ScalingCalculator) DesiredCount(metrics *buildkite.AgentMetrics, asg *
 	// instances, this should cover the worst case scenario(s) where there may
 	// not be any instances accepting jobs.
 	if metrics.TotalAgents < int64(sc.agentsPerInstance) * 2 {
-		log.Printf("🧮 Fewer than 2 instances worth of agents running")
-
 		anticipated := (asg.DesiredCount - asg.Pending) * int64(sc.agentsPerInstance)
 		shortfall := anticipated - metrics.TotalAgents
 
-		log.Printf("🧮 Expected agents %d, shortfall %d", anticipated, shortfall)
-
 		if shortfall > 0 {
-			desired += sc.perInstance(shortfall)
+			topUpInstances := sc.perInstance(shortfall)
+			desired += topUpInstances
+
+			log.Printf("🧮 Fewer than 2 instances worth of agents running, expected %d agents for %d live instances, adding %d instances as top up", anticipated, asg.DesiredCount - asg.Pending, topUpInstances)
 		}
 	}
 
