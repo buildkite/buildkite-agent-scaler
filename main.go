@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"log"
+	"time"
 
 	"github.com/buildkite/buildkite-agent-scaler/buildkite"
 	"github.com/buildkite/buildkite-agent-scaler/scaler"
@@ -58,7 +59,20 @@ func main() {
 		log.Printf("Running as a dry-run, no changes will be made")
 	}
 
-	if _, err := scaler.Run(); err != nil {
-		log.Fatal(err)
+	var interval time.Duration = 10 * time.Second;
+
+	for {
+		minPollDuration, err := scaler.Run()
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		if interval < minPollDuration {
+			interval = minPollDuration
+			log.Printf("Increasing poll interval to %v based on rate limit", interval)
+		}
+
+		log.Printf("Waiting for %v", interval)
+		time.Sleep(interval)
 	}
 }
