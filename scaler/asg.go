@@ -1,7 +1,9 @@
 package scaler
 
 import (
+	"log"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -20,6 +22,8 @@ type asgDriver struct {
 }
 
 func (a *asgDriver) Describe() (AutoscaleGroupDetails, error) {
+	log.Printf("Collecting AutoScaling details for ASG %q", a.name)
+
 	svc := autoscaling.New(session.New())
 	input := &autoscaling.DescribeAutoScalingGroupsInput{
 		AutoScalingGroupNames: []*string{
@@ -27,10 +31,14 @@ func (a *asgDriver) Describe() (AutoscaleGroupDetails, error) {
 		},
 	}
 
+	t := time.Now()
+
 	result, err := svc.DescribeAutoScalingGroups(input)
 	if err != nil {
 		return AutoscaleGroupDetails{}, err
 	}
+
+	queryDuration := time.Now().Sub(t)
 
 	asg := result.AutoScalingGroups[0]
 
@@ -42,13 +50,17 @@ func (a *asgDriver) Describe() (AutoscaleGroupDetails, error) {
 		}
 	}
 
-	return AutoscaleGroupDetails{
+	details := AutoscaleGroupDetails{
 		Pending:      pending,
 		DesiredCount: int64(*result.AutoScalingGroups[0].DesiredCapacity),
 		MinSize:      int64(*result.AutoScalingGroups[0].MinSize),
 		MaxSize:      int64(*result.AutoScalingGroups[0].MaxSize),
-	}, nil
+	}
 
+	log.Printf("↳ Got pending=%d, desired=%d, min=%d, max=%d (took %v)",
+		details.Pending, details.DesiredCount, details.MinSize, details.MaxSize, queryDuration)
+
+	return details, nil
 }
 
 func (a *asgDriver) SetDesiredCapacity(count int64) error {

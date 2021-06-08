@@ -44,7 +44,7 @@ type AgentMetrics struct {
 }
 
 func (c *Client) GetAgentMetrics(queue string) (AgentMetrics, error) {
-	log.Printf("Collecting agent metrics for queue %q", queue)
+	log.Printf("Collecting Buildkite metrics for queue %q", queue)
 
 	var resp struct {
 		Organization struct {
@@ -91,8 +91,11 @@ func (c *Client) GetAgentMetrics(queue string) (AgentMetrics, error) {
 		metrics.WaitingJobs = queue.Waiting
 	}
 
-	log.Printf("↳ Got scheduled=%d, running=%d, waiting=%d (took %v)",
+	log.Printf("↳ Agents: idle=%d, busy=%d, total=%d",
+		metrics.IdleAgents, metrics.BusyAgents, metrics.TotalAgents)
+	log.Printf("↳ Jobs: scheduled=%d, running=%d, waiting=%d (took %v)",
 		metrics.ScheduledJobs, metrics.RunningJobs, metrics.WaitingJobs, queryDuration)
+
 	return metrics, nil
 }
 
