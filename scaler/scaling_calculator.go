@@ -1,6 +1,7 @@
 package scaler
 
 import (
+	"log"
 	"math"
 
 	"github.com/buildkite/buildkite-agent-scaler/buildkite"
@@ -16,6 +17,8 @@ func (sc *ScalingCalculator) perInstance(count int64) int64 {
 }
 
 func (sc *ScalingCalculator) DesiredCount(metrics *buildkite.AgentMetrics, asg *AutoscaleGroupDetails) int64 {
+	log.Printf("Calculating desired instance count for Buildkite Jobs")
+
 	agentsRequired := metrics.ScheduledJobs
 
 	// If waiting jobs are greater than running jobs then optionally
@@ -32,6 +35,8 @@ func (sc *ScalingCalculator) DesiredCount(metrics *buildkite.AgentMetrics, asg *
 	if agentsRequired > 0 {
 		desired = sc.perInstance(agentsRequired)
 	}
+
+	log.Printf("↳ 🧮 Agents required %d, Instances required %d", agentsRequired, desired)
 
 	return desired
 }
