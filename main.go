@@ -73,6 +73,7 @@ func main() {
 		}
 
 		log.Printf("Waiting for %v", interval)
+		log.Println("")
 		time.Sleep(interval)
 	}
 }
