@@ -4,11 +4,6 @@ Description: Autoscaling Lambda for elastic-ci stack Buildkite Agents
 Transform: AWS::Serverless-2016-10-31
 
 Parameters:
-  AutoscalingLambdaExecutionRole:
-    Description: IAM Role ARN
-    Type: String
-    Default: ''
-
   BuildkiteAgentTokenParameter:
     Description: Buildkite agent token parameter
     Type: AWS::SSM::Parameter::Name
@@ -18,6 +13,16 @@ Parameters:
     Type: String
     Default: default
     MinLength: 1
+
+  AgentAutoScaleGroup:
+    Description: The name of the autoscale group to autoscale.
+    Type: String
+    Default: default
+
+  AutoscalingLambdaExecutionRole:
+    Description: IAM Role ARN
+    Type: String
+    Default: ''
 
   AgentsPerInstance:
     Description: ""
@@ -30,11 +35,6 @@ Parameters:
   MaxSize:
     Description: ""
     Type: String
-
-  AutoScaleGroup:
-    Description: The name of the autoscale group to autoscale.
-    Type: String
-    Default: default
 
   ScaleOutFactor:
     Description: ""
@@ -134,7 +134,7 @@ Resources:
           AGENTS_PER_INSTANCE:           !Ref AgentsPerInstance
           CLOUDWATCH_METRICS:            "1"
           DISABLE_SCALE_IN:              "1"
-          ASG_NAME:                      !Ref AutoScaleGroup
+          ASG_NAME:                      !Ref AgentAutoScaleGroup
           MIN_SIZE:                      !Ref MinSize
           MAX_SIZE:                      !Ref MaxSize
           SCALE_OUT_FACTOR:              !Ref ScaleOutFactor
