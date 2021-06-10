@@ -1,32 +1,26 @@
 steps:
   - name: ":golang:"
-    key: test
     command: ".buildkite/steps/tests.sh"
     plugins:
       - docker#v3.1.0:
           image: "golang:1.15"
           workdir: /go/src/github.com/buildkite/buildkite-agent-scaler
 
+  - wait
   - name: ":lambda:"
-    key: build
     command: .buildkite/steps/build-lambda.sh
     artifact_paths:
       - handler.zip
 
+  - wait
   - label: ":s3:"
-    key: upload
     command: ".buildkite/steps/upload-to-s3.sh"
     agents:
       queue: "deploy"
-    depends_on:
-      - test
-      - build
 
+  - wait
   - name: ":pipeline:"
-    key: release
     command: .buildkite/steps/upload-release-steps.sh
     branches: master
-    depends_on:
-      - upload
 
 
