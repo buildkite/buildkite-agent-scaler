@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"log"
+	"time"
 
 	"github.com/buildkite/buildkite-agent-scaler/buildkite"
 	"github.com/buildkite/buildkite-agent-scaler/scaler"
@@ -22,8 +23,8 @@ func main() {
 		includeWaiting      = flag.Bool("include-waiting", false, "Whether to include jobs behind a wait step for scaling")
 
 		// scale in/out params
-		scaleInFactor  = flag.Float64("scale-in-factor", 1.0, "A factor to apply to scale ins")
-		scaleOutFactor = flag.Float64("scale-out-factor", 1.0, "A factor to apply to scale outs")
+		scaleInFactor   = flag.Float64("scale-in-factor", 1.0, "A factor to apply to scale ins")
+		scaleOutFactor  = flag.Float64("scale-out-factor", 1.0, "A factor to apply to scale outs")
 
 		// general params
 		dryRun = flag.Bool("dry-run", false, "Whether to just show what would be done")
@@ -58,7 +59,21 @@ func main() {
 		log.Printf("Running as a dry-run, no changes will be made")
 	}
 
-	if _, err := scaler.Run(); err != nil {
-		log.Fatal(err)
+	var interval time.Duration = 10 * time.Second;
+
+	for {
+		minPollDuration, err := scaler.Run()
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		if interval < minPollDuration {
+			interval = minPollDuration
+			log.Printf("Increasing poll interval to %v based on rate limit", interval)
+		}
+
+		log.Printf("Waiting for %v", interval)
+		log.Println("")
+		time.Sleep(interval)
 	}
 }

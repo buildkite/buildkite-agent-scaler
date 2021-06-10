@@ -38,15 +38,25 @@ type AgentMetrics struct {
 	RunningJobs   int64
 	PollDuration  time.Duration
 	WaitingJobs   int64
+	IdleAgents    int64
+	BusyAgents    int64
+	TotalAgents   int64
 }
 
 func (c *Client) GetAgentMetrics(queue string) (AgentMetrics, error) {
-	log.Printf("Collecting agent metrics for queue %q", queue)
+	log.Printf("Collecting Buildkite metrics for queue %q", queue)
 
 	var resp struct {
 		Organization struct {
 			Slug string `json:"slug"`
 		} `json:"organization"`
+		Agents struct {
+			Queues map[string]struct {
+				Busy  int64 `json:"busy"`
+				Idle  int64 `json:"idle"`
+				Total int64 `json:"total"`
+			} `json:"queues"`
+		} `json:"agents"`
 		Jobs struct {
 			Queues map[string]struct {
 				Scheduled int64 `json:"scheduled"`
@@ -69,14 +79,23 @@ func (c *Client) GetAgentMetrics(queue string) (AgentMetrics, error) {
 	metrics.Queue = queue
 	metrics.PollDuration = pollDuration
 
+	if queue, exists := resp.Agents.Queues[queue]; exists {
+		metrics.IdleAgents = queue.Idle
+		metrics.BusyAgents = queue.Busy
+		metrics.TotalAgents = queue.Total
+	}
+
 	if queue, exists := resp.Jobs.Queues[queue]; exists {
 		metrics.ScheduledJobs = queue.Scheduled
 		metrics.RunningJobs = queue.Running
 		metrics.WaitingJobs = queue.Waiting
 	}
 
-	log.Printf("↳ Got scheduled=%d, running=%d, waiting=%d (took %v)",
+	log.Printf("↳ Agents: idle=%d, busy=%d, total=%d",
+		metrics.IdleAgents, metrics.BusyAgents, metrics.TotalAgents)
+	log.Printf("↳ Jobs: scheduled=%d, running=%d, waiting=%d (took %v)",
 		metrics.ScheduledJobs, metrics.RunningJobs, metrics.WaitingJobs, queryDuration)
+
 	return metrics, nil
 }
 
@@ -85,11 +104,9 @@ func (c *Client) queryMetrics(into interface{}) (pollDuration time.Duration, err
 	if err != nil {
 		return time.Duration(0), err
 	}
-
-	method := http.MethodGet
 	endpoint.Path += "/metrics"
 
-	req, err := http.NewRequest(method, endpoint.String(), nil)
+	req, err := http.NewRequest(http.MethodGet, endpoint.String(), nil)
 	if err != nil {
 		return time.Duration(0), err
 	}
@@ -103,7 +120,7 @@ func (c *Client) queryMetrics(into interface{}) (pollDuration time.Duration, err
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		return time.Duration(0), fmt.Errorf("%s %s: %s", method, endpoint, res.Status)
+		return time.Duration(0), fmt.Errorf("%s %s: %s", req.Method, endpoint, res.Status)
 	}
 
 	// Check if we get a poll duration header from server

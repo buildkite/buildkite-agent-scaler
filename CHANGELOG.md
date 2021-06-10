@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## [v1.1.0](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.0.2...v1.1.0) (2021-04-14)
+
+* When the elastic stack is very small (<=2 running instances), consider adding a new instance when we suspect the current instances are shutting down and there's pending jobs [#40](https://github.com/buildkite/buildkite-agent-scaler/pull/40) ([nitrocode](https://github.com/dbaggerman))
+
+## [v1.0.2](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.0.1...v1.0.2) (2020-10-19)
+
+* Respect Auto Scaling Group MaxSize and MinSize [#37](https://github.com/buildkite/buildkite-agent-scaler/pull/37) ([nitrocode](https://github.com/nitrocode))
+* Support 6 more regions: af-south-1, ap-east-1. ca-central-1, eu-south-1, eu-west-3, eu-north-1, me-south-1 [#33](https://github.com/buildkite/buildkite-agent-scaler/pull/33) ([JuanitoFatas](https://github.com/JuanitoFatas))
+
 ## [v1.0.1](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.0.0...v1.0.1) (2019-11-27)
 
 * Handle HTTP errors from metrics API [#23](https://github.com/buildkite/buildkite-agent-scaler/pull/23) ([pda](https://github.com/pda))
