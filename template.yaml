@@ -1,12 +1,16 @@
 ---
-Description: Autoscaling Lambda for Buildkite Agents on an ALB
+Description: Autoscaling Lambda for elastic-ci stack Buildkite Agents
+Transform: AWS::Serverless-2016-10-31
 
 Parameters:
-  BuildkiteAgentToken:
-    Description: Buildkite agent token
+  BuildkiteAgentTokenParameter:
+    Description: Buildkite agent token parameter
+    Type: AWS::SSM::Parameter::Name
+
+  BuildkiteAgentTokenParameterStoreKMSKey:
+    Description: AWS KMS Key ID used to encrypt the SSM parameter (if encrypted)
     Type: String
-    NoEcho: true
-    MinLength: 1
+    Default: ""
 
   BuildkiteQueue:
     Description: Queue name that agents will use, targeted in pipeline steps using "queue={value}"
@@ -15,20 +19,44 @@ Parameters:
     MinLength: 1
 
   AgentAutoScaleGroup:
-    Description: The name of the ALB to autoscale
+    Description: The name of the autoscale group to autoscale.
     Type: String
     Default: default
 
-  ScaleInCooldownPeriod:
-    Description: Cooldown period between scale in events
+  AutoscalingLambdaExecutionRole:
+    Description: IAM Role ARN
     Type: String
-    Default: 5m
+    Default: ''
 
-  ScaleInAdjustment:
-    Description: Maximum adjustment to the desired capacity on scale in
+  AgentsPerInstance:
+    Description: ""
     Type: Number
-    MaxValue: -1
-    Default: -1
+
+  MinSize:
+    Description: ""
+    Type: String
+
+  MaxSize:
+    Description: ""
+    Type: String
+
+  ScaleOutFactor:
+    Description: ""
+    Type: Number
+
+  ScaleOutForWaitingJobs:
+    Description: ""
+    Type: String
+    AllowedValues:
+      - "true"
+      - "false"
+    Default: "false"
+
+Conditions:
+  CreateRole:
+    !Equals [ !Ref AutoscalingLambdaExecutionRole, '' ]
+  UseKmsKeyForParameterStore:
+    !Not [ !Equals [ !Ref BuildkiteAgentTokenParameterStoreKMSKey, "" ] ]
 
 Mappings:
   LambdaBucket:
@@ -54,9 +82,9 @@ Mappings:
     sa-east-1: { Bucket: "buildkite-lambdas-sa-east-1" }
 
 Resources:
-  AutoscalingLambdaExecutionRole:
+  ExecutionRole:
     Type: AWS::IAM::Role
-    Condition: UseLambdaAutoscaling
+    Condition: CreateRole
     Properties:
       Path: "/"
       AssumeRolePolicyDocument:
@@ -71,74 +99,80 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
       Policies:
-        - PolicyName: DescribeECSResources
+        - PolicyName: AutoScalingGroups
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-            - Effect: Allow
-              Action:
-                - ecs:Describe*
-                - ecs:List*
-              Resource: '*'
-        - PolicyName: ModifySpotFleet
+              - Effect: Allow
+                Action:
+                  - autoscaling:DescribeAutoScalingGroups
+                  # *
+                  - autoscaling:SetDesiredCapacity
+                  # # arn:aws:autoscaling:$region:$account:autoScalingGroup:$uuid:autoScalingGroupName/$name
+                Resource: '*'
+        - PolicyName: WriteCloudwatchMetrics
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-            - Effect: Allow
-              Action:
-                - ec2:DescribeSpotFleetRequests
-                - ec2:ModifySpotFleetRequest
-              Resource: '*'
-
-
-  # This mirrors the group that would be created by the lambda, but enforces
-  # a retention period and also ensures it's removed when the stack is removed
-  AutoscalingLogGroup:
-    Type: "AWS::Logs::LogGroup"
-    Condition: UseLambdaAutoscaling
-    Properties:
-      LogGroupName: !Join ["/", ["/aws/lambda", !Ref AutoscalingFunction]]
-      RetentionInDays: 1
+              - Effect: Allow
+                Action: cloudwatch:PutMetricData
+                Resource: '*'
+        - PolicyName: ReadAgentToken
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${BuildkiteAgentTokenParameter}
+        - !If
+          - UseKmsKeyForParameterStore
+          - PolicyName: DecryptAgentToken
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action: kms:Decrypt
+                  Resource: !Sub arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/${BuildkiteAgentTokenParameterStoreKMSKey}
+          - !Ref 'AWS::NoValue'
 
   AutoscalingFunction:
-    Type: AWS::Lambda::Function
-    Condition: UseLambdaAutoscaling
+    Type: AWS::Serverless::Function
     Properties:
-      Code:
-        S3Bucket: !Ref AutoscalingLambdaBucket
-        S3Key: "ec2-agent-scaler.zip"
-        S3ObjectVersion: !Ref AutoscalingLambdaObjectVersion
-      Role: !GetAtt AutoscalingLambdaExecutionRole.Arn
+      CodeUri: handler.zip
+      Role: !If [ CreateRole, !GetAtt ExecutionRole.Arn, !Ref AutoscalingLambdaExecutionRole ]
       Timeout: 120
       Handler: handler
       Runtime: go1.x
       MemorySize: 128
       Environment:
         Variables:
-          BUILDKITE_AGENT_TOKEN:    !Ref BuildkiteAgentToken
-          BUILDKITE_QUEUE:          !Ref BuildkiteQueue
-          ASG_NAME:                 !Ref AgentAutoScaleGroup
-          SCALE_IN_COOLDOWN_PERIOD: !Ref ScaleInCooldownPeriod
-          SCALE_IN_ADJUSTMENT:      !Ref ScaleInAdjustment
-          LAMBDA_TIMEOUT:           1m
-          LAMBDA_INTERVAL:          20s
+          BUILDKITE_AGENT_TOKEN_SSM_KEY: !Ref BuildkiteAgentTokenParameter
+          BUILDKITE_QUEUE:               !Ref BuildkiteQueue
+          AGENTS_PER_INSTANCE:           !Ref AgentsPerInstance
+          CLOUDWATCH_METRICS:            "1"
+          DISABLE_SCALE_IN:              "1"
+          ASG_NAME:                      !Ref AgentAutoScaleGroup
+          MIN_SIZE:                      !Ref MinSize
+          MAX_SIZE:                      !Ref MaxSize
+          SCALE_OUT_FACTOR:              !Ref ScaleOutFactor
+          INCLUDE_WAITING:               !Ref ScaleOutForWaitingJobs
+          LAMBDA_TIMEOUT:                "50s"
+          LAMBDA_INTERVAL:               "10s"
+      Events:
+        Timer:
+          Type: Schedule
+          Properties:
+            Schedule: "rate(1 minute)"
 
-  AutoscalingLambdaScheduledRule:
-    Type: "AWS::Events::Rule"
-    Condition: UseLambdaAutoscaling
+  # This mirrors the group that would be created by the lambda, but enforces
+  # a retention period and also ensures it's removed when the stack is removed
+  LogGroup:
+    Type: "AWS::Logs::LogGroup"
     Properties:
-      Description: "ScheduledRule"
-      ScheduleExpression: "rate(1 minute)"
-      State: !Ref AutoscalingLambdaScheduleState
-      Targets:
-        - Arn: !GetAtt AutoscalingFunction.Arn
-          Id: "AutoscalingFunction"
+      LogGroupName: !Sub "/aws/lambda/${AutoscalingFunction}"
+      RetentionInDays: 1
 
-  PermissionForEventsToInvokeAutoscalingLambda:
-    Type: "AWS::Lambda::Permission"
-    Condition: UseLambdaAutoscaling
-    Properties:
-      FunctionName: !Ref AutoscalingFunction
-      Action: "lambda:InvokeFunction"
-      Principal: "events.amazonaws.com"
-      SourceArn: !GetAtt AutoscalingLambdaScheduledRule.Arn
+Outputs:
+  ExecutionRoleName:
+    Description: Name of the Lambda IAM execution role.
+    Value: !If [ CreateRole, !Ref ExecutionRole, '' ]
