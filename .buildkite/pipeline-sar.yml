@@ -39,7 +39,7 @@ steps:
     key: sar
     command:
       - buildkite-agent artifact download 'packaged.yml' .
-      - aws serverlessrepo create-application-version --application-id arn:aws:serverlessrepo:us-east-1:172840064832:applications/buildkite-elastic-ci-scaler --template-body file://packaged.yml --semantic-version "$(buildkite-agent meta-data get version)" --source-code-url "https://github.com/buildkite/buildkite-agent-scaler/tree/$(git rev-parse HEAD)/"
+      - aws serverlessrepo create-application-version --application-id arn:aws:serverlessrepo:us-east-1:172840064832:applications/buildkite-agent-scaler --template-body file://packaged.yml --semantic-version "$(buildkite-agent meta-data get version)" --source-code-url "https://github.com/buildkite/buildkite-agent-scaler/tree/$(git rev-parse HEAD)/"
     agents:
       queue: on-demand
       image: 172840064832.dkr.ecr.us-east-1.amazonaws.com/agent/sam
