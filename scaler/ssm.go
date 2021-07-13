@@ -6,8 +6,8 @@ import (
 	"github.com/aws/aws-sdk-go/service/ssm"
 )
 
-func RetrieveFromParameterStore(key string) (string, error) {
-	ssmClient := ssm.New(session.New())
+func RetrieveFromParameterStore(sess *session.Session, key string) (string, error) {
+	ssmClient := ssm.New(sess)
 	output, err := ssmClient.GetParameter(&ssm.GetParameterInput{
 		Name:           &key,
 		WithDecryption: aws.Bool(true),

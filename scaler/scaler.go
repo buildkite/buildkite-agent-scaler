@@ -5,6 +5,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/buildkite/buildkite-agent-scaler/buildkite"
 )
 
@@ -39,12 +40,12 @@ type Scaler struct {
 	metrics interface {
 		Publish(orgSlug, queue string, metrics map[string]int64) error
 	}
-	scaling ScalingCalculator
+	scaling        ScalingCalculator
 	scaleInParams  ScaleParams
 	scaleOutParams ScaleParams
 }
 
-func NewScaler(client *buildkite.Client, params Params) (*Scaler, error) {
+func NewScaler(client *buildkite.Client, sess *session.Session, params Params) (*Scaler, error) {
 	scaler := &Scaler{
 		bk: &buildkiteDriver{
 			client: client,
@@ -68,6 +69,7 @@ func NewScaler(client *buildkite.Client, params Params) (*Scaler, error) {
 	} else {
 		scaler.autoscaling = &asgDriver{
 			name: params.AutoScalingGroupName,
+			sess: sess,
 		}
 
 		if params.PublishCloudWatchMetrics {
