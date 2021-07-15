@@ -28,21 +28,14 @@ func main() {
 		scaleOutFactor = flag.Float64("scale-out-factor", 1.0, "A factor to apply to scale outs")
 
 		// general params
-		dryRun       = flag.Bool("dry-run", false, "Whether to just show what would be done")
-		sharedConfig = flag.Bool("aws-shared-config", false, "Whether to enable shared config for the AWS SDK")
+		dryRun = flag.Bool("dry-run", false, "Whether to just show what would be done")
 	)
 	flag.Parse()
 
 	// establish an AWS session to be re-used
-	var sess *session.Session
-
-	if *sharedConfig {
-		sess = session.Must(session.NewSessionWithOptions(session.Options{
-			SharedConfigState: session.SharedConfigEnable,
-		}))
-	} else {
-		sess = session.New()
-	}
+	sess := session.Must(session.NewSessionWithOptions(session.Options{
+		SharedConfigState: session.SharedConfigEnable,
+	}))
 
 	if *ssmTokenKey != "" {
 		token, err := scaler.RetrieveFromParameterStore(sess, *ssmTokenKey)
