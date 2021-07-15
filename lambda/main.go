@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/buildkite/buildkite-agent-scaler/buildkite"
 	"github.com/buildkite/buildkite-agent-scaler/scaler"
 	"github.com/buildkite/buildkite-agent-scaler/version"
@@ -114,6 +115,9 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		return vi
 	}
 
+	// establish an AWS session to be re-used
+	sess := session.New()
+
 	for {
 		select {
 		case <-timeout:
@@ -124,7 +128,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 
 			if ssmTokenKey != "" {
 				var err error
-				token, err = scaler.RetrieveFromParameterStore(ssmTokenKey)
+				token, err = scaler.RetrieveFromParameterStore(sess, ssmTokenKey)
 				if err != nil {
 					return "", err
 				}
@@ -170,7 +174,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 				params.ScaleOutParams.Disable = true
 			}
 
-			scaler, err := scaler.NewScaler(client, params)
+			scaler, err := scaler.NewScaler(client, sess, params)
 			if err != nil {
 				log.Fatal(err)
 			}

@@ -14,11 +14,12 @@ const (
 
 // cloudWatchMetricsPublisher sends queue metrics to AWS CloudWatch
 type cloudWatchMetricsPublisher struct {
+	sess *session.Session
 }
 
 // Publish queue metrics to CloudWatch Metrics
 func (cp *cloudWatchMetricsPublisher) Publish(orgSlug, queue string, metrics map[string]int64) error {
-	svc := cloudwatch.New(session.New())
+	svc := cloudwatch.New(cp.sess)
 
 	datum := []*cloudwatch.MetricDatum{}
 

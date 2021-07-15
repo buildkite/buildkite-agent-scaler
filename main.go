@@ -5,6 +5,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/buildkite/buildkite-agent-scaler/buildkite"
 	"github.com/buildkite/buildkite-agent-scaler/scaler"
 )
@@ -23,16 +24,21 @@ func main() {
 		includeWaiting      = flag.Bool("include-waiting", false, "Whether to include jobs behind a wait step for scaling")
 
 		// scale in/out params
-		scaleInFactor   = flag.Float64("scale-in-factor", 1.0, "A factor to apply to scale ins")
-		scaleOutFactor  = flag.Float64("scale-out-factor", 1.0, "A factor to apply to scale outs")
+		scaleInFactor  = flag.Float64("scale-in-factor", 1.0, "A factor to apply to scale ins")
+		scaleOutFactor = flag.Float64("scale-out-factor", 1.0, "A factor to apply to scale outs")
 
 		// general params
 		dryRun = flag.Bool("dry-run", false, "Whether to just show what would be done")
 	)
 	flag.Parse()
 
+	// establish an AWS session to be re-used
+	sess := session.Must(session.NewSessionWithOptions(session.Options{
+		SharedConfigState: session.SharedConfigEnable,
+	}))
+
 	if *ssmTokenKey != "" {
-		token, err := scaler.RetrieveFromParameterStore(*ssmTokenKey)
+		token, err := scaler.RetrieveFromParameterStore(sess, *ssmTokenKey)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -41,7 +47,7 @@ func main() {
 
 	client := buildkite.NewClient(*buildkiteAgentToken)
 
-	scaler, err := scaler.NewScaler(client, scaler.Params{
+	scaler, err := scaler.NewScaler(client, sess, scaler.Params{
 		BuildkiteQueue:           *buildkiteQueue,
 		AutoScalingGroupName:     *asgName,
 		AgentsPerInstance:        *agentsPerInstance,
@@ -59,7 +65,7 @@ func main() {
 		log.Printf("Running as a dry-run, no changes will be made")
 	}
 
-	var interval time.Duration = 10 * time.Second;
+	var interval time.Duration = 10 * time.Second
 
 	for {
 		minPollDuration, err := scaler.Run()

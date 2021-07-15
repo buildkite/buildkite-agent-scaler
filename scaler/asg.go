@@ -19,12 +19,13 @@ type AutoscaleGroupDetails struct {
 
 type asgDriver struct {
 	name string
+	sess *session.Session
 }
 
 func (a *asgDriver) Describe() (AutoscaleGroupDetails, error) {
 	log.Printf("Collecting AutoScaling details for ASG %q", a.name)
 
-	svc := autoscaling.New(session.New())
+	svc := autoscaling.New(a.sess)
 	input := &autoscaling.DescribeAutoScalingGroupsInput{
 		AutoScalingGroupNames: []*string{
 			aws.String(a.name),
@@ -64,7 +65,7 @@ func (a *asgDriver) Describe() (AutoscaleGroupDetails, error) {
 }
 
 func (a *asgDriver) SetDesiredCapacity(count int64) error {
-	svc := autoscaling.New(session.New())
+	svc := autoscaling.New(a.sess)
 	input := &autoscaling.SetDesiredCapacityInput{
 		AutoScalingGroupName: aws.String(a.name),
 		DesiredCapacity:      aws.Int64(count),
