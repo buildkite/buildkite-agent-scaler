@@ -123,20 +123,29 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		case <-timeout:
 			return "", nil
 		default:
-			token := os.Getenv(`BUILDKITE_AGENT_TOKEN`)
-			ssmTokenKey := os.Getenv("BUILDKITE_AGENT_TOKEN_SSM_KEY")
+			var token string
 
-			if ssmTokenKey != "" {
+			if ssmTokenKey := os.Getenv("BUILDKITE_AGENT_TOKEN_SSM_KEY"); ssmTokenKey != "" {
+				log.Printf("Fetching credentials from SSM Parameter Store %s", ssmTokenKey)
 				var err error
 				token, err = scaler.RetrieveFromParameterStore(sess, ssmTokenKey)
 				if err != nil {
 					return "", err
 				}
+			} else if smTokenKey := os.Getenv("BUILDKITE_AGENT_TOKEN_SM_KEY"); smTokenKey != "" {
+				log.Printf("Fetching credentials from Secrets Manager %s", smTokenKey)
+				var err error
+				token, err = scaler.RetrieveFromSecretsManager(sess, smTokenKey)
+				if err != nil {
+					return "", err
+				}
+			} else if token = os.Getenv(`BUILDKITE_AGENT_TOKEN`); token != "" {
+				log.Printf("Fetching credentials from BUILDKITE_AGENT_TOKEN in env")
 			}
 
 			if token == "" {
 				return "", errors.New(
-					"Must provide either BUILDKITE_AGENT_TOKEN or BUILDKITE_AGENT_TOKEN_SSM_KEY",
+					"Must provide either BUILDKITE_AGENT_TOKEN, BUILDKITE_AGENT_TOKEN_SSM_KEY or BUILDKITE_AGENT_TOKEN_SM_KEY",
 				)
 			}
 

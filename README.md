@@ -40,7 +40,7 @@ An AWS Lambda bundle is created and published as part of the build process. The 
 
 It's entrypoint is `handler`, it requires a `go1.x` environment and requires the following env vars:
 
-- `BUILDKITE_AGENT_TOKEN` or `BUILDKITE_AGENT_TOKEN_SSM_KEY`
+- `BUILDKITE_AGENT_TOKEN` or `BUILDKITE_AGENT_TOKEN_SSM_KEY` or `BUILDKITE_AGENT_TOKEN_SM_KEY`
 - `BUILDKITE_QUEUE`
 - `AGENTS_PER_INSTANCE`
 - `ASG_NAME`

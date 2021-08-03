@@ -17,6 +17,7 @@ func main() {
 		agentsPerInstance = flag.Int("agents-per-instance", 1, "The number of agents per instance")
 		cwMetrics         = flag.Bool("cloudwatch-metrics", false, "Whether to publish cloudwatch metrics")
 		ssmTokenKey       = flag.String("agent-token-ssm-key", "", "The AWS SSM Parameter Store key for the agent token")
+		smTokenKey        = flag.String("agent-token-sm-key", "", "The AWS Secrets Manager key for the agent token")
 
 		// buildkite params
 		buildkiteQueue      = flag.String("queue", "default", "The queue to watch in the metrics")
@@ -37,8 +38,14 @@ func main() {
 		SharedConfigState: session.SharedConfigEnable,
 	}))
 
-	if *ssmTokenKey != "" {
-		token, err := scaler.RetrieveFromParameterStore(sess, *ssmTokenKey)
+	if path := *ssmTokenKey; path != "" {
+		token, err := scaler.RetrieveFromParameterStore(sess, path)
+		if err != nil {
+			log.Fatal(err)
+		}
+		buildkiteAgentToken = &token
+	} else if key := *smTokenKey; key != "" {
+		token, err := scaler.RetrieveFromSecretsManager(sess, key)
 		if err != nil {
 			log.Fatal(err)
 		}
