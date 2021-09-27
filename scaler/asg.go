@@ -17,18 +17,18 @@ type AutoscaleGroupDetails struct {
 	MaxSize      int64
 }
 
-type asgDriver struct {
-	name string
-	sess *session.Session
+type ASGDriver struct {
+	Name string
+	Sess *session.Session
 }
 
-func (a *asgDriver) Describe() (AutoscaleGroupDetails, error) {
-	log.Printf("Collecting AutoScaling details for ASG %q", a.name)
+func (a *ASGDriver) Describe() (AutoscaleGroupDetails, error) {
+	log.Printf("Collecting AutoScaling details for ASG %q", a.Name)
 
-	svc := autoscaling.New(a.sess)
+	svc := autoscaling.New(a.Sess)
 	input := &autoscaling.DescribeAutoScalingGroupsInput{
 		AutoScalingGroupNames: []*string{
-			aws.String(a.name),
+			aws.String(a.Name),
 		},
 	}
 
@@ -64,10 +64,10 @@ func (a *asgDriver) Describe() (AutoscaleGroupDetails, error) {
 	return details, nil
 }
 
-func (a *asgDriver) SetDesiredCapacity(count int64) error {
-	svc := autoscaling.New(a.sess)
+func (a *ASGDriver) SetDesiredCapacity(count int64) error {
+	svc := autoscaling.New(a.Sess)
 	input := &autoscaling.SetDesiredCapacityInput{
-		AutoScalingGroupName: aws.String(a.name),
+		AutoScalingGroupName: aws.String(a.Name),
 		DesiredCapacity:      aws.Int64(count),
 		HonorCooldown:        aws.Bool(false),
 	}
@@ -78,6 +78,51 @@ func (a *asgDriver) SetDesiredCapacity(count int64) error {
 	}
 
 	return nil
+}
+
+func (a *ASGDriver) GetAutoscalingActivities(nextToken *string) (*autoscaling.DescribeScalingActivitiesOutput, error) {
+	svc := autoscaling.New(a.Sess)
+	input := &autoscaling.DescribeScalingActivitiesInput{
+		AutoScalingGroupName: aws.String(a.Name),
+		NextToken: nextToken,
+	}
+	return svc.DescribeScalingActivities(input)
+}
+
+func (a *ASGDriver) GetLastTerminatingActivity() (*autoscaling.Activity, error) {
+	const terminatingKey = "Terminating"
+	var nextToken *string
+	for {
+		output, err := a.GetAutoscalingActivities(nextToken)
+		if err != nil {
+			return nil, err
+		}
+		for _, activity := range output.Activities {
+			if strings.Contains(*activity.Description, terminatingKey) {
+				return activity, nil
+			}
+		}
+		nextToken = output.NextToken
+	}
+	return nil, nil
+}
+
+func (a *ASGDriver) GetLastLaunchingActivity() (*autoscaling.Activity, error) {
+	const launchingKey = "Launching"
+	var nextToken *string
+	for {
+		output, err := a.GetAutoscalingActivities(nextToken)
+		if err != nil {
+			return nil, err
+		}
+		for _, activity := range output.Activities {
+			if strings.Contains(*activity.Description, launchingKey) {
+				return activity, nil
+			}
+		}
+		nextToken = output.NextToken
+	}
+	return nil, nil
 }
 
 type dryRunASG struct {
