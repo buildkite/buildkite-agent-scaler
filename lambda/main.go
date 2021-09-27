@@ -18,12 +18,6 @@ import (
 	"github.com/buildkite/buildkite-agent-scaler/version"
 )
 
-// Stores the last time we scaled in/out in global lambda state
-// On a cold start this will be reset to a zero value
-var (
-	lastScaleIn, lastScaleOut time.Time
-)
-
 func main() {
 	if os.Getenv(`DEBUG`) != "" {
 		_, err := Handler(context.Background(), json.RawMessage([]byte{}))
@@ -141,7 +135,26 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 			}
 
 			client := buildkite.NewClient(token)
-
+			asg := &scaler.ASGDriver{
+				Name: mustGetEnv(`ASG_NAME`),
+				Sess: sess,
+			}
+			var lastScaleIn time.Time
+			output, err := asg.GetLastTerminatingActivity()
+			if err != nil {
+				log.Fatal(err)
+			}
+			if output != nil {
+				lastScaleIn = *output.StartTime
+			}
+			var lastScaleOut time.Time
+			output, err = asg.GetLastLaunchingActivity()
+			if err != nil {
+				log.Fatal(err)
+			}
+			if output != nil {
+				lastScaleOut = *output.StartTime
+			}
 			params := scaler.Params{
 				BuildkiteQueue:       mustGetEnv(`BUILDKITE_QUEUE`),
 				AutoScalingGroupName: mustGetEnv(`ASG_NAME`),
@@ -189,10 +202,6 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 				log.Printf("Increasing poll interval to %v based on rate limit",
 					interval)
 			}
-
-			// Persist the times back into the global state
-			lastScaleIn = scaler.LastScaleIn()
-			lastScaleOut = scaler.LastScaleOut()
 
 			log.Printf("Waiting for %v", interval)
 			time.Sleep(interval)
