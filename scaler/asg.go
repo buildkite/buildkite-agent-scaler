@@ -120,6 +120,9 @@ func (a *ASGDriver) GetLastLaunchingActivity() (*autoscaling.Activity, error) {
 				return activity, nil
 			}
 		}
+		if output.NextToken == nil {
+			break
+		}
 		nextToken = output.NextToken
 	}
 	return nil, nil
