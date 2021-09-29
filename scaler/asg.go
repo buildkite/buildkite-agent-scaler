@@ -10,6 +10,10 @@ import (
 	"github.com/aws/aws-sdk-go/service/autoscaling"
 )
 
+const (
+	activitySucessfulStatusCode = "Successful"
+)
+
 type AutoscaleGroupDetails struct {
 	Pending      int64
 	DesiredCount int64
@@ -98,11 +102,14 @@ func (a *ASGDriver) GetLastTerminatingActivity() (*autoscaling.Activity, error) 
 			return nil, err
 		}
 		for _, activity := range output.Activities {
-			if strings.Contains(*activity.Description, terminatingKey) {
+			if *activity.StatusCode == activitySucessfulStatusCode && strings.Contains(*activity.Description, terminatingKey) {
 				return activity, nil
 			}
 		}
 		nextToken = output.NextToken
+		if nextToken == nil {
+			break
+		}
 	}
 	return nil, nil
 }
@@ -116,14 +123,14 @@ func (a *ASGDriver) GetLastLaunchingActivity() (*autoscaling.Activity, error) {
 			return nil, err
 		}
 		for _, activity := range output.Activities {
-			if strings.Contains(*activity.Description, launchingKey) {
+			if *activity.StatusCode == activitySucessfulStatusCode && strings.Contains(*activity.Description, launchingKey) {
 				return activity, nil
 			}
 		}
-		if output.NextToken == nil {
+		nextToken = output.NextToken
+		if nextToken == nil {
 			break
 		}
-		nextToken = output.NextToken
 	}
 	return nil, nil
 }
