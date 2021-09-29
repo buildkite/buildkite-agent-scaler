@@ -93,8 +93,8 @@ func (a *ASGDriver) GetAutoscalingActivities(nextToken *string) (*autoscaling.De
 	return svc.DescribeScalingActivities(input)
 }
 
-func (a *ASGDriver) GetLastTerminatingActivity() (*autoscaling.Activity, error) {
-	const terminatingKey = "Terminating"
+func (a *ASGDriver) GetLastScalingInActivity() (*autoscaling.Activity, error) {
+	const shrinkingKey = "shrinking the capacity"
 	var nextToken *string
 	for {
 		output, err := a.GetAutoscalingActivities(nextToken)
@@ -102,7 +102,7 @@ func (a *ASGDriver) GetLastTerminatingActivity() (*autoscaling.Activity, error) 
 			return nil, err
 		}
 		for _, activity := range output.Activities {
-			if *activity.StatusCode == activitySucessfulStatusCode && strings.Contains(*activity.Description, terminatingKey) {
+			if *activity.StatusCode == activitySucessfulStatusCode && strings.Contains(*activity.Cause, shrinkingKey) {
 				return activity, nil
 			}
 		}
@@ -114,8 +114,8 @@ func (a *ASGDriver) GetLastTerminatingActivity() (*autoscaling.Activity, error) 
 	return nil, nil
 }
 
-func (a *ASGDriver) GetLastLaunchingActivity() (*autoscaling.Activity, error) {
-	const launchingKey = "Launching"
+func (a *ASGDriver) GetLastScalingOutActivity() (*autoscaling.Activity, error) {
+	const scalingOutKey = "increasing the capacity"
 	var nextToken *string
 	for {
 		output, err := a.GetAutoscalingActivities(nextToken)
@@ -123,7 +123,7 @@ func (a *ASGDriver) GetLastLaunchingActivity() (*autoscaling.Activity, error) {
 			return nil, err
 		}
 		for _, activity := range output.Activities {
-			if *activity.StatusCode == activitySucessfulStatusCode && strings.Contains(*activity.Description, launchingKey) {
+			if *activity.StatusCode == activitySucessfulStatusCode && strings.Contains(*activity.Cause, scalingOutKey) {
 				return activity, nil
 			}
 		}

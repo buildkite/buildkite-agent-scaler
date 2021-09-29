@@ -140,7 +140,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 				Sess: sess,
 			}
 			var lastScaleIn time.Time
-			output, err := asg.GetLastTerminatingActivity()
+			output, err := asg.GetLastScalingInActivity()
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -148,7 +148,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 				lastScaleIn = *output.StartTime
 			}
 			var lastScaleOut time.Time
-			output, err = asg.GetLastLaunchingActivity()
+			output, err = asg.GetLastScalingOutActivity()
 			if err != nil {
 				log.Fatal(err)
 			}
