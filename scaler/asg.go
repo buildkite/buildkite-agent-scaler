@@ -12,6 +12,7 @@ import (
 
 const (
 	activitySucessfulStatusCode = "Successful"
+	userRequestForChangingDesiredCapacity = "a user request explicitly set group desired capacity changing the desired capacity"
 )
 
 type AutoscaleGroupDetails struct {
@@ -102,7 +103,10 @@ func (a *ASGDriver) GetLastScalingInActivity() (*autoscaling.Activity, error) {
 			return nil, err
 		}
 		for _, activity := range output.Activities {
-			if *activity.StatusCode == activitySucessfulStatusCode && strings.Contains(*activity.Cause, shrinkingKey) {
+			// Filter for successful activity and explicit desired count changes
+			if *activity.StatusCode == activitySucessfulStatusCode &&
+				strings.Contains(*activity.Cause, userRequestForChangingDesiredCapacity) &&
+				strings.Contains(*activity.Cause, shrinkingKey) {
 				return activity, nil
 			}
 		}
@@ -123,7 +127,10 @@ func (a *ASGDriver) GetLastScalingOutActivity() (*autoscaling.Activity, error) {
 			return nil, err
 		}
 		for _, activity := range output.Activities {
-			if *activity.StatusCode == activitySucessfulStatusCode && strings.Contains(*activity.Cause, scalingOutKey) {
+			// Filter for successful activity and explicit desired count changes
+			if *activity.StatusCode == activitySucessfulStatusCode &&
+				strings.Contains(*activity.Cause, userRequestForChangingDesiredCapacity) &&
+				strings.Contains(*activity.Cause, scalingOutKey) {
 				return activity, nil
 			}
 		}
