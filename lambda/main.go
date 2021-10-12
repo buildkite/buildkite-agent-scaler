@@ -150,16 +150,6 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 
 			client := buildkite.NewClient(token)
 
-			// Set latest event as the last scale in or out event
-			log.Printf("Last Scale In Event %s", lastScaleIn.String())
-			log.Printf("Last Scale Out Event %s", lastScaleOut.String())
-			if scaleOnlyAfterAllEvent == true && lastScaleIn.Before(lastScaleOut) {
-				lastScaleIn = lastScaleOut
-			}
-			if scaleOnlyAfterAllEvent == true && lastScaleOut.Before(lastScaleIn) {
-				lastScaleOut = lastScaleIn
-			}
-
 			params := scaler.Params{
 				BuildkiteQueue:       mustGetEnv(`BUILDKITE_QUEUE`),
 				AutoScalingGroupName: mustGetEnv(`ASG_NAME`),
@@ -175,6 +165,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 					Factor:         scaleOutFactor,
 					LastEvent:      lastScaleOut,
 				},
+				ScaleOnlyAfterAllEvent: scaleOnlyAfterAllEvent,
 			}
 
 			if m := os.Getenv(`CLOUDWATCH_METRICS`); m == `true` || m == `1` {

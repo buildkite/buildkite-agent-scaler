@@ -213,6 +213,28 @@ func TestScalingOutWithoutError(t *testing.T) {
 			currentDesiredCapacity:  1,
 			expectedDesiredCapacity: 1,
 		},
+		// Do not scale out after scale in
+		{
+			metrics: buildkite.AgentMetrics{
+				ScheduledJobs: 1,
+				IdleAgents:  0,
+				TotalAgents:   0,
+			},
+			params: Params{
+				AgentsPerInstance: 1,
+				ScaleOutParams: ScaleParams{
+					LastEvent:      time.Now().Add(-10 * time.Minute),
+					CooldownPeriod: 2 * time.Minute,
+				},
+				ScaleInParams: ScaleParams{
+					LastEvent:time.Now().Add(-1 * time.Minute),
+					CooldownPeriod: 5 * time.Minute,
+				},
+				ScaleOnlyAfterAllEvent: true,
+			},
+			currentDesiredCapacity:  0,
+			expectedDesiredCapacity: 0,
+		},
 	} {
 		t.Run("", func(t *testing.T) {
 			asg := &asgTestDriver{
@@ -222,6 +244,8 @@ func TestScalingOutWithoutError(t *testing.T) {
 				autoscaling:    asg,
 				bk:             &buildkiteTestDriver{metrics: tc.metrics},
 				scaleOutParams: tc.params.ScaleOutParams,
+				scaleInParams: tc.params.ScaleInParams,
+				scaleOnlyAfterAllEvent: tc.params.ScaleOnlyAfterAllEvent,
 				scaling: ScalingCalculator{
 					includeWaiting:    tc.params.IncludeWaiting,
 					agentsPerInstance: tc.params.AgentsPerInstance,
@@ -324,6 +348,27 @@ func TestScalingInWithoutError(t *testing.T) {
 			currentDesiredCapacity:  1,
 			expectedDesiredCapacity: 1,
 		},
+		// Do not scale in after scale out
+		{
+			metrics: buildkite.AgentMetrics{
+				IdleAgents:  3,
+				TotalAgents:   3,
+			},
+			params: Params{
+				AgentsPerInstance: 1,
+				ScaleOutParams: ScaleParams{
+					LastEvent:      time.Now().Add(-1 * time.Minute),
+					CooldownPeriod: 5 * time.Minute,
+				},
+				ScaleInParams: ScaleParams{
+					LastEvent:time.Now().Add(-10 * time.Minute),
+					CooldownPeriod: 2 * time.Minute,
+				},
+				ScaleOnlyAfterAllEvent: true,
+			},
+			currentDesiredCapacity:  3,
+			expectedDesiredCapacity: 3,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -339,6 +384,8 @@ func TestScalingInWithoutError(t *testing.T) {
 					agentsPerInstance: tc.params.AgentsPerInstance,
 				},
 				scaleInParams: tc.params.ScaleInParams,
+				scaleOutParams: tc.params.ScaleOutParams,
+				scaleOnlyAfterAllEvent: tc.params.ScaleOnlyAfterAllEvent,
 			}
 
 			if _, err := s.Run(); err != nil {
