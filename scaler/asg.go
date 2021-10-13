@@ -101,7 +101,7 @@ func (a *ASGDriver) GetLastScalingInAndOutActivity() (*autoscaling.Activity, *au
 	var lastScalingOutActivity *autoscaling.Activity
 	var lastScalingInActivity *autoscaling.Activity
 	hasFoundScalingActivities := false
-	for hasFoundScalingActivities {
+	for !hasFoundScalingActivities {
 		output, err := a.GetAutoscalingActivities(nextToken)
 		if err != nil {
 			return nil, nil, err
