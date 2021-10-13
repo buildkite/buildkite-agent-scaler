@@ -147,7 +147,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 			}
 			scaleOutOutput, scaleInOutput, err := asg.GetLastScalingInAndOutActivity()
 			if err != nil {
-				log.Printf("Failed to get scaling in last activity because %s ", err)
+				log.Printf("Failed to get last scale in and out activity because %s", err)
 			}
 			if scaleInOutput != nil {
 				lastScaleIn = *scaleInOutput.StartTime
