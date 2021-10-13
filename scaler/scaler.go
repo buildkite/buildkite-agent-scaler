@@ -27,6 +27,7 @@ type Params struct {
 	IncludeWaiting           bool
 	ScaleInParams            ScaleParams
 	ScaleOutParams           ScaleParams
+	ScaleOnlyAfterAllEvent   bool
 }
 
 type Scaler struct {
@@ -43,6 +44,7 @@ type Scaler struct {
 	scaling        ScalingCalculator
 	scaleInParams  ScaleParams
 	scaleOutParams ScaleParams
+	scaleOnlyAfterAllEvent bool
 }
 
 func NewScaler(client *buildkite.Client, sess *session.Session, params Params) (*Scaler, error) {
@@ -53,6 +55,7 @@ func NewScaler(client *buildkite.Client, sess *session.Session, params Params) (
 		},
 		scaleInParams:  params.ScaleInParams,
 		scaleOutParams: params.ScaleOutParams,
+		scaleOnlyAfterAllEvent: params.ScaleOnlyAfterAllEvent,
 	}
 
 	scaler.scaling = ScalingCalculator{
@@ -131,7 +134,13 @@ func (s *Scaler) scaleIn(desired int64, current AutoscaleGroupDetails) error {
 
 	// If we've scaled down before, check if a cooldown should be enforced
 	if !s.scaleInParams.LastEvent.IsZero() {
-		cooldownRemaining := s.scaleInParams.CooldownPeriod - time.Since(s.scaleInParams.LastEvent)
+		lastScaleInEvent := s.scaleInParams.LastEvent
+		lastScaleOutEvent := s.scaleOutParams.LastEvent
+		lastEvent := lastScaleInEvent
+		if s.scaleOnlyAfterAllEvent == true && lastScaleInEvent.Before(lastScaleOutEvent) {
+			lastEvent = lastScaleOutEvent
+		}
+		cooldownRemaining := s.scaleInParams.CooldownPeriod - time.Since(lastEvent)
 
 		if cooldownRemaining > 0 {
 			log.Printf("⏲ Want to scale IN but in cooldown for %d seconds", cooldownRemaining/time.Second)
@@ -188,7 +197,13 @@ func (s *Scaler) scaleOut(desired int64, current AutoscaleGroupDetails) error {
 
 	// If we've scaled out before, check if a cooldown should be enforced
 	if !s.scaleOutParams.LastEvent.IsZero() {
-		cooldownRemaining := s.scaleOutParams.CooldownPeriod - time.Since(s.scaleOutParams.LastEvent)
+		lastScaleInEvent := s.scaleInParams.LastEvent
+		lastScaleOutEvent := s.scaleOutParams.LastEvent
+		lastEvent := lastScaleOutEvent
+		if s.scaleOnlyAfterAllEvent == true && lastScaleOutEvent.Before(lastScaleInEvent) {
+			lastEvent = lastScaleInEvent
+		}
+		cooldownRemaining := s.scaleOutParams.CooldownPeriod - time.Since(lastEvent)
 
 		if cooldownRemaining > 0 {
 			log.Printf("⏲ Want to scale OUT but in cooldown for %d seconds", cooldownRemaining/time.Second)
