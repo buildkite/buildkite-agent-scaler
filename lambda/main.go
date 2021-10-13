@@ -18,6 +18,12 @@ import (
 	"github.com/buildkite/buildkite-agent-scaler/version"
 )
 
+// Stores the last time we scaled in/out in global lambda state
+// On a cold start this will be reset to a zero value
+var (
+	lastScaleIn, lastScaleOut time.Time
+)
+
 func main() {
 	if os.Getenv(`DEBUG`) != "" {
 		_, err := Handler(context.Background(), json.RawMessage([]byte{}))
@@ -139,21 +145,15 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 				Name: mustGetEnv(`ASG_NAME`),
 				Sess: sess,
 			}
-			var lastScaleIn time.Time
-			output, err := asg.GetLastScalingInActivity()
+			scaleOutOutput, scaleInOutput, err := asg.GetLastScalingInAndOutActivity()
 			if err != nil {
-				log.Fatal(err)
+				log.Printf("Failed to get scaling in last activity because %s ", err)
 			}
-			if output != nil {
-				lastScaleIn = *output.StartTime
+			if scaleInOutput != nil {
+				lastScaleIn = *scaleInOutput.StartTime
 			}
-			var lastScaleOut time.Time
-			output, err = asg.GetLastScalingOutActivity()
-			if err != nil {
-				log.Fatal(err)
-			}
-			if output != nil {
-				lastScaleOut = *output.StartTime
+			if scaleOutOutput != nil {
+				lastScaleOut = *scaleOutOutput.StartTime
 			}
 			params := scaler.Params{
 				BuildkiteQueue:       mustGetEnv(`BUILDKITE_QUEUE`),

@@ -177,6 +177,7 @@ func (s *Scaler) scaleIn(desired int64, current AutoscaleGroupDetails) error {
 		return err
 	}
 
+	s.scaleInParams.LastEvent = time.Now()
 	return nil
 }
 
@@ -228,6 +229,7 @@ func (s *Scaler) scaleOut(desired int64, current AutoscaleGroupDetails) error {
 		return err
 	}
 
+	s.scaleOutParams.LastEvent = time.Now()
 	return nil
 }
 

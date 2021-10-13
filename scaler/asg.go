@@ -94,20 +94,30 @@ func (a *ASGDriver) GetAutoscalingActivities(nextToken *string) (*autoscaling.De
 	return svc.DescribeScalingActivities(input)
 }
 
-func (a *ASGDriver) GetLastScalingInActivity() (*autoscaling.Activity, error) {
+func (a *ASGDriver) GetLastScalingInAndOutActivity() (*autoscaling.Activity, *autoscaling.Activity, error) {
+	const scalingOutKey = "increasing the capacity"
 	const shrinkingKey = "shrinking the capacity"
 	var nextToken *string
-	for {
+	var lastScalingOutActivity *autoscaling.Activity
+	var lastScalingInActivity *autoscaling.Activity
+	hasFoundScalingActivities := false
+	for hasFoundScalingActivities {
 		output, err := a.GetAutoscalingActivities(nextToken)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		for _, activity := range output.Activities {
 			// Filter for successful activity and explicit desired count changes
 			if *activity.StatusCode == activitySucessfulStatusCode &&
-				strings.Contains(*activity.Cause, userRequestForChangingDesiredCapacity) &&
-				strings.Contains(*activity.Cause, shrinkingKey) {
-				return activity, nil
+				strings.Contains(*activity.Cause, userRequestForChangingDesiredCapacity) {
+				if strings.Contains(*activity.Cause, scalingOutKey) {
+					lastScalingOutActivity = activity
+				} else if strings.Contains(*activity.Cause, shrinkingKey) {
+					lastScalingInActivity = activity
+				}
+			}
+			if lastScalingOutActivity != nil && lastScalingInActivity != nil {
+				hasFoundScalingActivities = true
 			}
 		}
 		nextToken = output.NextToken
@@ -115,31 +125,7 @@ func (a *ASGDriver) GetLastScalingInActivity() (*autoscaling.Activity, error) {
 			break
 		}
 	}
-	return nil, nil
-}
-
-func (a *ASGDriver) GetLastScalingOutActivity() (*autoscaling.Activity, error) {
-	const scalingOutKey = "increasing the capacity"
-	var nextToken *string
-	for {
-		output, err := a.GetAutoscalingActivities(nextToken)
-		if err != nil {
-			return nil, err
-		}
-		for _, activity := range output.Activities {
-			// Filter for successful activity and explicit desired count changes
-			if *activity.StatusCode == activitySucessfulStatusCode &&
-				strings.Contains(*activity.Cause, userRequestForChangingDesiredCapacity) &&
-				strings.Contains(*activity.Cause, scalingOutKey) {
-				return activity, nil
-			}
-		}
-		nextToken = output.NextToken
-		if nextToken == nil {
-			break
-		}
-	}
-	return nil, nil
+	return lastScalingOutActivity, lastScalingInActivity, nil
 }
 
 type dryRunASG struct {
