@@ -203,6 +203,10 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 					interval)
 			}
 
+			// Persist the times back into the global state
+			lastScaleIn = scaler.LastScaleIn()
+			lastScaleOut = scaler.LastScaleOut()
+
 			log.Printf("Waiting for %v", interval)
 			time.Sleep(interval)
 		}
