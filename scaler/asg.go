@@ -118,6 +118,7 @@ func (a *ASGDriver) GetLastScalingInAndOutActivity() (*autoscaling.Activity, *au
 			}
 			if lastScalingOutActivity != nil && lastScalingInActivity != nil {
 				hasFoundScalingActivities = true
+				break
 			}
 		}
 		nextToken = output.NextToken
