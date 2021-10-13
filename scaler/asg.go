@@ -110,9 +110,9 @@ func (a *ASGDriver) GetLastScalingInAndOutActivity() (*autoscaling.Activity, *au
 			// Filter for successful activity and explicit desired count changes
 			if *activity.StatusCode == activitySucessfulStatusCode &&
 				strings.Contains(*activity.Cause, userRequestForChangingDesiredCapacity) {
-				if strings.Contains(*activity.Cause, scalingOutKey) {
+				if lastScalingOutActivity == nil && strings.Contains(*activity.Cause, scalingOutKey) {
 					lastScalingOutActivity = activity
-				} else if strings.Contains(*activity.Cause, shrinkingKey) {
+				} else if lastScalingInActivity == nil && strings.Contains(*activity.Cause, shrinkingKey) {
 					lastScalingInActivity = activity
 				}
 			}
