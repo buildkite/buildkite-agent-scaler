@@ -13,6 +13,7 @@ import (
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/autoscaling"
 	"github.com/buildkite/buildkite-agent-scaler/buildkite"
 	"github.com/buildkite/buildkite-agent-scaler/scaler"
 	"github.com/buildkite/buildkite-agent-scaler/version"
@@ -23,6 +24,12 @@ import (
 var (
 	lastScaleIn, lastScaleOut time.Time
 )
+
+type LastScaleASGResult struct {
+	LastScaleOutActivity *autoscaling.Activity
+    LastScaleInActivity *autoscaling.Activity
+	Err error
+}
 
 func main() {
 	if os.Getenv(`DEBUG`) != "" {
@@ -41,6 +48,9 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 	var (
 		timeout  <-chan time.Time = make(chan time.Time)
 		interval time.Duration    = 10 * time.Second
+
+		asgActivityTimeoutDuration = time.Minute
+		asgActivityTimeout = time.After(asgActivityTimeoutDuration)
 
 		scaleInCooldownPeriod time.Duration
 		scaleInFactor         float64
@@ -63,6 +73,15 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 			return "", err
 		} else {
 			timeout = time.After(timeoutDuration)
+		}
+	}
+
+	if v := os.Getenv(`ASG_ACTIVITY_TIMEOUT`); v != "" {
+		if timeoutDuration, err := time.ParseDuration(v); err != nil {
+			return "", err
+		} else {
+			asgActivityTimeoutDuration = timeoutDuration
+			asgActivityTimeout = time.After(timeoutDuration)
 		}
 	}
 
@@ -123,16 +142,36 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		Name: mustGetEnv(`ASG_NAME`),
 		Sess: sess,
 	}
-	scaleOutOutput, scaleInOutput, err := asg.GetLastScalingInAndOutActivity()
-	if err != nil {
-		log.Printf("Failed to get last scale in and out activity because %s", err)
-	}
-	if scaleInOutput != nil {
-		lastScaleIn = *scaleInOutput.StartTime
-	}
-	if scaleOutOutput != nil {
-		lastScaleOut = *scaleOutOutput.StartTime
-	}
+
+	c1 := make(chan LastScaleASGResult, 1)
+
+	go func() {
+		scaleOutOutput, scaleInOutput, err := asg.GetLastScalingInAndOutActivity()
+		result := LastScaleASGResult {
+			scaleOutOutput, 
+			scaleInOutput,
+			err,
+		}
+		c1 <- result
+	}()
+
+	select {
+    case res := <-c1:
+		if err != nil {
+			log.Printf("Failed to get last scale in and out activity because %s", err)
+		} else {
+			scaleInOutput := res.LastScaleInActivity
+			if scaleInOutput != nil {
+				lastScaleIn = *scaleInOutput.StartTime
+			}
+			scaleOutOutput := res.LastScaleOutActivity
+			if scaleOutOutput != nil {
+				lastScaleOut = *scaleOutOutput.StartTime
+			}
+		}
+    case <- asgActivityTimeout:
+        log.Printf("Failed to scale in and out last activity due to %s timeout", asgActivityTimeoutDuration)
+    }
 
 	for {
 		select {
