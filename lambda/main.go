@@ -170,7 +170,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 			}
 		}
     case <- asgActivityTimeout:
-        log.Printf("Failed to scale in and out last activity due to %s timeout", asgActivityTimeoutDuration)
+        log.Printf("Failed to get scale in and out last activity due to %s timeout", asgActivityTimeoutDuration)
     }
 
 	for {
