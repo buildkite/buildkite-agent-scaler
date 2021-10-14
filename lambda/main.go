@@ -118,6 +118,22 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 	// establish an AWS session to be re-used
 	sess := session.New()
 
+	// set last scale in and out from asg's activities
+	asg := &scaler.ASGDriver{
+		Name: mustGetEnv(`ASG_NAME`),
+		Sess: sess,
+	}
+	scaleOutOutput, scaleInOutput, err := asg.GetLastScalingInAndOutActivity()
+	if err != nil {
+		log.Printf("Failed to get last scale in and out activity because %s", err)
+	}
+	if scaleInOutput != nil {
+		lastScaleIn = *scaleInOutput.StartTime
+	}
+	if scaleOutOutput != nil {
+		lastScaleOut = *scaleOutOutput.StartTime
+	}
+
 	for {
 		select {
 		case <-timeout:
@@ -141,20 +157,6 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 			}
 
 			client := buildkite.NewClient(token)
-			asg := &scaler.ASGDriver{
-				Name: mustGetEnv(`ASG_NAME`),
-				Sess: sess,
-			}
-			scaleOutOutput, scaleInOutput, err := asg.GetLastScalingInAndOutActivity()
-			if err != nil {
-				log.Printf("Failed to get last scale in and out activity because %s", err)
-			}
-			if scaleInOutput != nil {
-				lastScaleIn = *scaleInOutput.StartTime
-			}
-			if scaleOutOutput != nil {
-				lastScaleOut = *scaleOutOutput.StartTime
-			}
 			params := scaler.Params{
 				BuildkiteQueue:       mustGetEnv(`BUILDKITE_QUEUE`),
 				AutoScalingGroupName: mustGetEnv(`ASG_NAME`),
