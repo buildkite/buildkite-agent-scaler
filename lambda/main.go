@@ -169,7 +169,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 			if scaleOutOutput != nil {
 				lastScaleOut = *scaleOutOutput.StartTime
 			}
-			scalingTimeDiff := scalingLastActivityStartTime.Sub(time.Now())
+			scalingTimeDiff := time.Now().Sub(scalingLastActivityStartTime)
 			log.Printf("Succesfully retrieved last scaling activity events from asg which took %s", scalingTimeDiff)		
 		}
     case <- asgActivityTimeout:
@@ -198,6 +198,8 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 				)
 			}
 
+			log.Printf("Last scale in event: %s", lastScaleIn)
+			log.Printf("Last scale out event: %s", lastScaleOut)
 			client := buildkite.NewClient(token)
 			params := scaler.Params{
 				BuildkiteQueue:       mustGetEnv(`BUILDKITE_QUEUE`),
