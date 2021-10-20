@@ -49,7 +49,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		timeout  <-chan time.Time = make(chan time.Time)
 		interval time.Duration    = 10 * time.Second
 
-		asgActivityTimeoutDuration = time.Minute
+		asgActivityTimeoutDuration = 10 * time.Second
 		asgActivityTimeout = time.After(asgActivityTimeoutDuration)
 
 		scaleInCooldownPeriod time.Duration
@@ -145,6 +145,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 
 	c1 := make(chan LastScaleASGResult, 1)
 
+	scalingLastActivityStartTime := time.Now()
 	go func() {
 		scaleOutOutput, scaleInOutput, err := asg.GetLastScalingInAndOutActivity()
 		result := LastScaleASGResult {
@@ -168,10 +169,12 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 			if scaleOutOutput != nil {
 				lastScaleOut = *scaleOutOutput.StartTime
 			}
+			scalingTimeDiff := scalingLastActivityStartTime.Sub(time.Now())
+			log.Printf("Succesfully retrieved last scaling activity events from asg which took %s", scalingTimeDiff)		
 		}
     case <- asgActivityTimeout:
         log.Printf("Failed to get scale in and out last activity due to %s timeout", asgActivityTimeoutDuration)
-    }
+	}
 
 	for {
 		select {
