@@ -19,7 +19,7 @@ Parameters:
     MinLength: 1
 
   AgentAutoScaleGroup:
-    Description: The name of the autoscale group to autoscale.
+    Description: The name of the Auto Scaling group to set desired count on.
     Type: String
     Default: default
 
