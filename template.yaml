@@ -4,11 +4,11 @@ Transform: AWS::Serverless-2016-10-31
 
 Parameters:
   BuildkiteAgentTokenParameter:
-    Description: Buildkite agent token parameter
-    Type: AWS::SSM::Parameter::Name
+    Description: Buildkite agent token Systems Manager Parameter Store path
+    Type: String
 
   BuildkiteAgentTokenParameterStoreKMSKey:
-    Description: AWS KMS Key ID used to encrypt the SSM parameter (if encrypted)
+    Description: (Optional) AWS KMS Key ID used to encrypt the BuildkiteAgentTokenParameter Systems Manager Parameter, if encrypted
     Type: String
     Default: ""
 
@@ -19,7 +19,7 @@ Parameters:
     MinLength: 1
 
   AgentAutoScaleGroup:
-    Description: The name of the autoscale group to autoscale.
+    Description: The name of the Auto Scaling group to set desired count on.
     Type: String
     Default: default
 
