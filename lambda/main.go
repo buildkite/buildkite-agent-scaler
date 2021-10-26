@@ -27,7 +27,7 @@ var (
 
 type LastScaleASGResult struct {
 	LastScaleOutActivity *autoscaling.Activity
-    LastScaleInActivity *autoscaling.Activity
+	LastScaleInActivity *autoscaling.Activity
 	Err error
 }
 
@@ -198,8 +198,6 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 				)
 			}
 
-			log.Printf("Last scale in event: %s", lastScaleIn)
-			log.Printf("Last scale out event: %s", lastScaleOut)
 			client := buildkite.NewClient(token)
 			params := scaler.Params{
 				BuildkiteQueue:       mustGetEnv(`BUILDKITE_QUEUE`),
