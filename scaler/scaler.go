@@ -76,7 +76,9 @@ func NewScaler(client *buildkite.Client, sess *session.Session, params Params) (
 		}
 
 		if params.PublishCloudWatchMetrics {
-			scaler.metrics = &cloudWatchMetricsPublisher{}
+			scaler.metrics = &cloudWatchMetricsPublisher{
+				sess: sess,
+			}
 		}
 	}
 
