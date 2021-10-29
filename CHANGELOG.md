@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## [v1.1.3](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.1.2...v1.1.3) (2021-10-28)
+
+* Fix crash when publishing CloudWatch metrics [#56](https://github.com/buildkite/buildkite-agent-scaler/pull/56) (@eleanorakh)
+
 ## [v1.1.2](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.1.1...v1.1.2) (2021-10-25)
 
 * Fix BuildkiteAgentTokenParameter when using AWS Secrets Manager reference syntax [#53](https://github.com/buildkite/buildkite-agent-scaler/pull/53)
