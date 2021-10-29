@@ -17,10 +17,3 @@ to update the AWS Serverless Application Repository
 	1. Ideally this pipeline would be automatically triggered but the pipelines
 	are in separate Buildkite organisations in order to use different agent pools
 	1. Unblock the pipeline to release to the AWS Serverless Application Repository
-1. Update the Elastic CI Stack for AWS to import the newly released scaler
-	1. Create a branch in the Elastic CI Stack for AWS repository
-	1. Update the [aws-stack.yml `Autoscaling`](https://github.com/buildkite/elastic-ci-stack-for-aws/blob/9596a11992fd8ba5eaef747b9f73be9111365264/templates/aws-stack.yml#L1160-L1176) resource’s `SemanticVersion` property
-	1. Push your branch and open a pull request
-	1. Wait for CI to pass
-	1. Create a stack with the branch’s published template to verify functionality
-	1. Merge your Elastic CI Stack branch
