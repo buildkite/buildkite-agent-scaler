@@ -159,7 +159,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 	select {
     case res := <-c1:
 		if res.Err != nil {
-			log.Printf("Failed to get last scale in and out activity because %s", res.Err)
+			log.Printf("Failed to retrieve last scaling activity events due to error (%s)", res.Err)
 			break;
 		}
 
