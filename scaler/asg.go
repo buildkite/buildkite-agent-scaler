@@ -10,6 +10,11 @@ import (
 	"github.com/aws/aws-sdk-go/service/autoscaling"
 )
 
+const (
+	activitySucessfulStatusCode = "Successful"
+	userRequestForChangingDesiredCapacity = "a user request explicitly set group desired capacity changing the desired capacity"
+)
+
 type AutoscaleGroupDetails struct {
 	Pending      int64
 	DesiredCount int64
@@ -17,18 +22,18 @@ type AutoscaleGroupDetails struct {
 	MaxSize      int64
 }
 
-type asgDriver struct {
-	name string
-	sess *session.Session
+type ASGDriver struct {
+	Name string
+	Sess *session.Session
 }
 
-func (a *asgDriver) Describe() (AutoscaleGroupDetails, error) {
-	log.Printf("Collecting AutoScaling details for ASG %q", a.name)
+func (a *ASGDriver) Describe() (AutoscaleGroupDetails, error) {
+	log.Printf("Collecting AutoScaling details for ASG %q", a.Name)
 
-	svc := autoscaling.New(a.sess)
+	svc := autoscaling.New(a.Sess)
 	input := &autoscaling.DescribeAutoScalingGroupsInput{
 		AutoScalingGroupNames: []*string{
-			aws.String(a.name),
+			aws.String(a.Name),
 		},
 	}
 
@@ -64,10 +69,10 @@ func (a *asgDriver) Describe() (AutoscaleGroupDetails, error) {
 	return details, nil
 }
 
-func (a *asgDriver) SetDesiredCapacity(count int64) error {
-	svc := autoscaling.New(a.sess)
+func (a *ASGDriver) SetDesiredCapacity(count int64) error {
+	svc := autoscaling.New(a.Sess)
 	input := &autoscaling.SetDesiredCapacityInput{
-		AutoScalingGroupName: aws.String(a.name),
+		AutoScalingGroupName: aws.String(a.Name),
 		DesiredCapacity:      aws.Int64(count),
 		HonorCooldown:        aws.Bool(false),
 	}
@@ -78,6 +83,50 @@ func (a *asgDriver) SetDesiredCapacity(count int64) error {
 	}
 
 	return nil
+}
+
+func (a *ASGDriver) GetAutoscalingActivities(nextToken *string) (*autoscaling.DescribeScalingActivitiesOutput, error) {
+	svc := autoscaling.New(a.Sess)
+	input := &autoscaling.DescribeScalingActivitiesInput{
+		AutoScalingGroupName: aws.String(a.Name),
+		NextToken: nextToken,
+	}
+	return svc.DescribeScalingActivities(input)
+}
+
+func (a *ASGDriver) GetLastScalingInAndOutActivity() (*autoscaling.Activity, *autoscaling.Activity, error) {
+	const scalingOutKey = "increasing the capacity"
+	const shrinkingKey = "shrinking the capacity"
+	var nextToken *string
+	var lastScalingOutActivity *autoscaling.Activity
+	var lastScalingInActivity *autoscaling.Activity
+	hasFoundScalingActivities := false
+	for !hasFoundScalingActivities {
+		output, err := a.GetAutoscalingActivities(nextToken)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, activity := range output.Activities {
+			// Filter for successful activity and explicit desired count changes
+			if *activity.StatusCode == activitySucessfulStatusCode &&
+				strings.Contains(*activity.Cause, userRequestForChangingDesiredCapacity) {
+				if lastScalingOutActivity == nil && strings.Contains(*activity.Cause, scalingOutKey) {
+					lastScalingOutActivity = activity
+				} else if lastScalingInActivity == nil && strings.Contains(*activity.Cause, shrinkingKey) {
+					lastScalingInActivity = activity
+				}
+			}
+			if lastScalingOutActivity != nil && lastScalingInActivity != nil {
+				hasFoundScalingActivities = true
+				break
+			}
+		}
+		nextToken = output.NextToken
+		if nextToken == nil {
+			break
+		}
+	}
+	return lastScalingOutActivity, lastScalingInActivity, nil
 }
 
 type dryRunASG struct {

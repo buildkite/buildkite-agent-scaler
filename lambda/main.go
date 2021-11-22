@@ -13,6 +13,7 @@ import (
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/autoscaling"
 	"github.com/buildkite/buildkite-agent-scaler/buildkite"
 	"github.com/buildkite/buildkite-agent-scaler/scaler"
 	"github.com/buildkite/buildkite-agent-scaler/version"
@@ -23,6 +24,12 @@ import (
 var (
 	lastScaleIn, lastScaleOut time.Time
 )
+
+type LastScaleASGResult struct {
+	LastScaleOutActivity *autoscaling.Activity
+	LastScaleInActivity *autoscaling.Activity
+	Err error
+}
 
 func main() {
 	if os.Getenv(`DEBUG`) != "" {
@@ -41,6 +48,9 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 	var (
 		timeout  <-chan time.Time = make(chan time.Time)
 		interval time.Duration    = 10 * time.Second
+
+		asgActivityTimeoutDuration = 10 * time.Second
+		asgActivityTimeout = time.After(asgActivityTimeoutDuration)
 
 		scaleInCooldownPeriod time.Duration
 		scaleInFactor         float64
@@ -65,6 +75,15 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 			return "", err
 		} else {
 			timeout = time.After(timeoutDuration)
+		}
+	}
+
+	if v := os.Getenv(`ASG_ACTIVITY_TIMEOUT`); v != "" {
+		if timeoutDuration, err := time.ParseDuration(v); err != nil {
+			return "", err
+		} else {
+			asgActivityTimeoutDuration = timeoutDuration
+			asgActivityTimeout = time.After(timeoutDuration)
 		}
 	}
 
@@ -126,6 +145,46 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 	// establish an AWS session to be re-used
 	sess := session.New()
 
+	// set last scale in and out from asg's activities
+	asg := &scaler.ASGDriver{
+		Name: mustGetEnv(`ASG_NAME`),
+		Sess: sess,
+	}
+
+	c1 := make(chan LastScaleASGResult, 1)
+
+	scalingLastActivityStartTime := time.Now()
+	go func() {
+		scaleOutOutput, scaleInOutput, err := asg.GetLastScalingInAndOutActivity()
+		result := LastScaleASGResult {
+			scaleOutOutput, 
+			scaleInOutput,
+			err,
+		}
+		c1 <- result
+	}()
+
+	select {
+    case res := <-c1:
+		if res.Err != nil {
+			log.Printf("Failed to retrieve last scaling activity events due to error (%s)", res.Err)
+			break;
+		}
+
+		scaleInOutput := res.LastScaleInActivity
+		if scaleInOutput != nil {
+			lastScaleIn = *scaleInOutput.StartTime
+		}
+		scaleOutOutput := res.LastScaleOutActivity
+		if scaleOutOutput != nil {
+			lastScaleOut = *scaleOutOutput.StartTime
+		}
+		scalingTimeDiff := time.Now().Sub(scalingLastActivityStartTime)
+		log.Printf("Succesfully retrieved last scaling activity events. Last scale out %v, last scale in %v. Discovery took %s.", lastScaleOut, lastScaleIn, scalingTimeDiff)
+    case <- asgActivityTimeout:
+        log.Printf("Failed to retrieve last scaling activity events due to %s timeout", asgActivityTimeoutDuration)
+	}
+
 	for {
 		select {
 		case <-timeout:
@@ -149,7 +208,6 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 			}
 
 			client := buildkite.NewClient(token)
-
 			params := scaler.Params{
 				BuildkiteQueue:       mustGetEnv(`BUILDKITE_QUEUE`),
 				AutoScalingGroupName: mustGetEnv(`ASG_NAME`),
