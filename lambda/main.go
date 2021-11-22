@@ -158,22 +158,23 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 
 	select {
     case res := <-c1:
-		if err != nil {
-			log.Printf("Failed to get last scale in and out activity because %s", err)
-		} else {
-			scaleInOutput := res.LastScaleInActivity
-			if scaleInOutput != nil {
-				lastScaleIn = *scaleInOutput.StartTime
-			}
-			scaleOutOutput := res.LastScaleOutActivity
-			if scaleOutOutput != nil {
-				lastScaleOut = *scaleOutOutput.StartTime
-			}
-			scalingTimeDiff := time.Now().Sub(scalingLastActivityStartTime)
-			log.Printf("Succesfully retrieved last scaling activity events from asg which took %s", scalingTimeDiff)		
+		if res.Err != nil {
+			log.Printf("Failed to get last scale in and out activity because %s", res.Err)
+			break;
 		}
+
+		scaleInOutput := res.LastScaleInActivity
+		if scaleInOutput != nil {
+			lastScaleIn = *scaleInOutput.StartTime
+		}
+		scaleOutOutput := res.LastScaleOutActivity
+		if scaleOutOutput != nil {
+			lastScaleOut = *scaleOutOutput.StartTime
+		}
+		scalingTimeDiff := time.Now().Sub(scalingLastActivityStartTime)
+		log.Printf("Succesfully retrieved last scaling activity events from asg which took %s", scalingTimeDiff)
     case <- asgActivityTimeout:
-        log.Printf("Failed to get scale in and out last activity due to %s timeout", asgActivityTimeoutDuration)
+        log.Printf("Failed to retrieve last scaling activity events due to %s timeout", asgActivityTimeoutDuration)
 	}
 
 	for {
