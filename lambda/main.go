@@ -172,7 +172,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 			lastScaleOut = *scaleOutOutput.StartTime
 		}
 		scalingTimeDiff := time.Now().Sub(scalingLastActivityStartTime)
-		log.Printf("Succesfully retrieved last scaling activity events from asg which took %s", scalingTimeDiff)
+		log.Printf("Succesfully retrieved last scaling activity events. Last scale out %v, last scale in %v. Discovery took %s.", lastScaleOut, lastScaleIn, scalingTimeDiff)
     case <- asgActivityTimeout:
         log.Printf("Failed to retrieve last scaling activity events due to %s timeout", asgActivityTimeoutDuration)
 	}
