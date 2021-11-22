@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## [v1.2.0](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.1.3...v1.2.0) (2021-11-22)
+
+### Added
+
+* Restore last scale in and out event times from Auto Scale group activity [#52](https://github.com/buildkite/buildkite-agent-scaler/pull/52) (@gu-kevin)
+* `DisableScaleIn` parameter to template [#59](https://github.com/buildkite/buildkite-agent-scaler/pull/59)
+
 ## [v1.1.3](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.1.2...v1.1.3) (2021-10-28)
 
 * Fix crash when publishing CloudWatch metrics [#56](https://github.com/buildkite/buildkite-agent-scaler/pull/56) (@eleanorakh)
