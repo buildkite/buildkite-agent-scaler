@@ -58,6 +58,8 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		scaleOutCooldownPeriod time.Duration
 		scaleOutFactor         float64
 
+		scaleOnlyAfterAllEvent bool
+
 		includeWaiting bool
 		err            error
 	)
@@ -96,6 +98,12 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 			return "", err
 		}
 		scaleInFactor = math.Abs(scaleInFactor)
+	}
+
+	if v := os.Getenv(`SCALE_ONLY_AFTER_ALL_EVENT`); v != "" {
+		if v == "true" || v == "1" {
+			scaleOnlyAfterAllEvent = true
+		}
 	}
 
 	if v := os.Getenv(`SCALE_OUT_COOLDOWN_PERIOD`); v != "" {
@@ -215,6 +223,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 					Factor:         scaleOutFactor,
 					LastEvent:      lastScaleOut,
 				},
+				ScaleOnlyAfterAllEvent: scaleOnlyAfterAllEvent,
 			}
 
 			if m := os.Getenv(`CLOUDWATCH_METRICS`); m == `true` || m == `1` {
