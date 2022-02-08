@@ -90,9 +90,12 @@ func (s *Scaler) Run() (time.Duration, error) {
 				`WaitingJobsCount`:   queueMetrics.WaitingJobs,
 			})
 			if err != nil {
+				log.Print("Failed / errored trying to publish metrics")
 				return metrics.PollDuration, err
 			}
 		}
+	} else {
+		log.Print("No metric publisher to be able to publish metrics to (most probably) cloudwatch")
 	}
 
 	var count int64
@@ -109,6 +112,7 @@ func (s *Scaler) Run() (time.Duration, error) {
 			count += metrics.RunningJobs
 		}
 	}
+	log.Printf("Count from buildkite metric = %v and agents per instance = %v", count, s.agentsPerInstance)
 
 	var desired int64
 	if count > 0 {
@@ -127,6 +131,8 @@ func (s *Scaler) Run() (time.Duration, error) {
 		log.Printf("⚠️  Desired count is less than MinSize, capping at %d", current.MinSize)
 		desired = current.MinSize
 	}
+
+	log.Printf("Desired that we want calculated to be %v, but current desired value in the ASG is %v", desired, current.DesiredCount)
 
 	if desired > current.DesiredCount {
 		return metrics.PollDuration, s.scaleOut(desired, current)
