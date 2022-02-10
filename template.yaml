@@ -59,12 +59,19 @@ Parameters:
       - "true"
       - "false"
     Default: "true"
+    
+  RolePermissionsBoundaryARN:
+    Type: String
+    Description: The ARN of the policy used to set the permissions boundary for the role.
+    Default: ""
 
 Conditions:
   CreateRole:
     !Equals [ !Ref AutoscalingLambdaExecutionRole, '' ]
   UseKmsKeyForParameterStore:
     !Not [ !Equals [ !Ref BuildkiteAgentTokenParameterStoreKMSKey, "" ] ]
+  SetRolePermissionsBoundaryARN:
+    !Not [ !Equals [ !Ref RolePermissionsBoundaryARN, "" ] ]
 
 Mappings:
   LambdaBucket:
@@ -95,6 +102,7 @@ Resources:
     Condition: CreateRole
     Properties:
       Path: "/"
+      PermissionsBoundary: !If [ SetRolePermissionsBoundaryARN, !Ref RolePermissionsBoundaryARN, !Ref "AWS::NoValue" ]
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -148,6 +156,7 @@ Resources:
     Properties:
       CodeUri: handler.zip
       Role: !If [ CreateRole, !GetAtt ExecutionRole.Arn, !Ref AutoscalingLambdaExecutionRole ]
+      PermissionsBoundary: !If [ SetRolePermissionsBoundaryARN, !Ref RolePermissionsBoundaryARN, !Ref "AWS::NoValue" ]
       Timeout: 120
       Handler: handler
       Runtime: go1.x
