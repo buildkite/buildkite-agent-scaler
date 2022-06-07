@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## [1.3.0](https://github.com/buildkite/buildkite-agent-scaler/tree/1.3.0) (2022-06-07)
+[Full Changelog](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.2.0...1.3.0)
+
+### Changed
+- Add ability to use permissions boundary [#62](https://github.com/buildkite/buildkite-agent-scaler/pull/62) (@kwong-chong-lfs)
+
 ## [v1.2.0](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.1.3...v1.2.0) (2021-11-22)
 
 ### Added
