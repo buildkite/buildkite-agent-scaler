@@ -10,6 +10,7 @@ import (
 type ScalingCalculator struct {
 	includeWaiting    bool
 	agentsPerInstance int
+	permanentAgents   int64
 }
 
 func (sc *ScalingCalculator) perInstance(count int64) int64 {
@@ -29,6 +30,12 @@ func (sc *ScalingCalculator) DesiredCount(metrics *buildkite.AgentMetrics, asg *
 		agentsRequired += metrics.WaitingJobs
 	} else {
 		agentsRequired += metrics.RunningJobs
+	}
+
+	if agentsRequired-sc.permanentAgents < 0 {
+		agentsRequired = 0
+	} else {
+		agentsRequired -= sc.permanentAgents
 	}
 
 	var desired int64

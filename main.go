@@ -28,7 +28,8 @@ func main() {
 		scaleOutFactor = flag.Float64("scale-out-factor", 1.0, "A factor to apply to scale outs")
 
 		// general params
-		dryRun = flag.Bool("dry-run", false, "Whether to just show what would be done")
+		dryRun          = flag.Bool("dry-run", false, "Whether to just show what would be done")
+		permanentAgents = flag.Int64("permanent-agents", 0, "Number of agents always on")
 	)
 	flag.Parse()
 
@@ -56,6 +57,7 @@ func main() {
 		IncludeWaiting:           *includeWaiting,
 		ScaleInParams:            scaler.ScaleParams{Factor: *scaleInFactor},
 		ScaleOutParams:           scaler.ScaleParams{Factor: *scaleOutFactor},
+		PermanentAgents:          *permanentAgents,
 	})
 	if err != nil {
 		log.Fatal(err)

@@ -28,6 +28,7 @@ type Params struct {
 	ScaleInParams            ScaleParams
 	ScaleOutParams           ScaleParams
 	ScaleOnlyAfterAllEvent   bool
+	PermanentAgents          int64
 }
 
 type Scaler struct {
@@ -41,9 +42,9 @@ type Scaler struct {
 	metrics interface {
 		Publish(orgSlug, queue string, metrics map[string]int64) error
 	}
-	scaling        ScalingCalculator
-	scaleInParams  ScaleParams
-	scaleOutParams ScaleParams
+	scaling                ScalingCalculator
+	scaleInParams          ScaleParams
+	scaleOutParams         ScaleParams
 	scaleOnlyAfterAllEvent bool
 }
 
@@ -53,14 +54,15 @@ func NewScaler(client *buildkite.Client, sess *session.Session, params Params) (
 			client: client,
 			queue:  params.BuildkiteQueue,
 		},
-		scaleInParams:  params.ScaleInParams,
-		scaleOutParams: params.ScaleOutParams,
+		scaleInParams:          params.ScaleInParams,
+		scaleOutParams:         params.ScaleOutParams,
 		scaleOnlyAfterAllEvent: params.ScaleOnlyAfterAllEvent,
 	}
 
 	scaler.scaling = ScalingCalculator{
 		includeWaiting:    params.IncludeWaiting,
 		agentsPerInstance: params.AgentsPerInstance,
+		permanentAgents:   params.PermanentAgents,
 	}
 
 	if params.DryRun {
