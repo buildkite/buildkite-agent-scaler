@@ -36,6 +36,7 @@ An AWS Lambda bundle is created and published as part of the build process. The 
 
 - `cloudwatch:PutMetricData`
 - `autoscaling:DescribeAutoScalingGroups`
+- `autoscaling:DescribeScalingActivities`
 - `autoscaling:SetDesiredCapacity`
 
 It's entrypoint is `handler`, it requires a `go1.x` environment and requires the following env vars:

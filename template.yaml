@@ -124,6 +124,7 @@ Resources:
                   - autoscaling:DescribeAutoScalingGroups
                   # *
                   - autoscaling:SetDesiredCapacity
+                  - autoscaling:DescribeScalingActivities
                   # # arn:aws:autoscaling:$region:$account:autoScalingGroup:$uuid:autoScalingGroupName/$name
                 Resource: '*'
         - PolicyName: WriteCloudwatchMetrics
