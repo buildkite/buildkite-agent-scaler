@@ -18,6 +18,11 @@ Parameters:
     Default: default
     MinLength: 1
 
+  RootStackName:
+    Description: Name of parent CloudFormation stack (if exists)
+    Type: String
+    Default: !Ref AWS::StackName
+
   AgentAutoScaleGroup:
     Description: The name of the Auto Scaling group to set desired count on.
     Type: String
@@ -155,6 +160,7 @@ Resources:
   AutoscalingFunction:
     Type: AWS::Serverless::Function
     Properties:
+      Description: !Sub Polls Buildkite and triggers scale out of elastic stack ${RootStackName}
       CodeUri: handler.zip
       Role: !If [ CreateRole, !GetAtt ExecutionRole.Arn, !Ref AutoscalingLambdaExecutionRole ]
       PermissionsBoundary: !If [ SetRolePermissionsBoundaryARN, !Ref RolePermissionsBoundaryARN, !Ref "AWS::NoValue" ]
