@@ -44,6 +44,10 @@ Parameters:
     Description: ""
     Type: Number
 
+  InstanceBuffer:
+    Description: How many free instances to maintain
+    Type: Number
+
   ScaleOutForWaitingJobs:
     Description: ""
     Type: String
@@ -173,6 +177,7 @@ Resources:
           MIN_SIZE:                      !Ref MinSize
           MAX_SIZE:                      !Ref MaxSize
           SCALE_OUT_FACTOR:              !Ref ScaleOutFactor
+          INSTANCE_BUFFER:               !Ref InstanceBuffer
           INCLUDE_WAITING:               !Ref ScaleOutForWaitingJobs
           LAMBDA_TIMEOUT:                "50s"
           LAMBDA_INTERVAL:               "10s"

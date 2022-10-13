@@ -27,6 +27,7 @@ type Params struct {
 	IncludeWaiting           bool
 	ScaleInParams            ScaleParams
 	ScaleOutParams           ScaleParams
+	InstanceBuffer           int
 	ScaleOnlyAfterAllEvent   bool
 }
 
@@ -44,6 +45,7 @@ type Scaler struct {
 	scaling        ScalingCalculator
 	scaleInParams  ScaleParams
 	scaleOutParams ScaleParams
+	instanceBuffer int
 	scaleOnlyAfterAllEvent bool
 }
 
@@ -55,6 +57,7 @@ func NewScaler(client *buildkite.Client, sess *session.Session, params Params) (
 		},
 		scaleInParams:  params.ScaleInParams,
 		scaleOutParams: params.ScaleOutParams,
+		instanceBuffer: params.InstanceBuffer,
 		scaleOnlyAfterAllEvent: params.ScaleOnlyAfterAllEvent,
 	}
 
@@ -107,7 +110,7 @@ func (s *Scaler) Run() (time.Duration, error) {
 		return metrics.PollDuration, err
 	}
 
-	desired := s.scaling.DesiredCount(&metrics, &asg)
+	desired := s.scaling.DesiredCount(&metrics, &asg) + int64(s.instanceBuffer)
 
 	if desired > asg.MaxSize {
 		log.Printf("⚠️  Desired count exceed MaxSize, capping at %d", asg.MaxSize)

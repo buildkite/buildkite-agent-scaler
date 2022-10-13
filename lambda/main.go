@@ -58,6 +58,8 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		scaleOutCooldownPeriod time.Duration
 		scaleOutFactor         float64
 
+		instanceBuffer = 0
+
 		scaleOnlyAfterAllEvent bool
 
 		includeWaiting bool
@@ -122,6 +124,12 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 	if v := os.Getenv(`INCLUDE_WAITING`); v != "" {
 		if v == "true" || v == "1" {
 			includeWaiting = true
+		}
+	}
+
+	if v := os.Getenv(`INSTANCE_BUFFER`); v != "" {
+		if instanceBuffer, err = strconv.Atoi(v); err != nil {
+			return "", err
 		}
 	}
 
@@ -223,6 +231,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 					Factor:         scaleOutFactor,
 					LastEvent:      lastScaleOut,
 				},
+				InstanceBuffer: instanceBuffer,
 				ScaleOnlyAfterAllEvent: scaleOnlyAfterAllEvent,
 			}
 
