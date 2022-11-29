@@ -13,10 +13,14 @@ LAMBDA_S3_BUCKET_PATH := /
 
 ifdef BUILDKITE_BUILD_NUMBER
 	LD_FLAGS := -s -w -X version.Build=$(BUILDKITE_BUILD_NUMBER)
+	BUILDVSC_FLAG := false
+	USER := 0:0
 endif
 
 ifndef BUILDKITE_BUILD_NUMBER
 	LD_FLAGS := -s -w
+	BUILDVSC_FLAG := true
+	USER := "$(shell id -u):$(shell id -g)"
 endif
 
 build: handler.zip
@@ -26,12 +30,12 @@ handler.zip: lambda/handler
 
 lambda/handler: lambda/main.go
 	docker run \
-		--volume go-module-cache:/go/pkg/mod \
-		--volume $(PWD):/go/src/github.com/buildkite/buildkite-agent-scaler \
-		--workdir /go/src/github.com/buildkite/buildkite-agent-scaler \
+		--env GOCACHE=/go/cache \
+		--user $(USER) \
+		--volume $(PWD):/app \
+		--workdir /app \
 		--rm golang:1.19 \
-		go build -ldflags="$(LD_FLAGS)" -o ./lambda/handler ./lambda
-	chmod +x lambda/handler
+		go build -ldflags="$(LD_FLAGS)" -buildvcs="$(BUILDVSC_FLAG)" -o lambda/handler ./lambda
 
 lambda-sync: handler.zip
 	aws s3 sync \
