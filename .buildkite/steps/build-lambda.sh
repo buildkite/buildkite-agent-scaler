@@ -4,7 +4,7 @@ set -eu
 make handler.zip
 
 if [[ -z "${BUILDKITE_TAG:-}" ]]; then
-  VERSION="$BUILDKITE_COMMIT"
+  VERSION="0.0.$BUILDKITE_BUILD_NUMBER"
 else
   VERSION=$(awk -F\" '/const Version/ {print $2}' version/version.go)
 fi
