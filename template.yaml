@@ -65,6 +65,11 @@ Parameters:
     Description: The ARN of the policy used to set the permissions boundary for the role.
     Default: ""
 
+  LogRetentionDays:
+    Type: Number
+    Description: The number of days to retain the Cloudwatch Logs of the lambda.
+    Default: 1
+
 Conditions:
   CreateRole:
     !Equals [ !Ref AutoscalingLambdaExecutionRole, '' ]
@@ -188,7 +193,7 @@ Resources:
     Type: "AWS::Logs::LogGroup"
     Properties:
       LogGroupName: !Sub "/aws/lambda/${AutoscalingFunction}"
-      RetentionInDays: 1
+      RetentionInDays: !Ref LogRetentionDays
 
 Outputs:
   ExecutionRoleName:
