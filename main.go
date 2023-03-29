@@ -26,6 +26,7 @@ func main() {
 		// scale in/out params
 		scaleInFactor  = flag.Float64("scale-in-factor", 1.0, "A factor to apply to scale ins")
 		scaleOutFactor = flag.Float64("scale-out-factor", 1.0, "A factor to apply to scale outs")
+		instanceBuffer = flag.Int("instance-buffer", 0, "Keep this many instances as extra capacity")
 
 		// general params
 		dryRun = flag.Bool("dry-run", false, "Whether to just show what would be done")
@@ -56,6 +57,7 @@ func main() {
 		IncludeWaiting:           *includeWaiting,
 		ScaleInParams:            scaler.ScaleParams{Factor: *scaleInFactor},
 		ScaleOutParams:           scaler.ScaleParams{Factor: *scaleOutFactor},
+		InstanceBuffer:           *instanceBuffer,
 	})
 	if err != nil {
 		log.Fatal(err)

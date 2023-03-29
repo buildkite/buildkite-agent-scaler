@@ -44,6 +44,21 @@ func TestScalingOutWithoutError(t *testing.T) {
 			currentDesiredCapacity:  2,
 			expectedDesiredCapacity: 28,
 		},
+		// Basic scale out with instance buffer
+		{
+			metrics: buildkite.AgentMetrics{
+				ScheduledJobs: 10,
+				RunningJobs:   2,
+				WaitingJobs:   2,
+				TotalAgents:   2,
+			},
+			params: Params{
+				AgentsPerInstance: 1,
+				InstanceBuffer:    10,
+			},
+			currentDesiredCapacity:  12,
+			expectedDesiredCapacity: 22,
+		},
 		// Scale-out with multiple agents per instance
 		{
 			metrics: buildkite.AgentMetrics{
@@ -245,6 +260,7 @@ func TestScalingOutWithoutError(t *testing.T) {
 				bk:             &buildkiteTestDriver{metrics: tc.metrics},
 				scaleOutParams: tc.params.ScaleOutParams,
 				scaleInParams: tc.params.ScaleInParams,
+				instanceBuffer: tc.params.InstanceBuffer,
 				scaleOnlyAfterAllEvent: tc.params.ScaleOnlyAfterAllEvent,
 				scaling: ScalingCalculator{
 					includeWaiting:    tc.params.IncludeWaiting,
@@ -303,6 +319,21 @@ func TestScalingInWithoutError(t *testing.T) {
 			},
 			currentDesiredCapacity:  10,
 			expectedDesiredCapacity: 9,
+		},
+		// Calculate using an instance buffer
+		{
+			metrics: buildkite.AgentMetrics{
+				ScheduledJobs: 10,
+				RunningJobs:   5,
+				IdleAgents:    25,
+				TotalAgents:   30,
+			},
+			params: Params{
+				AgentsPerInstance: 1,
+				InstanceBuffer: 10,
+			},
+			currentDesiredCapacity:  30,
+			expectedDesiredCapacity: 25,
 		},
 		// With 500% factor, we scale all the way down despite scheduled jobs
 		{
@@ -385,6 +416,7 @@ func TestScalingInWithoutError(t *testing.T) {
 				},
 				scaleInParams: tc.params.ScaleInParams,
 				scaleOutParams: tc.params.ScaleOutParams,
+				instanceBuffer: tc.params.InstanceBuffer,
 				scaleOnlyAfterAllEvent: tc.params.ScaleOnlyAfterAllEvent,
 			}
 
