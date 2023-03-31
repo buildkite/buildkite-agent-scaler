@@ -1,6 +1,7 @@
 package scaler
 
 import (
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -23,8 +24,9 @@ type AutoscaleGroupDetails struct {
 }
 
 type ASGDriver struct {
-	Name string
-	Sess *session.Session
+	Name     string
+	Sess     *session.Session
+	MaxPages int
 }
 
 func (a *ASGDriver) Describe() (AutoscaleGroupDetails, error) {
@@ -101,7 +103,11 @@ func (a *ASGDriver) GetLastScalingInAndOutActivity() (*autoscaling.Activity, *au
 	var lastScalingOutActivity *autoscaling.Activity
 	var lastScalingInActivity *autoscaling.Activity
 	hasFoundScalingActivities := false
-	for !hasFoundScalingActivities {
+	for i := 0; !hasFoundScalingActivities; i++ {
+		if a.MaxPages > 0 && i > a.MaxPages {
+			return nil, nil, fmt.Errorf("%d exceedes allowed pages for autoscaling:DescribeScalingActivities, %d", i, a.MaxPages)
+		}
+
 		output, err := a.GetAutoscalingActivities(nextToken)
 		if err != nil {
 			return nil, nil, err

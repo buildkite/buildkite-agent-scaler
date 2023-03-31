@@ -133,6 +133,11 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		}
 	}
 
+	maxPages := 0
+	if v := os.Getenv("MAX_PAGES"); v != "" {
+		maxPages, _ = strconv.Atoi(v)
+	}
+
 	var mustGetEnv = func(env string) string {
 		val := os.Getenv(env)
 		if val == "" {
@@ -155,8 +160,9 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 
 	// set last scale in and out from asg's activities
 	asg := &scaler.ASGDriver{
-		Name: mustGetEnv(`ASG_NAME`),
-		Sess: sess,
+		Name:     mustGetEnv(`ASG_NAME`),
+		Sess:     sess,
+		MaxPages: maxPages,
 	}
 
 	c1 := make(chan LastScaleASGResult, 1)
