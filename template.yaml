@@ -16,12 +16,12 @@ Parameters:
     Description: Queue name that agents will use, targeted in pipeline steps using "queue={value}"
     Type: String
     Default: default
-    MinLength: 1
+    MinLength: "1"
 
   RootStackName:
     Description: Name of parent CloudFormation stack (if exists)
     Type: String
-    Default: !Ref AWS::StackName
+    Default: "Elastic CI Stack"
 
   AgentAutoScaleGroup:
     Description: The name of the Auto Scaling group to set desired count on.
@@ -68,7 +68,7 @@ Parameters:
       - "true"
       - "false"
     Default: "true"
-    
+
   RolePermissionsBoundaryARN:
     Type: String
     Description: The ARN of the policy used to set the permissions boundary for the role.
@@ -77,7 +77,7 @@ Parameters:
   LogRetentionDays:
     Type: Number
     Description: The number of days to retain the Cloudwatch Logs of the lambda.
-    Default: 1
+    Default: "1"
 
 Conditions:
   CreateRole:
