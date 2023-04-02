@@ -16,5 +16,5 @@ echo --- ":aws::lambda: Publishing version $VERSION to SAR"
 aws serverlessrepo create-application-version \
   --application-id "$APP_ID" \
   --template-body file://packaged.yml \
-  --semantic-version "$VERSION" \
+  --semantic-version "${VERSION#v}" \
   --source-code-url "https://github.com/buildkite/buildkite-agent-scaler/tree/$(git rev-parse HEAD)/"
