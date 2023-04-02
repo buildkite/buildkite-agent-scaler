@@ -82,8 +82,8 @@ Parameters:
 
   MaxDescribeScalingActivitiesPages:
     Type: Number
-    Description: The number of pages to retrive for DescribeScalingActivity. 0 means unlimited.
-    Default: 0
+    Description: The number of pages to retrive for DescribeScalingActivity. Negative numbers mean unlimited.
+    Default: "-1"
 
 Conditions:
   CreateRole:
