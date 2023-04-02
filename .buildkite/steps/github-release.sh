@@ -1,5 +1,6 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+
+set -eufo pipefail
 
 echo '--- Getting credentials from SSM'
 GITHUB_RELEASE_ACCESS_TOKEN=$( \
