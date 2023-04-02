@@ -52,6 +52,7 @@ Parameters:
   InstanceBuffer:
     Description: How many free instances to maintain
     Type: Number
+    Default: "0"
 
   ScaleOutForWaitingJobs:
     Description: ""
