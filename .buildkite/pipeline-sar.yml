@@ -30,9 +30,10 @@ steps:
       - package
 
   - label: ":package: :arrow_right: :aws:"
-    key: sar
-    command:
-      - buildkite-agent artifact download 'packaged.yml' .
-      - aws serverlessrepo create-application-version --application-id arn:aws:serverlessrepo:us-east-1:172840064832:applications/buildkite-agent-scaler --template-body file://packaged.yml --semantic-version "$(buildkite-agent meta-data get version)" --source-code-url "https://github.com/buildkite/buildkite-agent-scaler/tree/$(git rev-parse HEAD)/"
+    key: publish
+    command: .buildkite/steps/publish-package.sh
     depends_on:
       - release
+    plugins:
+      - aws-assume-role-with-web-identity:
+          role-arn: arn:aws:iam::172840064832:role/pipeline-buildkite-agent-scaler-publish
