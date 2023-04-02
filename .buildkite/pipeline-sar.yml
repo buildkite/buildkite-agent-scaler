@@ -34,3 +34,6 @@ steps:
     command: .buildkite/steps/publish-package.sh
     depends_on:
       - release
+    plugins:
+      - aws-assume-role-with-web-identity:
+          role-arn: arn:aws:iam::172840064832:role/pipeline-buildkite-agent-scaler-publish
