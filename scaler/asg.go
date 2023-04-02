@@ -1,6 +1,7 @@
 package scaler
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"strings"
@@ -87,16 +88,16 @@ func (a *ASGDriver) SetDesiredCapacity(count int64) error {
 	return nil
 }
 
-func (a *ASGDriver) GetAutoscalingActivities(nextToken *string) (*autoscaling.DescribeScalingActivitiesOutput, error) {
+func (a *ASGDriver) GetAutoscalingActivities(ctx context.Context, nextToken *string) (*autoscaling.DescribeScalingActivitiesOutput, error) {
 	svc := autoscaling.New(a.Sess)
 	input := &autoscaling.DescribeScalingActivitiesInput{
 		AutoScalingGroupName: aws.String(a.Name),
 		NextToken:            nextToken,
 	}
-	return svc.DescribeScalingActivities(input)
+	return svc.DescribeScalingActivitiesWithContext(ctx, input)
 }
 
-func (a *ASGDriver) GetLastScalingInAndOutActivity() (*autoscaling.Activity, *autoscaling.Activity, error) {
+func (a *ASGDriver) GetLastScalingInAndOutActivity(ctx context.Context) (*autoscaling.Activity, *autoscaling.Activity, error) {
 	const scalingOutKey = "increasing the capacity"
 	const shrinkingKey = "shrinking the capacity"
 	var nextToken *string
@@ -109,7 +110,7 @@ func (a *ASGDriver) GetLastScalingInAndOutActivity() (*autoscaling.Activity, *au
 			return nil, nil, fmt.Errorf("%d exceedes allowed pages for autoscaling:DescribeScalingActivities, %d", i, a.MaxDescribeScalingActivitiesPages)
 		}
 
-		output, err := a.GetAutoscalingActivities(nextToken)
+		output, err := a.GetAutoscalingActivities(ctx, nextToken)
 		if err != nil {
 			return nil, nil, err
 		}

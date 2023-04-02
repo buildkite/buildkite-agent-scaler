@@ -170,9 +170,12 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 
 	c1 := make(chan LastScaleASGResult, 1)
 
+	cancelableCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	scalingLastActivityStartTime := time.Now()
 	go func() {
-		scaleOutOutput, scaleInOutput, err := asg.GetLastScalingInAndOutActivity()
+		scaleOutOutput, scaleInOutput, err := asg.GetLastScalingInAndOutActivity(cancelableCtx)
 		result := LastScaleASGResult{
 			scaleOutOutput,
 			scaleInOutput,
@@ -200,6 +203,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		log.Printf("Succesfully retrieved last scaling activity events. Last scale out %v, last scale in %v. Discovery took %s.", lastScaleOut, lastScaleIn, scalingTimeDiff)
 	case <-asgActivityTimeout:
 		log.Printf("Failed to retrieve last scaling activity events due to %s timeout", asgActivityTimeoutDuration)
+		cancel()
 	}
 
 	for {
