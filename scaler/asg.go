@@ -24,9 +24,9 @@ type AutoscaleGroupDetails struct {
 }
 
 type ASGDriver struct {
-	Name     string
-	Sess     *session.Session
-	MaxPages int
+	Name                              string
+	Sess                              *session.Session
+	MaxDescribeScalingActivitiesPages int
 }
 
 func (a *ASGDriver) Describe() (AutoscaleGroupDetails, error) {
@@ -103,9 +103,10 @@ func (a *ASGDriver) GetLastScalingInAndOutActivity() (*autoscaling.Activity, *au
 	var lastScalingOutActivity *autoscaling.Activity
 	var lastScalingInActivity *autoscaling.Activity
 	hasFoundScalingActivities := false
-	for i := 0; !hasFoundScalingActivities; i++ {
-		if a.MaxPages > 0 && i > a.MaxPages {
-			return nil, nil, fmt.Errorf("%d exceedes allowed pages for autoscaling:DescribeScalingActivities, %d", i, a.MaxPages)
+	for i := 0; !hasFoundScalingActivities; {
+		i++
+		if a.MaxDescribeScalingActivitiesPages >= 0 && i >= a.MaxDescribeScalingActivitiesPages {
+			return nil, nil, fmt.Errorf("%d exceedes allowed pages for autoscaling:DescribeScalingActivities, %d", i, a.MaxDescribeScalingActivitiesPages)
 		}
 
 		output, err := a.GetAutoscalingActivities(nextToken)
