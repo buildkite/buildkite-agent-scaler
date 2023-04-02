@@ -16,7 +16,10 @@ steps:
   - label: ":s3:"
     command: ".buildkite/steps/upload-to-s3.sh"
     agents:
-      queue: "deploy"
+      queue: elastic-runners
+    plugins:
+      - aws-assume-role-with-web-identity:
+          role-arn: arn:aws:iam::032379705303:role/pipeline-buildkite-agent-scaler
 
   - wait
   - name: ":pipeline:"

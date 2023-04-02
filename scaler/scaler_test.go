@@ -232,7 +232,7 @@ func TestScalingOutWithoutError(t *testing.T) {
 		{
 			metrics: buildkite.AgentMetrics{
 				ScheduledJobs: 1,
-				IdleAgents:  0,
+				IdleAgents:    0,
 				TotalAgents:   0,
 			},
 			params: Params{
@@ -242,7 +242,7 @@ func TestScalingOutWithoutError(t *testing.T) {
 					CooldownPeriod: 2 * time.Minute,
 				},
 				ScaleInParams: ScaleParams{
-					LastEvent:time.Now().Add(-1 * time.Minute),
+					LastEvent:      time.Now().Add(-1 * time.Minute),
 					CooldownPeriod: 5 * time.Minute,
 				},
 				ScaleOnlyAfterAllEvent: true,
@@ -256,11 +256,11 @@ func TestScalingOutWithoutError(t *testing.T) {
 				desiredCapacity: tc.currentDesiredCapacity,
 			}
 			s := Scaler{
-				autoscaling:    asg,
-				bk:             &buildkiteTestDriver{metrics: tc.metrics},
-				scaleOutParams: tc.params.ScaleOutParams,
-				scaleInParams: tc.params.ScaleInParams,
-				instanceBuffer: tc.params.InstanceBuffer,
+				autoscaling:            asg,
+				bk:                     &buildkiteTestDriver{metrics: tc.metrics},
+				scaleOutParams:         tc.params.ScaleOutParams,
+				scaleInParams:          tc.params.ScaleInParams,
+				instanceBuffer:         tc.params.InstanceBuffer,
 				scaleOnlyAfterAllEvent: tc.params.ScaleOnlyAfterAllEvent,
 				scaling: ScalingCalculator{
 					includeWaiting:    tc.params.IncludeWaiting,
@@ -330,7 +330,7 @@ func TestScalingInWithoutError(t *testing.T) {
 			},
 			params: Params{
 				AgentsPerInstance: 1,
-				InstanceBuffer: 10,
+				InstanceBuffer:    10,
 			},
 			currentDesiredCapacity:  30,
 			expectedDesiredCapacity: 25,
@@ -354,8 +354,8 @@ func TestScalingInWithoutError(t *testing.T) {
 		// Make sure we round down so we eventually reach zero
 		{
 			metrics: buildkite.AgentMetrics{
-				IdleAgents: 1,
-				TotalAgents:   1,
+				IdleAgents:  1,
+				TotalAgents: 1,
 			},
 			params: Params{
 				AgentsPerInstance: 1,
@@ -369,7 +369,7 @@ func TestScalingInWithoutError(t *testing.T) {
 		// Scale in disabled
 		{
 			metrics: buildkite.AgentMetrics{
-				TotalAgents:   1,
+				TotalAgents: 1,
 			},
 			params: Params{
 				ScaleInParams: ScaleParams{
@@ -383,7 +383,7 @@ func TestScalingInWithoutError(t *testing.T) {
 		{
 			metrics: buildkite.AgentMetrics{
 				IdleAgents:  3,
-				TotalAgents:   3,
+				TotalAgents: 3,
 			},
 			params: Params{
 				AgentsPerInstance: 1,
@@ -392,7 +392,7 @@ func TestScalingInWithoutError(t *testing.T) {
 					CooldownPeriod: 5 * time.Minute,
 				},
 				ScaleInParams: ScaleParams{
-					LastEvent:time.Now().Add(-10 * time.Minute),
+					LastEvent:      time.Now().Add(-10 * time.Minute),
 					CooldownPeriod: 2 * time.Minute,
 				},
 				ScaleOnlyAfterAllEvent: true,
@@ -414,9 +414,9 @@ func TestScalingInWithoutError(t *testing.T) {
 					includeWaiting:    tc.params.IncludeWaiting,
 					agentsPerInstance: tc.params.AgentsPerInstance,
 				},
-				scaleInParams: tc.params.ScaleInParams,
-				scaleOutParams: tc.params.ScaleOutParams,
-				instanceBuffer: tc.params.InstanceBuffer,
+				scaleInParams:          tc.params.ScaleInParams,
+				scaleOutParams:         tc.params.ScaleOutParams,
+				instanceBuffer:         tc.params.InstanceBuffer,
 				scaleOnlyAfterAllEvent: tc.params.ScaleOnlyAfterAllEvent,
 			}
 

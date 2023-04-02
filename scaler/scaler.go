@@ -42,10 +42,10 @@ type Scaler struct {
 	metrics interface {
 		Publish(orgSlug, queue string, metrics map[string]int64) error
 	}
-	scaling        ScalingCalculator
-	scaleInParams  ScaleParams
-	scaleOutParams ScaleParams
-	instanceBuffer int
+	scaling                ScalingCalculator
+	scaleInParams          ScaleParams
+	scaleOutParams         ScaleParams
+	instanceBuffer         int
 	scaleOnlyAfterAllEvent bool
 }
 
@@ -55,9 +55,9 @@ func NewScaler(client *buildkite.Client, sess *session.Session, params Params) (
 			client: client,
 			queue:  params.BuildkiteQueue,
 		},
-		scaleInParams:  params.ScaleInParams,
-		scaleOutParams: params.ScaleOutParams,
-		instanceBuffer: params.InstanceBuffer,
+		scaleInParams:          params.ScaleInParams,
+		scaleOutParams:         params.ScaleOutParams,
+		instanceBuffer:         params.InstanceBuffer,
 		scaleOnlyAfterAllEvent: params.ScaleOnlyAfterAllEvent,
 	}
 

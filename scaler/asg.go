@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	activitySucessfulStatusCode = "Successful"
+	activitySucessfulStatusCode           = "Successful"
 	userRequestForChangingDesiredCapacity = "a user request explicitly set group desired capacity changing the desired capacity"
 )
 
@@ -89,7 +89,7 @@ func (a *ASGDriver) GetAutoscalingActivities(nextToken *string) (*autoscaling.De
 	svc := autoscaling.New(a.Sess)
 	input := &autoscaling.DescribeScalingActivitiesInput{
 		AutoScalingGroupName: aws.String(a.Name),
-		NextToken: nextToken,
+		NextToken:            nextToken,
 	}
 	return svc.DescribeScalingActivities(input)
 }

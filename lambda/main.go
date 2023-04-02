@@ -27,8 +27,8 @@ var (
 
 type LastScaleASGResult struct {
 	LastScaleOutActivity *autoscaling.Activity
-	LastScaleInActivity *autoscaling.Activity
-	Err error
+	LastScaleInActivity  *autoscaling.Activity
+	Err                  error
 }
 
 func main() {
@@ -50,7 +50,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		interval time.Duration    = 10 * time.Second
 
 		asgActivityTimeoutDuration = 10 * time.Second
-		asgActivityTimeout = time.After(asgActivityTimeoutDuration)
+		asgActivityTimeout         = time.After(asgActivityTimeoutDuration)
 
 		scaleInCooldownPeriod time.Duration
 		scaleInFactor         float64
@@ -164,8 +164,8 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 	scalingLastActivityStartTime := time.Now()
 	go func() {
 		scaleOutOutput, scaleInOutput, err := asg.GetLastScalingInAndOutActivity()
-		result := LastScaleASGResult {
-			scaleOutOutput, 
+		result := LastScaleASGResult{
+			scaleOutOutput,
 			scaleInOutput,
 			err,
 		}
@@ -173,10 +173,10 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 	}()
 
 	select {
-    case res := <-c1:
+	case res := <-c1:
 		if res.Err != nil {
 			log.Printf("Failed to retrieve last scaling activity events due to error (%s)", res.Err)
-			break;
+			break
 		}
 
 		scaleInOutput := res.LastScaleInActivity
@@ -189,8 +189,8 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		}
 		scalingTimeDiff := time.Now().Sub(scalingLastActivityStartTime)
 		log.Printf("Succesfully retrieved last scaling activity events. Last scale out %v, last scale in %v. Discovery took %s.", lastScaleOut, lastScaleIn, scalingTimeDiff)
-    case <- asgActivityTimeout:
-        log.Printf("Failed to retrieve last scaling activity events due to %s timeout", asgActivityTimeoutDuration)
+	case <-asgActivityTimeout:
+		log.Printf("Failed to retrieve last scaling activity events due to %s timeout", asgActivityTimeoutDuration)
 	}
 
 	for {
@@ -231,7 +231,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 					Factor:         scaleOutFactor,
 					LastEvent:      lastScaleOut,
 				},
-				InstanceBuffer: instanceBuffer,
+				InstanceBuffer:         instanceBuffer,
 				ScaleOnlyAfterAllEvent: scaleOnlyAfterAllEvent,
 			}
 
