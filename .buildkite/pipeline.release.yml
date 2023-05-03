@@ -19,7 +19,7 @@ steps:
     concurrency_group: 'release'
     plugins:
       - aws-assume-role-with-web-identity:
-          role-arn: arn:aws:iam::445615400570:role/pipeline-buildkite-agent-scaler
+          role-arn: arn:aws:iam::445615400570:role/pipeline-buildkite-buildkite-agent-scaler
       - aws-ssm#v1.0.0:
           parameters:
             GITHUB_RELEASE_ACCESS_TOKEN: /pipelines/buildkite-agent-scaler/GITHUB_RELEASE_ACCESS_TOKEN
