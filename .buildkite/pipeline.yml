@@ -19,7 +19,7 @@ steps:
       queue: elastic-runners
     plugins:
       - aws-assume-role-with-web-identity:
-          role-arn: arn:aws:iam::032379705303:role/pipeline-buildkite-agent-scaler
+          role-arn: arn:aws:iam::032379705303:role/pipeline-buildkite-buildkite-agent-scaler
 
   - wait
   - name: ":pipeline:"
