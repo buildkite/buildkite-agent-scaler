@@ -107,12 +107,12 @@ func (a *ASGDriver) GetLastScalingInAndOutActivity(ctx context.Context) (*autosc
 	for i := 0; !hasFoundScalingActivities; {
 		i++
 		if a.MaxDescribeScalingActivitiesPages >= 0 && i >= a.MaxDescribeScalingActivitiesPages {
-			return nil, nil, fmt.Errorf("%d exceedes allowed pages for autoscaling:DescribeScalingActivities, %d", i, a.MaxDescribeScalingActivitiesPages)
+			return lastScalingOutActivity, lastScalingInActivity, fmt.Errorf("%d exceedes allowed pages for autoscaling:DescribeScalingActivities, %d", i, a.MaxDescribeScalingActivitiesPages)
 		}
 
 		output, err := a.GetAutoscalingActivities(ctx, nextToken)
 		if err != nil {
-			return nil, nil, err
+			return lastScalingOutActivity, lastScalingInActivity, err
 		}
 		for _, activity := range output.Activities {
 			// Filter for successful activity and explicit desired count changes
