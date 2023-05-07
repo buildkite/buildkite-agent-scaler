@@ -97,7 +97,7 @@ func (a *ASGDriver) GetAutoscalingActivities(ctx context.Context, nextToken *str
 	return svc.DescribeScalingActivitiesWithContext(ctx, input)
 }
 
-func (a *ASGDriver) GetLastScalingInAndOutActivity(ctx context.Context) (*autoscaling.Activity, *autoscaling.Activity, error) {
+func (a *ASGDriver) GetLastScalingInAndOutActivity(ctx context.Context, findScaleOut, findScaleIn bool) (*autoscaling.Activity, *autoscaling.Activity, error) {
 	const scalingOutKey = "increasing the capacity"
 	const shrinkingKey = "shrinking the capacity"
 	var nextToken *string
@@ -114,6 +114,7 @@ func (a *ASGDriver) GetLastScalingInAndOutActivity(ctx context.Context) (*autosc
 		if err != nil {
 			return lastScalingOutActivity, lastScalingInActivity, err
 		}
+
 		for _, activity := range output.Activities {
 			// Filter for successful activity and explicit desired count changes
 			if *activity.StatusCode == activitySucessfulStatusCode &&
@@ -124,11 +125,16 @@ func (a *ASGDriver) GetLastScalingInAndOutActivity(ctx context.Context) (*autosc
 					lastScalingInActivity = activity
 				}
 			}
-			if lastScalingOutActivity != nil && lastScalingInActivity != nil {
-				hasFoundScalingActivities = true
-				break
+
+			if findScaleOut && findScaleIn {
+				hasFoundScalingActivities = lastScalingOutActivity != nil && lastScalingInActivity != nil
+			} else if findScaleOut {
+				hasFoundScalingActivities = lastScalingOutActivity != nil
+			} else if findScaleIn {
+				hasFoundScalingActivities = lastScalingInActivity != nil
 			}
 		}
+
 		nextToken = output.NextToken
 		if nextToken == nil {
 			break
