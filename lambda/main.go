@@ -181,7 +181,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 
 	// set last scale in and out from asg's activities
 	asg := &scaler.ASGDriver{
-		Name:                              mustGetEnv(`ASG_NAME`),
+		Name:                              mustGetEnv("ASG_NAME"),
 		Sess:                              sess,
 		MaxDescribeScalingActivitiesPages: maxDescribeScalingActivitiesPages,
 	}

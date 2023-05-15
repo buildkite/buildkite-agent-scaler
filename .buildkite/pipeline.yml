@@ -1,4 +1,12 @@
 steps:
+  - name: ":go: go fmt"
+    key: test-go-fmt
+    command: ".buildkite/steps/test-go-fmt.sh"
+    plugins:
+      - docker#v3.1.0:
+          image: "golang:1.19"
+          workdir: /go/src/github.com/buildkite/buildkite-agent-scaler
+
   - name: ":golang:"
     command: ".buildkite/steps/tests.sh"
     plugins:
