@@ -32,7 +32,7 @@ type LastScaleASGResult struct {
 }
 
 func main() {
-	if os.Getenv(`DEBUG`) != "" {
+	if os.Getenv("DEBUG") != "" {
 		_, err := Handler(context.Background(), json.RawMessage([]byte{}))
 		if err != nil {
 			log.Fatal(err)
@@ -69,13 +69,13 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		disableScaleOut, disableScaleIn bool
 	)
 
-	if v := os.Getenv(`LAMBDA_INTERVAL`); v != "" {
+	if v := os.Getenv("LAMBDA_INTERVAL"); v != "" {
 		if interval, err = time.ParseDuration(v); err != nil {
 			return "", err
 		}
 	}
 
-	if v := os.Getenv(`LAMBDA_TIMEOUT`); v != "" {
+	if v := os.Getenv("LAMBDA_TIMEOUT"); v != "" {
 		if timeoutDuration, err := time.ParseDuration(v); err != nil {
 			return "", err
 		} else {
@@ -83,7 +83,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		}
 	}
 
-	if v := os.Getenv(`ASG_ACTIVITY_TIMEOUT`); v != "" {
+	if v := os.Getenv("ASG_ACTIVITY_TIMEOUT"); v != "" {
 		if timeoutDuration, err := time.ParseDuration(v); err != nil {
 			return "", err
 		} else {
@@ -92,45 +92,45 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		}
 	}
 
-	if v := os.Getenv(`SCALE_IN_COOLDOWN_PERIOD`); v != "" {
+	if v := os.Getenv("SCALE_IN_COOLDOWN_PERIOD"); v != "" {
 		if scaleInCooldownPeriod, err = time.ParseDuration(v); err != nil {
 			return "", err
 		}
 	}
 
-	if v := os.Getenv(`SCALE_IN_FACTOR`); v != "" {
+	if v := os.Getenv("SCALE_IN_FACTOR"); v != "" {
 		if scaleInFactor, err = strconv.ParseFloat(v, 64); err != nil {
 			return "", err
 		}
 		scaleInFactor = math.Abs(scaleInFactor)
 	}
 
-	if v := os.Getenv(`SCALE_ONLY_AFTER_ALL_EVENT`); v != "" {
+	if v := os.Getenv("SCALE_ONLY_AFTER_ALL_EVENT"); v != "" {
 		if v == "true" || v == "1" {
 			scaleOnlyAfterAllEvent = true
 		}
 	}
 
-	if v := os.Getenv(`SCALE_OUT_COOLDOWN_PERIOD`); v != "" {
+	if v := os.Getenv("SCALE_OUT_COOLDOWN_PERIOD"); v != "" {
 		if scaleOutCooldownPeriod, err = time.ParseDuration(v); err != nil {
 			return "", err
 		}
 	}
 
-	if v := os.Getenv(`SCALE_OUT_FACTOR`); v != "" {
+	if v := os.Getenv("SCALE_OUT_FACTOR"); v != "" {
 		if scaleOutFactor, err = strconv.ParseFloat(v, 64); err != nil {
 			return "", err
 		}
 		scaleOutFactor = math.Abs(scaleOutFactor)
 	}
 
-	if v := os.Getenv(`INCLUDE_WAITING`); v != "" {
+	if v := os.Getenv("INCLUDE_WAITING"); v != "" {
 		if v == "true" || v == "1" {
 			includeWaiting = true
 		}
 	}
 
-	if v := os.Getenv(`INSTANCE_BUFFER`); v != "" {
+	if v := os.Getenv("INSTANCE_BUFFER"); v != "" {
 		if instanceBuffer, err = strconv.Atoi(v); err != nil {
 			return "", err
 		}
@@ -144,17 +144,17 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		}
 	}
 
-	if m := os.Getenv(`CLOUDWATCH_METRICS`); m == `true` || m == `1` {
+	if m := os.Getenv("CLOUDWATCH_METRICS"); m == "true" || m == "1" {
 		log.Printf("Publishing cloudwatch metrics")
 		publishCloudWatchMetrics = true
 	}
 
-	if m := os.Getenv(`DISABLE_SCALE_IN`); m == `true` || m == `1` {
+	if m := os.Getenv("DISABLE_SCALE_IN"); m == "true" || m == "1" {
 		log.Printf("Disabling scale-in 🙅🏼‍")
 		disableScaleIn = true
 	}
 
-	if m := os.Getenv(`DISABLE_SCALE_OUT`); m == `true` || m == `1` {
+	if m := os.Getenv("DISABLE_SCALE_OUT"); m == "true" || m == "1" {
 		log.Printf("Disabling scale-out 🙅🏼‍♂️")
 		disableScaleOut = true
 	}
@@ -238,7 +238,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		case <-timeout:
 			return "", nil
 		default:
-			token := os.Getenv(`BUILDKITE_AGENT_TOKEN`)
+			token := os.Getenv("BUILDKITE_AGENT_TOKEN")
 			ssmTokenKey := os.Getenv("BUILDKITE_AGENT_TOKEN_SSM_KEY")
 
 			if ssmTokenKey != "" {
@@ -250,16 +250,14 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 			}
 
 			if token == "" {
-				return "", errors.New(
-					"Must provide either BUILDKITE_AGENT_TOKEN or BUILDKITE_AGENT_TOKEN_SSM_KEY",
-				)
+				return "", errors.New("Must provide either BUILDKITE_AGENT_TOKEN or BUILDKITE_AGENT_TOKEN_SSM_KEY")
 			}
 
 			client := buildkite.NewClient(token)
 			params := scaler.Params{
-				BuildkiteQueue:       mustGetEnv(`BUILDKITE_QUEUE`),
-				AutoScalingGroupName: mustGetEnv(`ASG_NAME`),
-				AgentsPerInstance:    mustGetEnvInt(`AGENTS_PER_INSTANCE`),
+				BuildkiteQueue:       mustGetEnv("BUILDKITE_QUEUE"),
+				AutoScalingGroupName: mustGetEnv("ASG_NAME"),
+				AgentsPerInstance:    mustGetEnvInt("AGENTS_PER_INSTANCE"),
 				IncludeWaiting:       includeWaiting,
 				ScaleInParams: scaler.ScaleParams{
 					CooldownPeriod: scaleInCooldownPeriod,
