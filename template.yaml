@@ -80,6 +80,11 @@ Parameters:
     Description: The number of days to retain the Cloudwatch Logs of the lambda.
     Default: "1"
 
+  MaxDescribeScalingActivitiesPages:
+    Type: Number
+    Description: The number of pages to retrive for DescribeScalingActivity. Negative numbers mean unlimited.
+    Default: "-1"
+
 Conditions:
   CreateRole:
     !Equals [ !Ref AutoscalingLambdaExecutionRole, '' ]
@@ -193,6 +198,7 @@ Resources:
           INCLUDE_WAITING:               !Ref ScaleOutForWaitingJobs
           LAMBDA_TIMEOUT:                "50s"
           LAMBDA_INTERVAL:               "10s"
+          MAX_DESCRIBE_SCALING_ACTIVITIES_PAGES: !Ref MaxDescribeScalingActivitiesPages
       Events:
         Timer:
           Type: Schedule

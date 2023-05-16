@@ -1,6 +1,8 @@
 package scaler
 
 import (
+	"context"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -23,8 +25,9 @@ type AutoscaleGroupDetails struct {
 }
 
 type ASGDriver struct {
-	Name string
-	Sess *session.Session
+	Name                              string
+	Sess                              *session.Session
+	MaxDescribeScalingActivitiesPages int
 }
 
 func (a *ASGDriver) Describe() (AutoscaleGroupDetails, error) {
@@ -85,27 +88,33 @@ func (a *ASGDriver) SetDesiredCapacity(count int64) error {
 	return nil
 }
 
-func (a *ASGDriver) GetAutoscalingActivities(nextToken *string) (*autoscaling.DescribeScalingActivitiesOutput, error) {
+func (a *ASGDriver) GetAutoscalingActivities(ctx context.Context, nextToken *string) (*autoscaling.DescribeScalingActivitiesOutput, error) {
 	svc := autoscaling.New(a.Sess)
 	input := &autoscaling.DescribeScalingActivitiesInput{
 		AutoScalingGroupName: aws.String(a.Name),
 		NextToken:            nextToken,
 	}
-	return svc.DescribeScalingActivities(input)
+	return svc.DescribeScalingActivitiesWithContext(ctx, input)
 }
 
-func (a *ASGDriver) GetLastScalingInAndOutActivity() (*autoscaling.Activity, *autoscaling.Activity, error) {
+func (a *ASGDriver) GetLastScalingInAndOutActivity(ctx context.Context, findScaleOut, findScaleIn bool) (*autoscaling.Activity, *autoscaling.Activity, error) {
 	const scalingOutKey = "increasing the capacity"
 	const shrinkingKey = "shrinking the capacity"
 	var nextToken *string
 	var lastScalingOutActivity *autoscaling.Activity
 	var lastScalingInActivity *autoscaling.Activity
 	hasFoundScalingActivities := false
-	for !hasFoundScalingActivities {
-		output, err := a.GetAutoscalingActivities(nextToken)
-		if err != nil {
-			return nil, nil, err
+	for i := 0; !hasFoundScalingActivities; {
+		i++
+		if a.MaxDescribeScalingActivitiesPages >= 0 && i >= a.MaxDescribeScalingActivitiesPages {
+			return lastScalingOutActivity, lastScalingInActivity, fmt.Errorf("%d exceedes allowed pages for autoscaling:DescribeScalingActivities, %d", i, a.MaxDescribeScalingActivitiesPages)
 		}
+
+		output, err := a.GetAutoscalingActivities(ctx, nextToken)
+		if err != nil {
+			return lastScalingOutActivity, lastScalingInActivity, err
+		}
+
 		for _, activity := range output.Activities {
 			// Filter for successful activity and explicit desired count changes
 			if *activity.StatusCode == activitySucessfulStatusCode &&
@@ -116,11 +125,16 @@ func (a *ASGDriver) GetLastScalingInAndOutActivity() (*autoscaling.Activity, *au
 					lastScalingInActivity = activity
 				}
 			}
-			if lastScalingOutActivity != nil && lastScalingInActivity != nil {
-				hasFoundScalingActivities = true
-				break
+
+			if findScaleOut && findScaleIn {
+				hasFoundScalingActivities = lastScalingOutActivity != nil && lastScalingInActivity != nil
+			} else if findScaleOut {
+				hasFoundScalingActivities = lastScalingOutActivity != nil
+			} else if findScaleIn {
+				hasFoundScalingActivities = lastScalingInActivity != nil
 			}
 		}
+
 		nextToken = output.NextToken
 		if nextToken == nil {
 			break

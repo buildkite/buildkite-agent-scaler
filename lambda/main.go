@@ -64,6 +64,9 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 
 		includeWaiting bool
 		err            error
+
+		publishCloudWatchMetrics        bool
+		disableScaleOut, disableScaleIn bool
 	)
 
 	if v := os.Getenv(`LAMBDA_INTERVAL`); v != "" {
@@ -133,6 +136,29 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		}
 	}
 
+	maxDescribeScalingActivitiesPages := -1
+	if v := os.Getenv("MAX_DESCRIBE_SCALING_ACTIVITIES_PAGES"); v != "" {
+		maxDescribeScalingActivitiesPages, err = strconv.Atoi(v)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to parse MAX_DESCRIBE_SCALING_ACTIVITIES_PAGES: %v", err)
+		}
+	}
+
+	if m := os.Getenv(`CLOUDWATCH_METRICS`); m == `true` || m == `1` {
+		log.Printf("Publishing cloudwatch metrics")
+		publishCloudWatchMetrics = true
+	}
+
+	if m := os.Getenv(`DISABLE_SCALE_IN`); m == `true` || m == `1` {
+		log.Printf("Disabling scale-in 🙅🏼‍")
+		disableScaleIn = true
+	}
+
+	if m := os.Getenv(`DISABLE_SCALE_OUT`); m == `true` || m == `1` {
+		log.Printf("Disabling scale-out 🙅🏼‍♂️")
+		disableScaleOut = true
+	}
+
 	var mustGetEnv = func(env string) string {
 		val := os.Getenv(env)
 		if val == "" {
@@ -155,15 +181,19 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 
 	// set last scale in and out from asg's activities
 	asg := &scaler.ASGDriver{
-		Name: mustGetEnv(`ASG_NAME`),
-		Sess: sess,
+		Name:                              mustGetEnv(`ASG_NAME`),
+		Sess:                              sess,
+		MaxDescribeScalingActivitiesPages: maxDescribeScalingActivitiesPages,
 	}
 
 	c1 := make(chan LastScaleASGResult, 1)
 
+	cancelableCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	scalingLastActivityStartTime := time.Now()
 	go func() {
-		scaleOutOutput, scaleInOutput, err := asg.GetLastScalingInAndOutActivity()
+		scaleOutOutput, scaleInOutput, err := asg.GetLastScalingInAndOutActivity(cancelableCtx, !disableScaleOut, !disableScaleIn)
 		result := LastScaleASGResult{
 			scaleOutOutput,
 			scaleInOutput,
@@ -175,22 +205,32 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 	select {
 	case res := <-c1:
 		if res.Err != nil {
-			log.Printf("Failed to retrieve last scaling activity events due to error (%s)", res.Err)
+			log.Printf("Encountered error when retrieving last scaling activities: %s", res.Err)
+		}
+
+		if res.LastScaleOutActivity == nil && res.LastScaleInActivity == nil {
 			break
 		}
 
-		scaleInOutput := res.LastScaleInActivity
-		if scaleInOutput != nil {
-			lastScaleIn = *scaleInOutput.StartTime
+		if res.LastScaleOutActivity != nil {
+			scaleInOutput := res.LastScaleInActivity
+			if scaleInOutput != nil {
+				lastScaleIn = *scaleInOutput.StartTime
+			}
 		}
-		scaleOutOutput := res.LastScaleOutActivity
-		if scaleOutOutput != nil {
-			lastScaleOut = *scaleOutOutput.StartTime
+
+		if res.LastScaleInActivity != nil {
+			scaleOutOutput := res.LastScaleOutActivity
+			if scaleOutOutput != nil {
+				lastScaleOut = *scaleOutOutput.StartTime
+			}
 		}
-		scalingTimeDiff := time.Now().Sub(scalingLastActivityStartTime)
+
+		scalingTimeDiff := time.Since(scalingLastActivityStartTime)
 		log.Printf("Succesfully retrieved last scaling activity events. Last scale out %v, last scale in %v. Discovery took %s.", lastScaleOut, lastScaleIn, scalingTimeDiff)
 	case <-asgActivityTimeout:
 		log.Printf("Failed to retrieve last scaling activity events due to %s timeout", asgActivityTimeoutDuration)
+		cancel()
 	}
 
 	for {
@@ -225,29 +265,17 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 					CooldownPeriod: scaleInCooldownPeriod,
 					Factor:         scaleInFactor,
 					LastEvent:      lastScaleIn,
+					Disable:        disableScaleIn,
 				},
 				ScaleOutParams: scaler.ScaleParams{
 					CooldownPeriod: scaleOutCooldownPeriod,
 					Factor:         scaleOutFactor,
 					LastEvent:      lastScaleOut,
+					Disable:        disableScaleOut,
 				},
-				InstanceBuffer:         instanceBuffer,
-				ScaleOnlyAfterAllEvent: scaleOnlyAfterAllEvent,
-			}
-
-			if m := os.Getenv(`CLOUDWATCH_METRICS`); m == `true` || m == `1` {
-				log.Printf("Publishing cloudwatch metrics")
-				params.PublishCloudWatchMetrics = true
-			}
-
-			if m := os.Getenv(`DISABLE_SCALE_IN`); m == `true` || m == `1` {
-				log.Printf("Disabling scale-in 🙅🏼‍")
-				params.ScaleInParams.Disable = true
-			}
-
-			if m := os.Getenv(`DISABLE_SCALE_OUT`); m == `true` || m == `1` {
-				log.Printf("Disabling scale-out 🙅🏼‍♂️")
-				params.ScaleOutParams.Disable = true
+				InstanceBuffer:           instanceBuffer,
+				ScaleOnlyAfterAllEvent:   scaleOnlyAfterAllEvent,
+				PublishCloudWatchMetrics: publishCloudWatchMetrics,
 			}
 
 			scaler, err := scaler.NewScaler(client, sess, params)
