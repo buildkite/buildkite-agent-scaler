@@ -14,7 +14,7 @@ import (
 
 const (
 	DefaultMetricsEndpoint = "https://agent.buildkite.com/v3"
-	PollDurationHeader     = `Buildkite-Agent-Metrics-Poll-Duration`
+	PollDurationHeader     = "Buildkite-Agent-Metrics-Poll-Duration"
 )
 
 type Client struct {

@@ -96,9 +96,9 @@ func (s *Scaler) Run() (time.Duration, error) {
 
 	if s.metrics != nil {
 		err = s.metrics.Publish(metrics.OrgSlug, metrics.Queue, map[string]int64{
-			`ScheduledJobsCount`: metrics.ScheduledJobs,
-			`RunningJobsCount`:   metrics.RunningJobs,
-			`WaitingJobsCount`:   metrics.WaitingJobs,
+			"ScheduledJobsCount": metrics.ScheduledJobs,
+			"RunningJobsCount":   metrics.RunningJobs,
+			"WaitingJobsCount":   metrics.WaitingJobs,
 		})
 		if err != nil {
 			return metrics.PollDuration, err
