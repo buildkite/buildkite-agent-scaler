@@ -3,6 +3,25 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
+
+## [v1.4.0](https://github.com/buildkite/buildkite-agent-scaler/tree/v1.4.0) (2023-05-17)
+[Full Changelog](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.3.2...v1.4.0)
+
+### Added
+- A parameter to configure logs retention [#75](https://github.com/buildkite/buildkite-agent-scaler/pull/75) (@Amir-Ahmad)
+- A parameter to limit pagination of autoscaling:DescribeScalingActivity [#81](https://github.com/buildkite/buildkite-agent-scaler/pull/81) (@triarius)
+- A parameter for stack name and use it in lambda function description [#70](https://github.com/buildkite/buildkite-agent-scaler/pull/70) (@ellsclytn)
+- A parameter to allow running scaler with a fixed size instance buffer [#72](https://github.com/buildkite/buildkite-agent-scaler/pull/72) (@wbond)
+
+### Changed
+- Allow releasing development versions of buildkite-agent-scaler to an "edge" serverless repo [#83](https://github.com/buildkite/buildkite-agent-scaler/pull/83) (@triarius)
+
+### Updated
+- Update go 1.15 -> 1.19 [#77](https://github.com/buildkite/buildkite-agent-scaler/pull/77) (@moskyb)
+- Bump github.com/aws/aws-sdk-go to 1.34.0 [#78](https://github.com/buildkite/buildkite-agent-scaler/pull/78) [#76](https://github.com/buildkite/buildkite-agent-scaler/pull/76) (@dependabot[bot])
+- Improvements to code formatting and clarity [#88](https://github.com/buildkite/buildkite-agent-scaler/pull/88) (@moskyb)
+- Improvements to CI [#82](https://github.com/buildkite/buildkite-agent-scaler/pull/82) (@triarius) [#87](https://github.com/buildkite/buildkite-agent-scaler/pull/87) [#86](https://github.com/buildkite/buildkite-agent-scaler/pull/86) (@yob)
+
 ## [1.3.2](https://github.com/buildkite/buildkite-agent-scaler/tree/1.3.2) (2022-08-04)
 [Full Changelog](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.3.1...1.3.2)
 
