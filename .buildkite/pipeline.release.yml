@@ -8,6 +8,9 @@ steps:
       queue: elastic-runners
     concurrency: 1
     concurrency_group: 'release'
+    plugins:
+      - aws-assume-role-with-web-identity:
+          role-arn: arn:aws:iam::032379705303:role/pipeline-buildkite-buildkite-agent-scaler
 
   - wait
   - label: ":github:"
