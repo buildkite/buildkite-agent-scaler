@@ -51,45 +51,37 @@ func (c *Client) GetAgentMetrics(queue string) (AgentMetrics, error) {
 			Slug string `json:"slug"`
 		} `json:"organization"`
 		Agents struct {
-			Queues map[string]struct {
-				Busy  int64 `json:"busy"`
-				Idle  int64 `json:"idle"`
-				Total int64 `json:"total"`
-			} `json:"queues"`
+			Busy  int64 `json:"busy"`
+			Idle  int64 `json:"idle"`
+			Total int64 `json:"total"`
 		} `json:"agents"`
 		Jobs struct {
-			Queues map[string]struct {
-				Scheduled int64 `json:"scheduled"`
-				Running   int64 `json:"running"`
-				Waiting   int64 `json:"waiting"`
-			} `json:"queues"`
+			Scheduled int64 `json:"scheduled"`
+			Running   int64 `json:"running"`
+			Waiting   int64 `json:"waiting"`
 		} `json:"jobs"`
 	}
 
 	t := time.Now()
-	pollDuration, err := c.queryMetrics(&resp)
+	pollDuration, err := c.queryMetrics(&resp, queue)
 	if err != nil {
 		return AgentMetrics{}, err
 	}
 
-	queryDuration := time.Now().Sub(t)
+	queryDuration := time.Since(t)
 
 	var metrics AgentMetrics
 	metrics.OrgSlug = resp.Organization.Slug
 	metrics.Queue = queue
 	metrics.PollDuration = pollDuration
 
-	if queue, exists := resp.Agents.Queues[queue]; exists {
-		metrics.IdleAgents = queue.Idle
-		metrics.BusyAgents = queue.Busy
-		metrics.TotalAgents = queue.Total
-	}
+	metrics.IdleAgents = resp.Agents.Idle
+	metrics.BusyAgents = resp.Agents.Busy
+	metrics.TotalAgents = resp.Agents.Total
 
-	if queue, exists := resp.Jobs.Queues[queue]; exists {
-		metrics.ScheduledJobs = queue.Scheduled
-		metrics.RunningJobs = queue.Running
-		metrics.WaitingJobs = queue.Waiting
-	}
+	metrics.ScheduledJobs = resp.Jobs.Scheduled
+	metrics.RunningJobs = resp.Jobs.Running
+	metrics.WaitingJobs = resp.Jobs.Waiting
 
 	log.Printf("↳ Agents: idle=%d, busy=%d, total=%d",
 		metrics.IdleAgents, metrics.BusyAgents, metrics.TotalAgents)
@@ -99,12 +91,12 @@ func (c *Client) GetAgentMetrics(queue string) (AgentMetrics, error) {
 	return metrics, nil
 }
 
-func (c *Client) queryMetrics(into interface{}) (pollDuration time.Duration, err error) {
+func (c *Client) queryMetrics(into interface{}, queue string) (pollDuration time.Duration, err error) {
 	endpoint, err := url.Parse(c.Endpoint)
 	if err != nil {
 		return time.Duration(0), err
 	}
-	endpoint.Path += "/metrics"
+	endpoint.Path += fmt.Sprintf("/metrics/queue?name=%s", queue)
 
 	req, err := http.NewRequest(http.MethodGet, endpoint.String(), nil)
 	if err != nil {
