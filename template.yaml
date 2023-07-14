@@ -33,6 +33,11 @@ Parameters:
     Type: String
     Default: ''
 
+  EventScheduleRate:
+    Description: How often the Event Schedule is triggered (in minutes)
+    Type: String
+    Default: "1"
+
   AgentsPerInstance:
     Description: ""
     Type: Number
@@ -203,7 +208,7 @@ Resources:
         Timer:
           Type: Schedule
           Properties:
-            Schedule: "rate(1 minute)"
+            Schedule: !Sub "rate(${EventScheduleRate} minute)"
 
   # This mirrors the group that would be created by the lambda, but enforces
   # a retention period and also ensures it's removed when the stack is removed
