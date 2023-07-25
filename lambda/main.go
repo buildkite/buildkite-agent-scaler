@@ -9,11 +9,11 @@ import (
 	"math"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/autoscaling"
 	"github.com/buildkite/buildkite-agent-scaler/buildkite"
 	"github.com/buildkite/buildkite-agent-scaler/scaler"
 	"github.com/buildkite/buildkite-agent-scaler/version"
@@ -22,13 +22,25 @@ import (
 // Stores the last time we scaled in/out in global lambda state
 // On a cold start this will be reset to a zero value
 var (
+	lastScaleMu               sync.Mutex
 	lastScaleIn, lastScaleOut time.Time
 )
 
-type LastScaleASGResult struct {
-	LastScaleOutActivity *autoscaling.Activity
-	LastScaleInActivity  *autoscaling.Activity
-	Err                  error
+func mustGetEnv(env string) string {
+	val := os.Getenv(env)
+	if val == "" {
+		log.Fatalf("Env %q not set", env)
+	}
+	return val
+}
+
+func mustGetEnvInt(env string) int {
+	v := mustGetEnv(env)
+	vi, err := strconv.Atoi(v)
+	if err != nil {
+		log.Fatalf("Env %q is not an int: %v", env, v)
+	}
+	return vi
 }
 
 func main() {
@@ -37,9 +49,9 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-	} else {
-		lambda.Start(Handler)
+		return
 	}
+	lambda.Start(Handler)
 }
 
 func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
@@ -50,7 +62,6 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		interval time.Duration    = 10 * time.Second
 
 		asgActivityTimeoutDuration = 10 * time.Second
-		asgActivityTimeout         = time.After(asgActivityTimeoutDuration)
 
 		scaleInCooldownPeriod time.Duration
 		scaleInFactor         float64
@@ -88,7 +99,6 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 			return "", err
 		} else {
 			asgActivityTimeoutDuration = timeoutDuration
-			asgActivityTimeout = time.After(timeoutDuration)
 		}
 	}
 
@@ -159,128 +169,101 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		disableScaleOut = true
 	}
 
-	var mustGetEnv = func(env string) string {
-		val := os.Getenv(env)
-		if val == "" {
-			panic(fmt.Sprintf("Env %q not set", env))
-		}
-		return val
-	}
-
-	var mustGetEnvInt = func(env string) int {
-		v := mustGetEnv(env)
-		vi, err := strconv.Atoi(v)
-		if err != nil {
-			panic(fmt.Sprintf("Env %q is not an int: %v", env, v))
-		}
-		return vi
-	}
-
 	// establish an AWS session to be re-used
 	sess := session.New()
 
-	// set last scale in and out from asg's activities
-	asg := &scaler.ASGDriver{
-		Name:                              mustGetEnv("ASG_NAME"),
-		Sess:                              sess,
-		MaxDescribeScalingActivitiesPages: maxDescribeScalingActivitiesPages,
-	}
+	// get last scale in and out from asg's activities
+	// This is wrapped in a mutex to avoid multiple outbound requests if the
+	// lambda ever runs multiple times in parallel.
+	func() {
+		lastScaleMu.Lock()
+		defer lastScaleMu.Unlock()
 
-	c1 := make(chan LastScaleASGResult, 1)
-
-	cancelableCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	scalingLastActivityStartTime := time.Now()
-	go func() {
-		scaleOutOutput, scaleInOutput, err := asg.GetLastScalingInAndOutActivity(cancelableCtx, !disableScaleOut, !disableScaleIn)
-		result := LastScaleASGResult{
-			scaleOutOutput,
-			scaleInOutput,
-			err,
-		}
-		c1 <- result
-	}()
-
-	select {
-	case res := <-c1:
-		if res.Err != nil {
-			log.Printf("Encountered error when retrieving last scaling activities: %s", res.Err)
+		if (disableScaleIn || !lastScaleIn.IsZero()) && (disableScaleOut || !lastScaleOut.IsZero()) {
+			// We've already fetched the last scaling times that we need.
+			return
 		}
 
-		if res.LastScaleOutActivity == nil && res.LastScaleInActivity == nil {
-			break
+		asg := &scaler.ASGDriver{
+			Name:                              mustGetEnv("ASG_NAME"),
+			Sess:                              sess,
+			MaxDescribeScalingActivitiesPages: maxDescribeScalingActivitiesPages,
 		}
 
-		if res.LastScaleOutActivity != nil {
-			scaleInOutput := res.LastScaleInActivity
-			if scaleInOutput != nil {
-				lastScaleIn = *scaleInOutput.StartTime
-			}
+		cctx, cancel := context.WithTimeout(ctx, asgActivityTimeoutDuration)
+		defer cancel()
+
+		scalingLastActivityStartTime := time.Now()
+		scaleOutOutput, scaleInOutput, err := asg.GetLastScalingInAndOutActivity(cctx, !disableScaleOut, !disableScaleIn)
+		if errors.Is(err, context.DeadlineExceeded) {
+			log.Printf("Failed to retrieve last scaling activity events due to %v timeout", asgActivityTimeoutDuration)
+			return
+		}
+		if err != nil { // Some other error.
+			log.Printf("Encountered error when retrieving last scaling activities: %s", err)
+			return
 		}
 
-		if res.LastScaleInActivity != nil {
-			scaleOutOutput := res.LastScaleOutActivity
-			if scaleOutOutput != nil {
-				lastScaleOut = *scaleOutOutput.StartTime
-			}
+		if scaleInOutput != nil {
+			lastScaleIn = *scaleInOutput.StartTime
+		}
+		if scaleOutOutput != nil {
+			lastScaleOut = *scaleOutOutput.StartTime
 		}
 
 		scalingTimeDiff := time.Since(scalingLastActivityStartTime)
 		log.Printf("Succesfully retrieved last scaling activity events. Last scale out %v, last scale in %v. Discovery took %s.", lastScaleOut, lastScaleIn, scalingTimeDiff)
-	case <-asgActivityTimeout:
-		log.Printf("Failed to retrieve last scaling activity events due to %s timeout", asgActivityTimeoutDuration)
-		cancel()
+	}()
+
+	token := os.Getenv("BUILDKITE_AGENT_TOKEN")
+	ssmTokenKey := os.Getenv("BUILDKITE_AGENT_TOKEN_SSM_KEY")
+
+	if ssmTokenKey != "" {
+		var err error
+		token, err = scaler.RetrieveFromParameterStore(sess, ssmTokenKey)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	if token == "" {
+		return "", errors.New("Must provide either BUILDKITE_AGENT_TOKEN or BUILDKITE_AGENT_TOKEN_SSM_KEY")
+	}
+
+	client := buildkite.NewClient(token)
+	params := scaler.Params{
+		BuildkiteQueue:       mustGetEnv("BUILDKITE_QUEUE"),
+		AutoScalingGroupName: mustGetEnv("ASG_NAME"),
+		AgentsPerInstance:    mustGetEnvInt("AGENTS_PER_INSTANCE"),
+		IncludeWaiting:       includeWaiting,
+		ScaleInParams: scaler.ScaleParams{
+			CooldownPeriod: scaleInCooldownPeriod,
+			Factor:         scaleInFactor,
+			LastEvent:      lastScaleIn,
+			Disable:        disableScaleIn,
+		},
+		ScaleOutParams: scaler.ScaleParams{
+			CooldownPeriod: scaleOutCooldownPeriod,
+			Factor:         scaleOutFactor,
+			LastEvent:      lastScaleOut,
+			Disable:        disableScaleOut,
+		},
+		InstanceBuffer:           instanceBuffer,
+		ScaleOnlyAfterAllEvent:   scaleOnlyAfterAllEvent,
+		PublishCloudWatchMetrics: publishCloudWatchMetrics,
+	}
+
+	scaler, err := scaler.NewScaler(client, sess, params)
+	if err != nil {
+		log.Fatalf("Couldn't create new scaler: %v", err)
 	}
 
 	for {
 		select {
 		case <-timeout:
 			return "", nil
+
 		default:
-			token := os.Getenv("BUILDKITE_AGENT_TOKEN")
-			ssmTokenKey := os.Getenv("BUILDKITE_AGENT_TOKEN_SSM_KEY")
-
-			if ssmTokenKey != "" {
-				var err error
-				token, err = scaler.RetrieveFromParameterStore(sess, ssmTokenKey)
-				if err != nil {
-					return "", err
-				}
-			}
-
-			if token == "" {
-				return "", errors.New("Must provide either BUILDKITE_AGENT_TOKEN or BUILDKITE_AGENT_TOKEN_SSM_KEY")
-			}
-
-			client := buildkite.NewClient(token)
-			params := scaler.Params{
-				BuildkiteQueue:       mustGetEnv("BUILDKITE_QUEUE"),
-				AutoScalingGroupName: mustGetEnv("ASG_NAME"),
-				AgentsPerInstance:    mustGetEnvInt("AGENTS_PER_INSTANCE"),
-				IncludeWaiting:       includeWaiting,
-				ScaleInParams: scaler.ScaleParams{
-					CooldownPeriod: scaleInCooldownPeriod,
-					Factor:         scaleInFactor,
-					LastEvent:      lastScaleIn,
-					Disable:        disableScaleIn,
-				},
-				ScaleOutParams: scaler.ScaleParams{
-					CooldownPeriod: scaleOutCooldownPeriod,
-					Factor:         scaleOutFactor,
-					LastEvent:      lastScaleOut,
-					Disable:        disableScaleOut,
-				},
-				InstanceBuffer:           instanceBuffer,
-				ScaleOnlyAfterAllEvent:   scaleOnlyAfterAllEvent,
-				PublishCloudWatchMetrics: publishCloudWatchMetrics,
-			}
-
-			scaler, err := scaler.NewScaler(client, sess, params)
-			if err != nil {
-				log.Fatal(err)
-			}
-
 			minPollDuration, err := scaler.Run()
 			if err != nil {
 				log.Printf("Scaling error: %v", err)
@@ -296,7 +279,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 			lastScaleIn = scaler.LastScaleIn()
 			lastScaleOut = scaler.LastScaleOut()
 
-			log.Printf("Waiting for %v", interval)
+			log.Printf("Waiting for %v\n", interval)
 			time.Sleep(interval)
 		}
 	}
