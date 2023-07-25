@@ -96,7 +96,9 @@ func (c *Client) queryMetrics(into interface{}, queue string) (pollDuration time
 	if err != nil {
 		return time.Duration(0), err
 	}
-	endpoint.Path += fmt.Sprintf("/metrics/queue?name=%s", queue)
+	endpoint.Path += "/metrics/queue"
+	q := url.Values{"name": []string{queue}}
+	endpoint.RawQuery = q.Encode()
 
 	req, err := http.NewRequest(http.MethodGet, endpoint.String(), nil)
 	if err != nil {
