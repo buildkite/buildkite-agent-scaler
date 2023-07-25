@@ -89,6 +89,11 @@ Parameters:
     Type: Number
     Description: The number of pages to retrive for DescribeScalingActivity. Negative numbers mean unlimited.
     Default: "-1"
+  
+  MinPollInterval:
+    Type: String
+    Description: Minimum time interval between polls. If a larger interval is provided by Buildkite, that is used instead.
+    Default: "10s"
 
 Conditions:
   CreateRole:
@@ -202,7 +207,7 @@ Resources:
           INSTANCE_BUFFER:               !Ref InstanceBuffer
           INCLUDE_WAITING:               !Ref ScaleOutForWaitingJobs
           LAMBDA_TIMEOUT:                "50s"
-          LAMBDA_INTERVAL:               "10s"
+          LAMBDA_INTERVAL:               !Ref MinPollInterval
           MAX_DESCRIBE_SCALING_ACTIVITIES_PAGES: !Ref MaxDescribeScalingActivitiesPages
       Events:
         Timer:
