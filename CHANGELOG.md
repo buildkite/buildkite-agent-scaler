@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## [v1.5.0](https://github.com/buildkite/buildkite-agent-scaler/tree/v1.5.0) (2023-07-25)
+[Full Changelog](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.4.0...v1.5.0)
+
+### Added
+- Add MinPollInterval param [#94](https://github.com/buildkite/buildkite-agent-scaler/pull/94) (@DrJosh9000)
+- Allow the event schedule rate to be configured via parameters [#93](https://github.com/buildkite/buildkite-agent-scaler/pull/93) (@tomellis91)
+
+### Fixed
+- DescribeScalingActivities should be called only once per lambda instance [#95](https://github.com/buildkite/buildkite-agent-scaler/pull/95) (@DrJosh9000)
+- A fix to the release process (Assume the OIDC role for release-version) [#91](https://github.com/buildkite/buildkite-agent-scaler/pull/91) (@sj26)
+
+### Changed
+- Use the metrics route scoped to a queue to get metrics for the queue [#92](https://github.com/buildkite/buildkite-agent-scaler/pull/92) (@triarius)
+
 ## [v1.4.0](https://github.com/buildkite/buildkite-agent-scaler/tree/v1.4.0) (2023-05-17)
 [Full Changelog](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.3.2...v1.4.0)
 
