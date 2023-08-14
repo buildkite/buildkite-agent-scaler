@@ -18,7 +18,7 @@ steps:
   - name: ":lambda: Build Lambda"
     key: build-lambda
     depends_on:
-      - test
+      - go-fmt
     command: .buildkite/steps/build-lambda.sh
     artifact_paths:
       - handler.zip
@@ -26,6 +26,7 @@ steps:
   - label: ":s3: Pubish to S3 Branch Location"
     key: s3-branch
     depends_on:
+      - test
       - build-lambda
     command: .buildkite/steps/upload-to-s3.sh
     agents:
@@ -34,14 +35,14 @@ steps:
       - aws-assume-role-with-web-identity:
           role-arn: arn:aws:iam::032379705303:role/pipeline-buildkite-buildkite-agent-scaler
 
-  - if: build.tag =~ /^.+\$/
+  - if: build.tag =~ /^.+\$/ || build.env("RELEASE_DRY_RUN") == "true"
     block: ":rocket: Release?"
 
   - if: build.tag =~ /^.+\$/
     label: ":s3: Publish to S3 Release Location"
     key: s3-release
     depends_on:
-      - build-lambda
+      - s3-branch
     command: .buildkite/steps/release-version.sh
     agents:
       queue: elastic-runners
@@ -49,7 +50,7 @@ steps:
       - aws-assume-role-with-web-identity:
           role-arn: arn:aws:iam::032379705303:role/pipeline-buildkite-buildkite-agent-scaler
 
-  - if: build.tag =~ /^.+\$/
+  - if: build.tag =~ /^.+\$/ || build.env("RELEASE_DRY_RUN") == "true"
     label: ":github::rocket: github release"
     key: github-release
     depends_on:
