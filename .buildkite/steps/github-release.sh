@@ -29,22 +29,6 @@ last_tag=$(git describe --tags --abbrev=0 --exclude "$tag")
 escaped_tag="${tag//\./\\.}"
 escaped_last_tag="${last_tag//\./\\.}"
 
-echo --- Getting credentials from SSM
-GITHUB_RELEASE_ACCESS_TOKEN=$( \
-  aws ssm get-parameter \
-    --name /pipelines/buildkite-agent-scaler/GITHUB_RELEASE_ACCESS_TOKEN \
-    --with-decryption \
-    --output text \
-    --query Parameter.Value \
-    --region us-east-1 \
-)
-
-if [[ "$GITHUB_RELEASE_ACCESS_TOKEN" == "" ]]; then
-  echo ^^^ +++
-  echo "Error: Missing \$GITHUB_RELEASE_ACCESS_TOKEN"
-  exit 1
-fi
-
 echo --- The following notes will accompany the release:
 # The sed commands below:
 #   Find lines between headers of the changelogs (inclusive)
@@ -55,6 +39,11 @@ notes=$(sed -n "/^## \[${escaped_tag}\]/,/^## \[${escaped_last_tag}\]/p" CHANGEL
 buildkite-agent artifact download handler.zip .
 
 echo "--- 🚀 Releasing $version"
+if [[ "${GITHUB_RELEASE_ACCESS_TOKEN:-}" == "" ]]; then
+  echo ^^^ +++
+  echo "Error: Missing \$GITHUB_RELEASE_ACCESS_TOKEN"
+  exit 1
+fi
 GITHUB_TOKEN="$GITHUB_RELEASE_ACCESS_TOKEN" release_dry_run gh release create \
   --draft \
   --title "$tag" \

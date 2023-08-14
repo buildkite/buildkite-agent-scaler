@@ -53,6 +53,8 @@ steps:
   - docker#v5.8.0:
       image: public.ecr.aws/docker/library/alpine:3.18
       propagate-environment: true
+      environment:
+      - GITHUB_RELEASE_ACCESS_TOKEN
 
 - if: build.tag =~ /^.+\$/ || build.env("RELEASE_DRY_RUN") == "true"
   key: block-s3-release
