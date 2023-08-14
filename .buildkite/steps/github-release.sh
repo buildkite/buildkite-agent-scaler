@@ -2,7 +2,16 @@
 
 set -eufo pipefail
 
-echo '--- Getting credentials from SSM'
+if [[ "${RELEASE_DRY_RUN:-false}" != true && -z "$BUILDKITE_TAG" ]]; then
+  echo ^^^ +++
+  echo This step should only be run on a tag >&2
+  exit 1
+fi
+
+echo --- :hammer: Installing packages
+apk add --no-progress git github-cli
+
+echo --- Getting credentials from SSM
 GITHUB_RELEASE_ACCESS_TOKEN=$( \
   aws ssm get-parameter \
     --name /pipelines/buildkite-agent-scaler/GITHUB_RELEASE_ACCESS_TOKEN \
@@ -13,15 +22,36 @@ GITHUB_RELEASE_ACCESS_TOKEN=$( \
 )
 
 if [[ "$GITHUB_RELEASE_ACCESS_TOKEN" == "" ]]; then
+  echo +++ ^^^
   echo "Error: Missing \$GITHUB_RELEASE_ACCESS_TOKEN"
   exit 1
 fi
 
-VERSION=$(buildkite-agent meta-data get "version")
-buildkite-agent artifact download "handler.zip" .
+echo --- Checking tags
+git fetch --prune --force origin "+refs/tags/*:refs/tags/*"
+version=$(awk -F\" '/const Version/ {print $2}' version/version.go)
+tag="v${version#v}"
 
-echo "--- 🚀 Releasing $VERSION"
-export GITHUB_RELEASE_ACCESS_TOKEN
-github-release "v${VERSION#v}" handler.zip \
-  --commit "$(git rev-parse HEAD)" \
-  --github-repository "buildkite/buildkite-agent-scaler"
+if [[ $tag != "$BUILDKITE_TAG" ]]; then
+  echo +++ ^^^
+  echo "Error: version.go has not been updated to ${BUILDKITE_TAG#v}" >&2
+  exit 1
+fi
+
+last_tag=$(git describe --tags --abbrev=0 --exclude "$tag")
+
+# escape . so we can use in regex
+escaped_tag="${tag//\./\\.}"
+escaped_last_tag="${last_tag//\./\\.}"
+
+echo --- The following notes will accompany the release:
+# The sed commands below:
+#   Find lines between headers of the changelogs (inclusive)
+#   Delete the lines included from the headers
+# The command substituion will then delete the empty lines from the end
+notes=$(sed -n "/^## \[${escaped_tag}\]/,/^## \[${escaped_last_tag}\]/p" CHANGELOG.md | sed '$d')
+
+buildkite-agent artifact download handler.zip .
+
+echo "--- 🚀 Releasing $version"
+GITHUB_TOKEN="$GITHUB_RELEASE_ACCESS_TOKEN" gh release create "$tag" handler.zip --title "$tag" --notes "$notes" --draft
