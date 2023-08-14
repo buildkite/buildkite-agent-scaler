@@ -14,7 +14,6 @@ echo --- :hammer: Installing packages
 apk add --no-progress git github-cli
 
 echo --- Checking tags
-git fetch --prune --force origin "+refs/tags/*:refs/tags/*"
 version=$(awk -F\" '/const Version/ {print $2}' version/version.go)
 tag="v${version#v}"
 

@@ -7,15 +7,15 @@ steps:
   command: .buildkite/steps/test-go-fmt.sh
   plugins:
   - docker#v5.8.0:
-      image: "golang:1.19"
+      image: golang:1.19
       workdir: /go/src/github.com/buildkite/buildkite-agent-scaler
 
-- name: ":golang: Run tests"
+- name: ":golang: Run Tests"
   key: test
   command: .buildkite/steps/tests.sh
   plugins:
   - docker#v5.8.0:
-      image: "golang:1.19"
+      image: golang:1.19
       workdir: /go/src/github.com/buildkite/buildkite-agent-scaler
 
 - name: ":lambda: Build Lambda"
@@ -42,6 +42,8 @@ steps:
   depends_on:
   - build-lambda
   command: .buildkite/steps/github-release.sh
+  env:
+    BUILDKITE_AGENT_GIT_FETCH_FLAGS: -v --prune --tags
   plugins:
   - aws-assume-role-with-web-identity:
       role-arn: arn:aws:iam::445615400570:role/pipeline-buildkite-buildkite-agent-scaler
