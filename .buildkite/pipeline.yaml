@@ -65,7 +65,7 @@ steps:
   depends_on:
   - github-release
   - block-s3-release
-  command: .buildkite/steps/release-version.sh
+  command: .buildkite/steps/upload-to-s3.sh release
   plugins:
   - aws-assume-role-with-web-identity:
       role-arn: arn:aws:iam::032379705303:role/pipeline-buildkite-buildkite-agent-scaler
