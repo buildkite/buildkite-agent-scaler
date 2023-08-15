@@ -49,7 +49,7 @@ steps:
       role-arn: arn:aws:iam::445615400570:role/pipeline-buildkite-buildkite-agent-scaler
   - aws-ssm#v1.0.0:
       parameters:
-        GITHUB_RELEASE_ACCESS_TOKEN: /pipelines/buildkite-agent-scaler/GITHUB_RELEASE_ACCESS_TOKEN
+        GITHUB_RELEASE_ACCESS_TOKEN: /pipelines/buildkite/buildkite-agent-scaler/GITHUB_RELEASE_ACCESS_TOKEN
   - docker#v5.8.0:
       image: public.ecr.aws/docker/library/alpine:3.18
       propagate-environment: true
