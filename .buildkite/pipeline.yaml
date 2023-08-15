@@ -57,6 +57,7 @@ steps:
       init: false
       environment:
       - GITHUB_RELEASE_ACCESS_TOKEN
+      - BUILDKITE_AGENT_ACCESS_TOKEN
 
 - if: build.tag =~ /^.+\$/ || build.env("RELEASE_DRY_RUN") == "true"
   key: block-s3-release
