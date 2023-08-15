@@ -35,7 +35,9 @@ echo --- The following notes will accompany the release:
 #   Delete the lines included from the headers
 # The command substituion will then delete the empty lines from the end
 notes=$(sed -n "/^## \[${escaped_tag}\]/,/^## \[${escaped_last_tag}\]/p" CHANGELOG.md | sed '$d')
+echo "$notes"
 
+echo --- :lambda: Downloading lambda from artifacts
 buildkite-agent artifact download handler.zip .
 
 echo "--- 🚀 Releasing $version"
