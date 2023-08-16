@@ -51,8 +51,10 @@ steps:
       parameters:
         GITHUB_RELEASE_ACCESS_TOKEN: /pipelines/buildkite/buildkite-agent-scaler/GITHUB_RELEASE_ACCESS_TOKEN
   - docker#v5.8.0:
-      image: public.ecr.aws/docker/library/alpine:3.18
+      image: buildkite/agent:3.51.0
       propagate-environment: true
+      entrypoint: ash
+      init: false
       environment:
       - GITHUB_RELEASE_ACCESS_TOKEN
 
