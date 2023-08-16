@@ -1,7 +1,7 @@
 steps:
   - name: ":golang:"
     key: test
-    command: ".buildkite/steps/tests.sh"
+    command: .buildkite/steps/tests.sh
     plugins:
       - docker#v3.1.0:
           image: "golang:1.19"
@@ -15,11 +15,7 @@ steps:
 
   - label: ":lambda: :arrow_right: :package:"
     key: package
-    command:
-      - buildkite-agent artifact download handler.zip .
-      - sam package --region us-east-1 --s3-bucket buildkite-serverless-apps-us-east-1 --s3-prefix elastic-ci/agent-scaler --output-template-file packaged.yml
-      - buildkite-agent artifact upload 'packaged.yml'
-      - echo "--- Template"; echo "$(< packaged.yml)"
+    command: .buildkite/steps/sar.sh
     depends_on:
       - test
       - build

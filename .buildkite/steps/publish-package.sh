@@ -4,7 +4,7 @@ set -eufo pipefail
 
 VERSION=$(buildkite-agent meta-data get version)
 
-buildkite-agent artifact download 'packaged.yml' .
+buildkite-agent artifact download packaged.yml .
 
 if [[ -z $BUILDKITE_TAG ]]; then
   APP_ID=arn:aws:serverlessrepo:us-east-1:172840064832:applications/buildkite-agent-scaler-edge
