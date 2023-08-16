@@ -61,7 +61,7 @@ steps:
 
 - if: build.tag =~ /^.+\$/ || build.env("RELEASE_DRY_RUN") == "true"
   key: block-s3-release
-  block: ":rocket: Draft Approved?"
+  block: ":rocket: Draft :github: Release Approved?"
 
 - if: build.tag =~ /^.+\$/ || build.env("RELEASE_DRY_RUN") == "true"
   label: ":s3: Publish to S3 Release Location"

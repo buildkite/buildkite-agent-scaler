@@ -1,5 +1,5 @@
 steps:
-  - name: ":golang:"
+  - name: ":golang: Tests"
     key: test
     command: .buildkite/steps/tests.sh
     plugins:
@@ -7,25 +7,25 @@ steps:
           image: "golang:1.19"
           workdir: /go/src/github.com/buildkite/buildkite-agent-scaler
 
-  - name: ":hammer: :lambda:"
+  - name: ":hammer::lambda: Build Lambda"
     key: build
     command: .buildkite/steps/build-lambda.sh
     artifact_paths:
       - handler.zip
 
-  - label: ":lambda: :arrow_right: :package:"
+  - label: ":lambda::arrow_right::package: Create SAR Package"
     key: package
     command: .buildkite/steps/sar.sh
     depends_on:
       - test
       - build
 
-  - block: ":package: :arrow_right: :rocket:?"
+  - block: ":package::arrow_right::rocket: Draft :github: Release Approved?"
     key: release
     depends_on:
       - package
 
-  - label: ":package: :arrow_right: :aws:"
+  - label: ":package::arrow_right::aws: Publish SAR Package"
     key: publish
     command: .buildkite/steps/publish-package.sh
     depends_on:
