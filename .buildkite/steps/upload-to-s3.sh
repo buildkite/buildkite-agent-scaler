@@ -1,9 +1,8 @@
-#!/bin/bash
-set -eu
+#!/usr/bin/env bash
+
+set -euo pipefail
 
 export AWS_DEFAULT_REGION=us-east-1
-# export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-$SANDBOX_AWS_ACCESS_KEY_ID}
-# export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-$SANDBOX_AWS_SECRET_ACCESS_KEY}
 
 EXTRA_REGIONS=(
   us-east-2
@@ -27,12 +26,12 @@ EXTRA_REGIONS=(
   sa-east-1
 )
 
-VERSION=$(buildkite-agent meta-data get "version")
+VERSION=$(buildkite-agent meta-data get version)
 BASE_BUCKET=buildkite-lambdas
-BUCKET_PATH="buildkite-agent-scaler"
+BUCKET_PATH=buildkite-agent-scaler
 
-if [[ "${1:-}" == "release" ]] ; then
-  BUCKET_PATH="${BUCKET_PATH}/v${VERSION}"
+if [[ "${1:-}" == "release" ]]; then
+  BUCKET_PATH="${BUCKET_PATH}/${VERSION}"
 else
   BUCKET_PATH="${BUCKET_PATH}/builds/${BUILDKITE_BUILD_NUMBER}"
 fi
@@ -40,11 +39,11 @@ fi
 echo "~~~ :buildkite: Downloading artifacts"
 buildkite-agent artifact download handler.zip .
 
-echo "--- :s3: Uploading lambda to ${BASE_BUCKET}/${BUCKET_PATH}/ in ${AWS_DEFAULT_REGION}"
+echo "~~~ :s3: Uploading lambda to ${BASE_BUCKET}/${BUCKET_PATH}/ in ${AWS_DEFAULT_REGION}"
 aws s3 cp --acl public-read handler.zip "s3://${BASE_BUCKET}/${BUCKET_PATH}/handler.zip"
 
-for region in "${EXTRA_REGIONS[@]}" ; do
-	bucket="${BASE_BUCKET}-${region}"
-	echo "--- :s3: Copying files to ${bucket}"
-	aws --region "${region}" s3 cp --acl public-read "s3://${BASE_BUCKET}/${BUCKET_PATH}/handler.zip" "s3://${bucket}/${BUCKET_PATH}/handler.zip"
+for region in "${EXTRA_REGIONS[@]}"; do
+  bucket="${BASE_BUCKET}-${region}"
+  echo "~~~ :s3: Copying files to ${bucket}"
+  aws --region "${region}" s3 cp --acl public-read "s3://${BASE_BUCKET}/${BUCKET_PATH}/handler.zip" "s3://${bucket}/${BUCKET_PATH}/handler.zip"
 done
