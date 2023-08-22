@@ -2,13 +2,12 @@ agents:
   queue: elastic-runners
 
 steps:
-- label: ":s3: Publish {{matrix}} to S3 Release Location"
+- label: ":s3: Remove from {{matrix}} S3 Release Location"
   key: s3-release
-  command: .buildkite/steps/upload-to-s3.sh release {{matrix}}
+  command: .buildkite/steps/remove-from-s3 release {{matrix}}
   plugins:
   - aws-assume-role-with-web-identity:
       role-arn: arn:aws:iam::032379705303:role/pipeline-buildkite-buildkite-agent-scaler
   matrix:
-  - v1.4.0
-  - v1.5.0
-  - v1.5.1
+  - vv1.4.0
+  - 1.5.1
