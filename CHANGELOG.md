@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## [v1.5.1](https://github.com/buildkite/buildkite-agent-scaler/tree/v1.5.1) (2023-08-22)
+[Full Changelog](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.5.0...v1.5.1)
+
+### Added
+- A new release process which will fix publish releases to S3 [#97](https://github.com/buildkite/buildkite-agent-scaler/pull/97) (@triarius)
+
 ## [v1.5.0](https://github.com/buildkite/buildkite-agent-scaler/tree/v1.5.0) (2023-07-25)
 [Full Changelog](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.4.0...v1.5.0)
 
