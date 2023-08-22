@@ -37,10 +37,10 @@ else
 fi
 
 echo "~~~ :s3: Removing lambda from ${BASE_BUCKET}/${BUCKET_PATH}/ in ${AWS_DEFAULT_REGION}"
-aws s3 rm --dryrun "s3://${BASE_BUCKET}/${BUCKET_PATH}/handler.zip"
+aws s3 rm "s3://${BASE_BUCKET}/${BUCKET_PATH}/handler.zip"
 
 for region in "${EXTRA_REGIONS[@]}"; do
   bucket="${BASE_BUCKET}-${region}"
   echo "~~~ :s3: Removing files from ${bucket}"
-  aws --region "${region}" s3 rm --dryrun "s3://${bucket}/${BUCKET_PATH}/handler.zip"
+  aws --region "${region}" s3 rm "s3://${bucket}/${BUCKET_PATH}/handler.zip"
 done
