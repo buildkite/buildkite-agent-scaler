@@ -26,7 +26,7 @@ EXTRA_REGIONS=(
   sa-east-1
 )
 
-VERSION=$(buildkite-agent meta-data get version)
+VERSION="v${BUILDKITE_TAG#v}"
 BASE_BUCKET=buildkite-lambdas
 BUCKET_PATH=buildkite-agent-scaler
 
