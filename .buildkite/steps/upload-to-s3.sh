@@ -26,7 +26,7 @@ EXTRA_REGIONS=(
   sa-east-1
 )
 
-VERSION=$(buildkite-agent meta-data get version)
+VERSION="v${2#v}"
 BASE_BUCKET=buildkite-lambdas
 BUCKET_PATH=buildkite-agent-scaler
 
@@ -36,8 +36,8 @@ else
   BUCKET_PATH="${BUCKET_PATH}/builds/${BUILDKITE_BUILD_NUMBER}"
 fi
 
-echo "~~~ :buildkite: Downloading artifacts"
-buildkite-agent artifact download handler.zip .
+echo "~~~ :buildkite: Downloading lambda"
+curl -sSL -o handler.zip "https://github.com/buildkite/buildkite-agent-scaler/releases/download/$VERSION/handler.zip"
 
 echo "~~~ :s3: Uploading lambda to ${BASE_BUCKET}/${BUCKET_PATH}/ in ${AWS_DEFAULT_REGION}"
 aws s3 cp --acl public-read handler.zip "s3://${BASE_BUCKET}/${BUCKET_PATH}/handler.zip"
