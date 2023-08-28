@@ -33,10 +33,10 @@ Parameters:
     Type: String
     Default: ''
 
-  EventScheduleRate:
-    Description: How often the Event Schedule is triggered (in minutes)
+  EventSchedulePeriod:
+    Description: How often the Event Schedule is triggered. Should be an expression with units, e.g. "30 seconds", "1 minute", "5 minutes".
     Type: String
-    Default: "1"
+    Default: "1 minute"
 
   AgentsPerInstance:
     Description: ""
@@ -89,7 +89,7 @@ Parameters:
     Type: Number
     Description: The number of pages to retrive for DescribeScalingActivity. Negative numbers mean unlimited.
     Default: "-1"
-  
+
   MinPollInterval:
     Type: String
     Description: Minimum time interval between polls. If a larger interval is provided by Buildkite, that is used instead.
@@ -213,7 +213,7 @@ Resources:
         Timer:
           Type: Schedule
           Properties:
-            Schedule: !Sub "rate(${EventScheduleRate} minute)"
+            Schedule: !Sub "rate(${EventSchedulePeriod})"
 
   # This mirrors the group that would be created by the lambda, but enforces
   # a retention period and also ensures it's removed when the stack is removed
