@@ -102,6 +102,8 @@ Conditions:
     !Not [ !Equals [ !Ref BuildkiteAgentTokenParameterStoreKMSKey, "" ] ]
   SetRolePermissionsBoundaryARN:
     !Not [ !Equals [ !Ref RolePermissionsBoundaryARN, "" ] ]
+  EventScheduleRateIsMinute:
+    !Equals [!Ref EventScheduleRate, "1"]
 
 Mappings:
   LambdaBucket:
@@ -213,7 +215,7 @@ Resources:
         Timer:
           Type: Schedule
           Properties:
-            Schedule: !Sub "rate(${EventScheduleRate} minute)"
+            Schedule: !If [EventScheduleRateIsMinute, !Sub "rate(${EventScheduleRate} minute)", !Sub "rate(${EventScheduleRate} minutes)"]
 
   # This mirrors the group that would be created by the lambda, but enforces
   # a retention period and also ensures it's removed when the stack is removed
