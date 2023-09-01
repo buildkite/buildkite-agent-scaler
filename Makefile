@@ -31,6 +31,9 @@ handler.zip: bootstrap
 bootstrap: lambda/main.go
 	docker run \
 		--env GOCACHE=/go/cache \
+		--env GOARCH=amd64 \
+		--env GOOS=linux \
+		--env CGO_ENABLED=0 \
 		--user $(USER) \
 		--volume $(PWD):/app \
 		--workdir /app \
