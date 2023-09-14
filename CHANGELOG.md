@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## [v1.6.0](https://github.com/buildkite/buildkite-agent-scaler/tree/v1.6.0) (2023-09-13)
+[Full Changelog](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.5.1...v1.6.0)
+
+### Changed
+- Change `EventScheduleRate` parameter to `EventSchedulePeriod` and require units [#102](https://github.com/buildkite/buildkite-agent-scaler/pull/102) (@triarius)
+
+
+### Internal
+- Fix scaler release does not prepend a v to the version on s3 [#99](https://github.com/buildkite/buildkite-agent-scaler/pull/99) (@triarius)
+
 ## [v1.5.1](https://github.com/buildkite/buildkite-agent-scaler/tree/v1.5.1) (2023-08-22)
 [Full Changelog](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.5.0...v1.5.1)
 
