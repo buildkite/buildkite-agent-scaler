@@ -288,4 +288,6 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 	// 		time.Sleep(interval)
 	// 	}
 	// }
+
+	return "", nil
 }
