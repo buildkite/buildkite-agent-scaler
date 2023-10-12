@@ -10,6 +10,7 @@ clean:
 
 LAMBDA_S3_BUCKET := buildkite-aws-stack-lox
 LAMBDA_S3_BUCKET_PATH := /
+export CGO_ENABLED := 0
 
 ifdef BUILDKITE_BUILD_NUMBER
 	LD_FLAGS := -s -w -X version.Build=$(BUILDKITE_BUILD_NUMBER)
@@ -25,17 +26,18 @@ endif
 
 build: handler.zip
 
-handler.zip: lambda/handler
+handler.zip: bootstrap
 	zip -9 -v -j $@ "$<"
 
-lambda/handler: lambda/main.go
+bootstrap: lambda/main.go
 	docker run \
 		--env GOCACHE=/go/cache \
+		--env CGO_ENABLED \
 		--user $(USER) \
 		--volume $(PWD):/app \
 		--workdir /app \
 		--rm golang:1.19 \
-		go build -ldflags="$(LD_FLAGS)" -buildvcs="$(BUILDVSC_FLAG)" -o lambda/handler ./lambda
+		go build -ldflags="$(LD_FLAGS)" -buildvcs="$(BUILDVSC_FLAG)" -tags lambda.norpc -o bootstrap ./lambda
 
 lambda-sync: handler.zip
 	aws s3 sync \
