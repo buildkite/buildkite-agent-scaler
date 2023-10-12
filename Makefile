@@ -35,7 +35,7 @@ bootstrap: lambda/main.go
 		--volume $(PWD):/app \
 		--workdir /app \
 		--rm golang:1.19 \
-		go build -ldflags="$(LD_FLAGS)" -buildvcs="$(BUILDVSC_FLAG)" -o bootstrap ./lambda
+		go build -ldflags="$(LD_FLAGS)" -buildvcs="$(BUILDVSC_FLAG)" -tags lambda.norpc -o bootstrap ./lambda
 
 lambda-sync: handler.zip
 	aws s3 sync \
