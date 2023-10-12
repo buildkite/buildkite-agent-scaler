@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 [Full Changelog](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.6.0...v1.7.0)
 
 ### Changed
-- AWS Lambda end of support for the Go 1.x runtime [#108](https://github.com/buildkite/buildkite-agent-scaler/pull/108) (@HugeIRL)
+- Updated lambda runtime to `provided.al2` in light of end of support for the Go 1.x runtime [#108](https://github.com/buildkite/buildkite-agent-scaler/pull/108) (@HugeIRL)
 
 ### Updated
 - Bump github.com/aws/aws-sdk-go 1.45.25 [#109](https://github.com/buildkite/buildkite-agent-scaler/pull/109) [#106](https://github.com/buildkite/buildkite-agent-scaler/pull/106) (@dependabot[bot])
