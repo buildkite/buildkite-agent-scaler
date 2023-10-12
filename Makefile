@@ -10,6 +10,7 @@ clean:
 
 LAMBDA_S3_BUCKET := buildkite-aws-stack-lox
 LAMBDA_S3_BUCKET_PATH := /
+export CGO_ENABLED := 0
 
 ifdef BUILDKITE_BUILD_NUMBER
 	LD_FLAGS := -s -w -X version.Build=$(BUILDKITE_BUILD_NUMBER)
@@ -31,6 +32,7 @@ handler.zip: bootstrap
 bootstrap: lambda/main.go
 	docker run \
 		--env GOCACHE=/go/cache \
+		--env CGO_ENABLED \
 		--user $(USER) \
 		--volume $(PWD):/app \
 		--workdir /app \
