@@ -70,7 +70,7 @@ $ aws-vault exec my-profile -- go run . \
 
 The `BUILDKITE_AGENT_TOKEN` is scoped to a specific cluster. It's best to create a unique token for the cluster being targeted by the scaler.
 
-To set up a scaler with the Elastic Stack, CloudFormation templates are used, which reference the agent token and a queue name. A Lambda function is then generated using these references (e.g., `BUILDKITE_AGENT_TOKEN_SSM_KEY` and `BUILDKITE_QUEUE`).
+The scaler is set up automatically by the [Elastic CI Stack][]'s CloudFormation templates, which reference the agent token and a queue name. A Lambda function running the scaler is then generated using these references (e.g., `BUILDKITE_AGENT_TOKEN_SSM_KEY` and `BUILDKITE_QUEUE`).
 
 
 ## Copyright
