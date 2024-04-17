@@ -66,6 +66,13 @@ $ aws-vault exec my-profile -- go run . \
   --agent-token "$BUILDKITE_AGENT_TOKEN"
 ```
 
+## Using Clusters
+
+The `BUILDKITE_AGENT_TOKEN` is scoped to a specific cluster. It's best to create a unique token for the cluster being targeted by the scaler.
+
+The scaler is set up automatically by the [Elastic CI Stack][]'s CloudFormation templates, which reference the agent token and a queue name. A Lambda function running the scaler is then generated using these references (e.g., `BUILDKITE_AGENT_TOKEN_SSM_KEY` and `BUILDKITE_QUEUE`).
+
+
 ## Copyright
 
 Copyright (c) 2014-2019 Buildkite Pty Ltd. See [LICENSE](./LICENSE.txt) for details.
@@ -74,3 +81,5 @@ Copyright (c) 2014-2019 Buildkite Pty Ltd. See [LICENSE](./LICENSE.txt) for deta
 [buildkite-agent-metrics]: https://github.com/buildkite/buildkite-agent-metrics
 [Lifecycle Hooks]: https://docs.aws.amazon.com/autoscaling/ec2/userguide/lifecycle-hooks.html
 [lifecycled]: https://github.com/buildkite/lifecycled
+
+
