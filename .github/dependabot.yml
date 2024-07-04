@@ -5,7 +5,7 @@ updates:
   schedule:
     interval: monthly
   reviewers:
-    - "buildkite/@agent-stewards"
+    - "buildkite/agent-stewards"
   ignore:
     - dependency-name: "*"
       update-types: ["version-update:semver-patch"]
