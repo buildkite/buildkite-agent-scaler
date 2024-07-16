@@ -81,69 +81,75 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 	)
 
 	if v := os.Getenv("LAMBDA_INTERVAL"); v != "" {
-		if interval, err = time.ParseDuration(v); err != nil {
+		d, err := time.ParseDuration(v)
+		if err != nil {
 			return "", err
 		}
+		interval = d
 	}
 
 	if v := os.Getenv("LAMBDA_TIMEOUT"); v != "" {
-		if timeoutDuration, err := time.ParseDuration(v); err != nil {
+		d, err := time.ParseDuration(v)
+		if err != nil {
 			return "", err
-		} else {
-			timeout = time.After(timeoutDuration)
 		}
+		timeout = time.After(d)
 	}
 
 	if v := os.Getenv("ASG_ACTIVITY_TIMEOUT"); v != "" {
-		if timeoutDuration, err := time.ParseDuration(v); err != nil {
+		d, err := time.ParseDuration(v)
+		if err != nil {
 			return "", err
-		} else {
-			asgActivityTimeoutDuration = timeoutDuration
 		}
+		asgActivityTimeoutDuration = d
 	}
 
 	if v := os.Getenv("SCALE_IN_COOLDOWN_PERIOD"); v != "" {
-		if scaleInCooldownPeriod, err = time.ParseDuration(v); err != nil {
+		p, err := time.ParseDuration(v)
+		if err != nil {
 			return "", err
 		}
+		scaleInCooldownPeriod = p
 	}
 
 	if v := os.Getenv("SCALE_IN_FACTOR"); v != "" {
-		if scaleInFactor, err = strconv.ParseFloat(v, 64); err != nil {
+		f, err := strconv.ParseFloat(v, 64)
+		if err != nil {
 			return "", err
 		}
-		scaleInFactor = math.Abs(scaleInFactor)
+		scaleInFactor = math.Abs(f)
 	}
 
 	if v := os.Getenv("SCALE_ONLY_AFTER_ALL_EVENT"); v != "" {
-		if v == "true" || v == "1" {
-			scaleOnlyAfterAllEvent = true
-		}
+		scaleOnlyAfterAllEvent = v == "true" || v == "1"
 	}
 
 	if v := os.Getenv("SCALE_OUT_COOLDOWN_PERIOD"); v != "" {
-		if scaleOutCooldownPeriod, err = time.ParseDuration(v); err != nil {
+		p, err := time.ParseDuration(v)
+		if err != nil {
 			return "", err
 		}
+		scaleOutCooldownPeriod = p
 	}
 
 	if v := os.Getenv("SCALE_OUT_FACTOR"); v != "" {
-		if scaleOutFactor, err = strconv.ParseFloat(v, 64); err != nil {
+		f, err := strconv.ParseFloat(v, 64)
+		if err != nil {
 			return "", err
 		}
-		scaleOutFactor = math.Abs(scaleOutFactor)
+		scaleOutFactor = math.Abs(f)
 	}
 
 	if v := os.Getenv("INCLUDE_WAITING"); v != "" {
-		if v == "true" || v == "1" {
-			includeWaiting = true
-		}
+		includeWaiting = v == "true" || v == "1"
 	}
 
 	if v := os.Getenv("INSTANCE_BUFFER"); v != "" {
-		if instanceBuffer, err = strconv.Atoi(v); err != nil {
+		i, err := strconv.Atoi(v)
+		if err != nil {
 			return "", err
 		}
+		instanceBuffer = i
 	}
 
 	maxDescribeScalingActivitiesPages := -1
