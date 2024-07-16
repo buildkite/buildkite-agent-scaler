@@ -26,23 +26,6 @@ var (
 	lastScaleIn, lastScaleOut time.Time
 )
 
-func mustGetEnv(env string) string {
-	val := os.Getenv(env)
-	if val == "" {
-		log.Fatalf("Env %q not set", env)
-	}
-	return val
-}
-
-func mustGetEnvInt(env string) int {
-	v := mustGetEnv(env)
-	vi, err := strconv.Atoi(v)
-	if err != nil {
-		log.Fatalf("Env %q is not an int: %v", env, v)
-	}
-	return vi
-}
-
 func main() {
 	if os.Getenv("DEBUG") != "" {
 		_, err := Handler(context.Background(), json.RawMessage([]byte{}))
@@ -79,6 +62,26 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		publishCloudWatchMetrics        bool
 		disableScaleOut, disableScaleIn bool
 	)
+
+	// Required environment variables
+	buildkiteQueue := os.Getenv("BUILDKITE_QUEUE")
+	if buildkiteQueue == "" {
+		return "", errors.New("BUILDKITE_QUEUE is required")
+	}
+
+	asgName := os.Getenv("ASG_NAME")
+	if asgName == "" {
+		return "", errors.New("ASG_NAME is required")
+	}
+
+	agentsPerInstanceStr := os.Getenv("AGENTS_PER_INSTANCE")
+	if agentsPerInstanceStr == "" {
+		return "", errors.New("AGENTS_PER_INSTANCE is required")
+	}
+	agentsPerInstance, err := strconv.Atoi(agentsPerInstanceStr)
+	if err != nil {
+		return "", fmt.Errorf("AGENTS_PER_INSTANCE must be an integer: %w", err)
+	}
 
 	if v := os.Getenv("LAMBDA_INTERVAL"); v != "" {
 		d, err := time.ParseDuration(v)
@@ -194,7 +197,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		}
 
 		asg := &scaler.ASGDriver{
-			Name:                              mustGetEnv("ASG_NAME"),
+			Name:                              asgName,
 			Sess:                              sess,
 			MaxDescribeScalingActivitiesPages: maxDescribeScalingActivitiesPages,
 		}
@@ -245,9 +248,9 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 
 	client := buildkite.NewClient(token)
 	params := scaler.Params{
-		BuildkiteQueue:       mustGetEnv("BUILDKITE_QUEUE"),
-		AutoScalingGroupName: mustGetEnv("ASG_NAME"),
-		AgentsPerInstance:    mustGetEnvInt("AGENTS_PER_INSTANCE"),
+		BuildkiteQueue:       buildkiteQueue,
+		AutoScalingGroupName: asgName,
+		AgentsPerInstance:    agentsPerInstance,
 		IncludeWaiting:       includeWaiting,
 		ScaleInParams: scaler.ScaleParams{
 			CooldownPeriod: scaleInCooldownPeriod,
