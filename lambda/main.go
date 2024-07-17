@@ -226,11 +226,11 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 	ssmTokenKey := os.Getenv("BUILDKITE_AGENT_TOKEN_SSM_KEY")
 
 	if ssmTokenKey != "" {
-		var err error
-		token, err = scaler.RetrieveFromParameterStore(sess, ssmTokenKey)
+		tk, err := scaler.RetrieveFromParameterStore(sess, ssmTokenKey)
 		if err != nil {
 			return "", err
 		}
+		token = tk
 	}
 
 	if token == "" {
