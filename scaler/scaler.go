@@ -115,7 +115,8 @@ func (s *Scaler) Run() (time.Duration, error) {
 	if desired > asg.MaxSize {
 		log.Printf("⚠️  Desired count exceed MaxSize, capping at %d", asg.MaxSize)
 		desired = asg.MaxSize
-	} else if desired < asg.MinSize {
+	}
+	if desired < asg.MinSize {
 		log.Printf("⚠️  Desired count is less than MinSize, capping at %d", asg.MinSize)
 		desired = asg.MinSize
 	}
