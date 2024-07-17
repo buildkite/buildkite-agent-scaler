@@ -42,8 +42,9 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 	log.Printf("buildkite-agent-scaler version %s", version.VersionString())
 
 	var (
-		timeout  <-chan time.Time = make(chan time.Time)
-		interval time.Duration    = 10 * time.Second
+		timeoutDuration time.Duration
+		timeout         <-chan time.Time
+		interval        = 10 * time.Second
 
 		asgActivityTimeoutDuration = 10 * time.Second
 
@@ -97,6 +98,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		timeoutDuration = d
 		timeout = time.After(d)
 	}
 
@@ -293,10 +295,16 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		lastScaleIn = scaler.LastScaleIn()
 		lastScaleOut = scaler.LastScaleOut()
 
-		log.Printf("Waiting for %v or timeout", interval)
+		logMsg := "Waiting for LAMBDA_INTERVAL (%v)"
+		if timeout != nil {
+			logMsg += " or timeout"
+		}
+		log.Printf(logMsg, interval)
 		select {
 		case <-timeout:
+			log.Printf("Exiting due to LAMBDA_TIMEOUT (%v)", timeoutDuration)
 			return "", nil
+
 		case <-time.After(interval):
 			// Continue
 		}
