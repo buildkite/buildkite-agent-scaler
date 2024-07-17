@@ -68,20 +68,20 @@ func NewScaler(client *buildkite.Client, sess *session.Session, params Params) (
 
 	if params.DryRun {
 		scaler.autoscaling = &dryRunASG{}
-
 		if params.PublishCloudWatchMetrics {
 			scaler.metrics = &dryRunMetricsPublisher{}
 		}
-	} else {
-		scaler.autoscaling = &ASGDriver{
-			Name: params.AutoScalingGroupName,
-			Sess: sess,
-		}
+		return scaler, nil
+	}
 
-		if params.PublishCloudWatchMetrics {
-			scaler.metrics = &cloudWatchMetricsPublisher{
-				sess: sess,
-			}
+	scaler.autoscaling = &ASGDriver{
+		Name: params.AutoScalingGroupName,
+		Sess: sess,
+	}
+
+	if params.PublishCloudWatchMetrics {
+		scaler.metrics = &cloudWatchMetricsPublisher{
+			sess: sess,
 		}
 	}
 
