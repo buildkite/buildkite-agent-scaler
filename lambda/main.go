@@ -217,12 +217,12 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		}
 
 		lastScaleInStr := "never"
-		if scaleInOutput != nil {
+		if scaleInOutput != nil && scaleInOutput.StartTime != nil {
 			lastScaleIn = *scaleInOutput.StartTime
 			lastScaleInStr = lastScaleIn.Format(time.RFC3339Nano)
 		}
 		lastScaleOutStr := "never"
-		if scaleOutOutput != nil {
+		if scaleOutOutput != nil && scaleOutOutput.StartTime != nil {
 			lastScaleOut = *scaleOutOutput.StartTime
 			lastScaleOutStr = lastScaleOut.Format(time.RFC3339Nano)
 		}
