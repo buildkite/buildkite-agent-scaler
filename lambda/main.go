@@ -293,7 +293,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		lastScaleIn = scaler.LastScaleIn()
 		lastScaleOut = scaler.LastScaleOut()
 
-		log.Printf("Waiting for %v\n", interval)
+		log.Printf("Waiting for %v or timeout", interval)
 		select {
 		case <-timeout:
 			return "", nil
