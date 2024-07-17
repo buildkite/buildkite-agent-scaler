@@ -23,6 +23,7 @@ import (
 // On a cold start this will be reset to a zero value
 var (
 	lastScaleMu               sync.Mutex
+	lastScaleTimesFetched     bool
 	lastScaleIn, lastScaleOut time.Time
 )
 
@@ -191,7 +192,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		lastScaleMu.Lock()
 		defer lastScaleMu.Unlock()
 
-		if (disableScaleIn || !lastScaleIn.IsZero()) && (disableScaleOut || !lastScaleOut.IsZero()) {
+		if lastScaleTimesFetched {
 			// We've already fetched the last scaling times that we need.
 			return
 		}
@@ -226,6 +227,8 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 			lastScaleOut = *scaleOutOutput.StartTime
 			lastScaleOutStr = lastScaleOut.Format(time.RFC3339Nano)
 		}
+
+		lastScaleTimesFetched = true
 
 		scalingTimeDiff := time.Since(scalingLastActivityStartTime)
 		log.Printf("Succesfully retrieved last scaling activity events. Last scale out %s, last scale in %s. Discovery took %s.", lastScaleOutStr, lastScaleInStr, scalingTimeDiff)
