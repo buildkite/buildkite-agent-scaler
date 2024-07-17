@@ -207,15 +207,19 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 			return
 		}
 
+		lastScaleInStr := "never"
 		if scaleInOutput != nil {
 			lastScaleIn = *scaleInOutput.StartTime
+			lastScaleInStr = lastScaleIn.Format(time.RFC3339Nano)
 		}
+		lastScaleOutStr := "never"
 		if scaleOutOutput != nil {
 			lastScaleOut = *scaleOutOutput.StartTime
+			lastScaleOutStr = lastScaleOut.Format(time.RFC3339Nano)
 		}
 
 		scalingTimeDiff := time.Since(scalingLastActivityStartTime)
-		log.Printf("Succesfully retrieved last scaling activity events. Last scale out %v, last scale in %v. Discovery took %s.", lastScaleOut, lastScaleIn, scalingTimeDiff)
+		log.Printf("Succesfully retrieved last scaling activity events. Last scale out %s, last scale in %s. Discovery took %s.", lastScaleOutStr, lastScaleInStr, scalingTimeDiff)
 	}()
 
 	token := os.Getenv("BUILDKITE_AGENT_TOKEN")
