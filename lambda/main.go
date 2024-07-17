@@ -170,7 +170,10 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 	}
 
 	// establish an AWS session to be re-used
-	sess := session.New()
+	sess, err := session.NewSession()
+	if err != nil {
+		return "", err
+	}
 
 	// get last scale in and out from asg's activities
 	// This is wrapped in a mutex to avoid multiple outbound requests if the
