@@ -266,28 +266,27 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 	}
 
 	for {
+		minPollDuration, err := scaler.Run()
+		if err != nil {
+			log.Printf("Scaling error: %v", err)
+		}
+
+		if interval < minPollDuration {
+			interval = minPollDuration
+			log.Printf("Increasing poll interval to %v based on rate limit",
+				interval)
+		}
+
+		// Persist the times back into the global state
+		lastScaleIn = scaler.LastScaleIn()
+		lastScaleOut = scaler.LastScaleOut()
+
+		log.Printf("Waiting for %v\n", interval)
 		select {
 		case <-timeout:
 			return "", nil
-
-		default:
-			minPollDuration, err := scaler.Run()
-			if err != nil {
-				log.Printf("Scaling error: %v", err)
-			}
-
-			if interval < minPollDuration {
-				interval = minPollDuration
-				log.Printf("Increasing poll interval to %v based on rate limit",
-					interval)
-			}
-
-			// Persist the times back into the global state
-			lastScaleIn = scaler.LastScaleIn()
-			lastScaleOut = scaler.LastScaleOut()
-
-			log.Printf("Waiting for %v\n", interval)
-			time.Sleep(interval)
+		case <-time.After(interval):
+			// Continue
 		}
 	}
 }
