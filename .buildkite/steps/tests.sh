@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-GO111MODULE=off go get gotest.tools/gotestsum
+go install gotest.tools/gotestsum@v1.12.0
 
 echo '+++ Running tests'
 gotestsum --junitfile "junit-${OSTYPE}.xml" -- -count=1 -failfast ./...

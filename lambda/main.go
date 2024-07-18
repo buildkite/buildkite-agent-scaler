@@ -4,11 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log"
 	"math"
 	"os"
-	"strconv"
 	"sync"
 	"time"
 
@@ -23,28 +21,12 @@ import (
 // On a cold start this will be reset to a zero value
 var (
 	lastScaleMu               sync.Mutex
+	lastScaleTimesFetched     bool
 	lastScaleIn, lastScaleOut time.Time
 )
 
-func mustGetEnv(env string) string {
-	val := os.Getenv(env)
-	if val == "" {
-		log.Fatalf("Env %q not set", env)
-	}
-	return val
-}
-
-func mustGetEnvInt(env string) int {
-	v := mustGetEnv(env)
-	vi, err := strconv.Atoi(v)
-	if err != nil {
-		log.Fatalf("Env %q is not an int: %v", env, v)
-	}
-	return vi
-}
-
 func main() {
-	if os.Getenv("DEBUG") != "" {
+	if EnvBool("DEBUG") {
 		_, err := Handler(context.Background(), json.RawMessage([]byte{}))
 		if err != nil {
 			log.Fatal(err)
@@ -57,120 +39,50 @@ func main() {
 func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 	log.Printf("buildkite-agent-scaler version %s", version.VersionString())
 
-	var (
-		timeout  <-chan time.Time = make(chan time.Time)
-		interval time.Duration    = 10 * time.Second
+	// Required environment variables
+	buildkiteQueue := RequireEnvString("BUILDKITE_QUEUE")
+	asgName := RequireEnvString("ASG_NAME")
+	agentsPerInstance := RequireEnvInt("AGENTS_PER_INSTANCE")
 
-		asgActivityTimeoutDuration = 10 * time.Second
+	// Optional environment variables (but they must parse correctly if set).
+	interval := EnvDuration("LAMBDA_INTERVAL", 10*time.Second)
 
-		scaleInCooldownPeriod time.Duration
-		scaleInFactor         float64
-
-		scaleOutCooldownPeriod time.Duration
-		scaleOutFactor         float64
-
-		instanceBuffer = 0
-
-		scaleOnlyAfterAllEvent bool
-
-		includeWaiting bool
-		err            error
-
-		publishCloudWatchMetrics        bool
-		disableScaleOut, disableScaleIn bool
-	)
-
-	if v := os.Getenv("LAMBDA_INTERVAL"); v != "" {
-		if interval, err = time.ParseDuration(v); err != nil {
-			return "", err
-		}
+	timeoutDuration := EnvDuration("LAMBDA_TIMEOUT", -1)
+	var timeout <-chan time.Time
+	if timeoutDuration >= 0 {
+		timeout = time.After(timeoutDuration)
 	}
 
-	if v := os.Getenv("LAMBDA_TIMEOUT"); v != "" {
-		if timeoutDuration, err := time.ParseDuration(v); err != nil {
-			return "", err
-		} else {
-			timeout = time.After(timeoutDuration)
-		}
+	asgActivityTimeoutDuration := EnvDuration("ASG_ACTIVITY_TIMEOUT", 10*time.Second)
+	scaleInCooldownPeriod := EnvDuration("SCALE_IN_COOLDOWN_PERIOD", 0)
+	scaleInFactor := math.Abs(EnvFloat("SCALE_IN_FACTOR"))
+	scaleOutCooldownPeriod := EnvDuration("SCALE_OUT_COOLDOWN_PERIOD", 0)
+	scaleOutFactor := math.Abs(EnvFloat("SCALE_OUT_FACTOR"))
+	scaleOnlyAfterAllEvent := EnvBool("SCALE_ONLY_AFTER_ALL_EVENT")
+	includeWaiting := EnvBool("INCLUDE_WAITING")
+	instanceBuffer := EnvInt("INSTANCE_BUFFER", 0)
+	maxDescribeScalingActivitiesPages := EnvInt("MAX_DESCRIBE_SCALING_ACTIVITIES_PAGES", -1)
+
+	publishCloudWatchMetrics := EnvBool("CLOUDWATCH_METRICS")
+	if publishCloudWatchMetrics {
+		log.Print("Publishing cloudwatch metrics")
 	}
 
-	if v := os.Getenv("ASG_ACTIVITY_TIMEOUT"); v != "" {
-		if timeoutDuration, err := time.ParseDuration(v); err != nil {
-			return "", err
-		} else {
-			asgActivityTimeoutDuration = timeoutDuration
-		}
+	disableScaleIn := EnvBool("DISABLE_SCALE_IN")
+	if disableScaleIn {
+		log.Print("Disabling scale-in 🙅🏼‍")
 	}
 
-	if v := os.Getenv("SCALE_IN_COOLDOWN_PERIOD"); v != "" {
-		if scaleInCooldownPeriod, err = time.ParseDuration(v); err != nil {
-			return "", err
-		}
-	}
-
-	if v := os.Getenv("SCALE_IN_FACTOR"); v != "" {
-		if scaleInFactor, err = strconv.ParseFloat(v, 64); err != nil {
-			return "", err
-		}
-		scaleInFactor = math.Abs(scaleInFactor)
-	}
-
-	if v := os.Getenv("SCALE_ONLY_AFTER_ALL_EVENT"); v != "" {
-		if v == "true" || v == "1" {
-			scaleOnlyAfterAllEvent = true
-		}
-	}
-
-	if v := os.Getenv("SCALE_OUT_COOLDOWN_PERIOD"); v != "" {
-		if scaleOutCooldownPeriod, err = time.ParseDuration(v); err != nil {
-			return "", err
-		}
-	}
-
-	if v := os.Getenv("SCALE_OUT_FACTOR"); v != "" {
-		if scaleOutFactor, err = strconv.ParseFloat(v, 64); err != nil {
-			return "", err
-		}
-		scaleOutFactor = math.Abs(scaleOutFactor)
-	}
-
-	if v := os.Getenv("INCLUDE_WAITING"); v != "" {
-		if v == "true" || v == "1" {
-			includeWaiting = true
-		}
-	}
-
-	if v := os.Getenv("INSTANCE_BUFFER"); v != "" {
-		if instanceBuffer, err = strconv.Atoi(v); err != nil {
-			return "", err
-		}
-	}
-
-	maxDescribeScalingActivitiesPages := -1
-	if v := os.Getenv("MAX_DESCRIBE_SCALING_ACTIVITIES_PAGES"); v != "" {
-		maxDescribeScalingActivitiesPages, err = strconv.Atoi(v)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to parse MAX_DESCRIBE_SCALING_ACTIVITIES_PAGES: %v", err)
-		}
-	}
-
-	if m := os.Getenv("CLOUDWATCH_METRICS"); m == "true" || m == "1" {
-		log.Printf("Publishing cloudwatch metrics")
-		publishCloudWatchMetrics = true
-	}
-
-	if m := os.Getenv("DISABLE_SCALE_IN"); m == "true" || m == "1" {
-		log.Printf("Disabling scale-in 🙅🏼‍")
-		disableScaleIn = true
-	}
-
-	if m := os.Getenv("DISABLE_SCALE_OUT"); m == "true" || m == "1" {
-		log.Printf("Disabling scale-out 🙅🏼‍♂️")
-		disableScaleOut = true
+	disableScaleOut := EnvBool("DISABLE_SCALE_OUT")
+	if disableScaleOut {
+		log.Print("Disabling scale-out 🙅🏼‍♂️")
 	}
 
 	// establish an AWS session to be re-used
-	sess := session.New()
+	sess, err := session.NewSession()
+	if err != nil {
+		return "", err
+	}
 
 	// get last scale in and out from asg's activities
 	// This is wrapped in a mutex to avoid multiple outbound requests if the
@@ -179,13 +91,13 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		lastScaleMu.Lock()
 		defer lastScaleMu.Unlock()
 
-		if (disableScaleIn || !lastScaleIn.IsZero()) && (disableScaleOut || !lastScaleOut.IsZero()) {
+		if lastScaleTimesFetched {
 			// We've already fetched the last scaling times that we need.
 			return
 		}
 
 		asg := &scaler.ASGDriver{
-			Name:                              mustGetEnv("ASG_NAME"),
+			Name:                              asgName,
 			Sess:                              sess,
 			MaxDescribeScalingActivitiesPages: maxDescribeScalingActivitiesPages,
 		}
@@ -204,26 +116,32 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 			return
 		}
 
-		if scaleInOutput != nil {
+		lastScaleInStr := "never"
+		if scaleInOutput != nil && scaleInOutput.StartTime != nil {
 			lastScaleIn = *scaleInOutput.StartTime
+			lastScaleInStr = lastScaleIn.Format(time.RFC3339Nano)
 		}
-		if scaleOutOutput != nil {
+		lastScaleOutStr := "never"
+		if scaleOutOutput != nil && scaleOutOutput.StartTime != nil {
 			lastScaleOut = *scaleOutOutput.StartTime
+			lastScaleOutStr = lastScaleOut.Format(time.RFC3339Nano)
 		}
 
+		lastScaleTimesFetched = true
+
 		scalingTimeDiff := time.Since(scalingLastActivityStartTime)
-		log.Printf("Succesfully retrieved last scaling activity events. Last scale out %v, last scale in %v. Discovery took %s.", lastScaleOut, lastScaleIn, scalingTimeDiff)
+		log.Printf("Succesfully retrieved last scaling activity events. Last scale out %s, last scale in %s. Discovery took %s.", lastScaleOutStr, lastScaleInStr, scalingTimeDiff)
 	}()
 
 	token := os.Getenv("BUILDKITE_AGENT_TOKEN")
 	ssmTokenKey := os.Getenv("BUILDKITE_AGENT_TOKEN_SSM_KEY")
 
 	if ssmTokenKey != "" {
-		var err error
-		token, err = scaler.RetrieveFromParameterStore(sess, ssmTokenKey)
+		tk, err := scaler.RetrieveFromParameterStore(sess, ssmTokenKey)
 		if err != nil {
 			return "", err
 		}
+		token = tk
 	}
 
 	if token == "" {
@@ -232,9 +150,9 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 
 	client := buildkite.NewClient(token)
 	params := scaler.Params{
-		BuildkiteQueue:       mustGetEnv("BUILDKITE_QUEUE"),
-		AutoScalingGroupName: mustGetEnv("ASG_NAME"),
-		AgentsPerInstance:    mustGetEnvInt("AGENTS_PER_INSTANCE"),
+		BuildkiteQueue:       buildkiteQueue,
+		AutoScalingGroupName: asgName,
+		AgentsPerInstance:    agentsPerInstance,
 		IncludeWaiting:       includeWaiting,
 		ScaleInParams: scaler.ScaleParams{
 			CooldownPeriod: scaleInCooldownPeriod,
@@ -259,28 +177,33 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 	}
 
 	for {
+		minPollDuration, err := scaler.Run()
+		if err != nil {
+			log.Printf("Scaling error: %v", err)
+		}
+
+		if interval < minPollDuration {
+			interval = minPollDuration
+			log.Printf("Increasing poll interval to %v based on rate limit",
+				interval)
+		}
+
+		// Persist the times back into the global state
+		lastScaleIn = scaler.LastScaleIn()
+		lastScaleOut = scaler.LastScaleOut()
+
+		logMsg := "Waiting for LAMBDA_INTERVAL (%v)"
+		if timeout != nil {
+			logMsg += " or timeout"
+		}
+		log.Printf(logMsg, interval)
 		select {
 		case <-timeout:
+			log.Printf("Exiting due to LAMBDA_TIMEOUT (%v)", timeoutDuration)
 			return "", nil
 
-		default:
-			minPollDuration, err := scaler.Run()
-			if err != nil {
-				log.Printf("Scaling error: %v", err)
-			}
-
-			if interval < minPollDuration {
-				interval = minPollDuration
-				log.Printf("Increasing poll interval to %v based on rate limit",
-					interval)
-			}
-
-			// Persist the times back into the global state
-			lastScaleIn = scaler.LastScaleIn()
-			lastScaleOut = scaler.LastScaleOut()
-
-			log.Printf("Waiting for %v\n", interval)
-			time.Sleep(interval)
+		case <-time.After(interval):
+			// Continue
 		}
 	}
 }

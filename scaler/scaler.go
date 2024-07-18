@@ -68,20 +68,20 @@ func NewScaler(client *buildkite.Client, sess *session.Session, params Params) (
 
 	if params.DryRun {
 		scaler.autoscaling = &dryRunASG{}
-
 		if params.PublishCloudWatchMetrics {
 			scaler.metrics = &dryRunMetricsPublisher{}
 		}
-	} else {
-		scaler.autoscaling = &ASGDriver{
-			Name: params.AutoScalingGroupName,
-			Sess: sess,
-		}
+		return scaler, nil
+	}
 
-		if params.PublishCloudWatchMetrics {
-			scaler.metrics = &cloudWatchMetricsPublisher{
-				sess: sess,
-			}
+	scaler.autoscaling = &ASGDriver{
+		Name: params.AutoScalingGroupName,
+		Sess: sess,
+	}
+
+	if params.PublishCloudWatchMetrics {
+		scaler.metrics = &cloudWatchMetricsPublisher{
+			sess: sess,
 		}
 	}
 
@@ -115,7 +115,8 @@ func (s *Scaler) Run() (time.Duration, error) {
 	if desired > asg.MaxSize {
 		log.Printf("⚠️  Desired count exceed MaxSize, capping at %d", asg.MaxSize)
 		desired = asg.MaxSize
-	} else if desired < asg.MinSize {
+	}
+	if desired < asg.MinSize {
 		log.Printf("⚠️  Desired count is less than MinSize, capping at %d", asg.MinSize)
 		desired = asg.MinSize
 	}
@@ -142,7 +143,7 @@ func (s *Scaler) scaleIn(desired int64, current AutoscaleGroupDetails) error {
 		lastScaleInEvent := s.scaleInParams.LastEvent
 		lastScaleOutEvent := s.scaleOutParams.LastEvent
 		lastEvent := lastScaleInEvent
-		if s.scaleOnlyAfterAllEvent == true && lastScaleInEvent.Before(lastScaleOutEvent) {
+		if s.scaleOnlyAfterAllEvent && lastScaleInEvent.Before(lastScaleOutEvent) {
 			lastEvent = lastScaleOutEvent
 		}
 		cooldownRemaining := s.scaleInParams.CooldownPeriod - time.Since(lastEvent)
@@ -161,13 +162,16 @@ func (s *Scaler) scaleIn(desired int64, current AutoscaleGroupDetails) error {
 		// Use Floor to avoid never reaching upper bound
 		factoredChange := int64(math.Floor(float64(change) * factor))
 
-		if factoredChange < change {
+		switch {
+		case factoredChange < change:
 			log.Printf("👮‍️ Increasing scale-in of %d by factor of %0.2f",
 				change, factor)
-		} else if factoredChange > change {
+
+		case factoredChange > change:
 			log.Printf("👮‍️ Decreasing scale-in of %d by factor of %0.2f",
 				change, factor)
-		} else {
+
+		default:
 			log.Printf("👮‍️ Scale-in factor of %0.2f was ignored",
 				factor)
 		}
@@ -205,7 +209,7 @@ func (s *Scaler) scaleOut(desired int64, current AutoscaleGroupDetails) error {
 		lastScaleInEvent := s.scaleInParams.LastEvent
 		lastScaleOutEvent := s.scaleOutParams.LastEvent
 		lastEvent := lastScaleOutEvent
-		if s.scaleOnlyAfterAllEvent == true && lastScaleOutEvent.Before(lastScaleInEvent) {
+		if s.scaleOnlyAfterAllEvent && lastScaleOutEvent.Before(lastScaleInEvent) {
 			lastEvent = lastScaleInEvent
 		}
 		cooldownRemaining := s.scaleOutParams.CooldownPeriod - time.Since(lastEvent)
@@ -224,13 +228,16 @@ func (s *Scaler) scaleOut(desired int64, current AutoscaleGroupDetails) error {
 		// Use Ceil to avoid never reaching upper bound
 		factoredChange := int64(math.Ceil(float64(change) * s.scaleOutParams.Factor))
 
-		if factoredChange > change {
+		switch {
+		case factoredChange > change:
 			log.Printf("👮‍️ Increasing scale-out of %d by factor of %0.2f",
 				change, s.scaleOutParams.Factor)
-		} else if factoredChange < change {
+
+		case factoredChange < change:
 			log.Printf("👮‍️ Decreasing scale-out of %d by factor of %0.2f",
 				change, s.scaleOutParams.Factor)
-		} else {
+
+		default:
 			log.Printf("👮‍️ Scale-out factor of %0.2f was ignored",
 				s.scaleOutParams.Factor)
 		}

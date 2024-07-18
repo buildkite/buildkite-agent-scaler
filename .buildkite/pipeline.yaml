@@ -2,73 +2,73 @@ agents:
   queue: elastic-runners
 
 steps:
-- name: ":go: Check go fmt"
-  key: go-fmt
-  command: .buildkite/steps/test-go-fmt.sh
-  plugins:
-  - docker#v5.8.0:
-      image: golang:1.19
-      workdir: /go/src/github.com/buildkite/buildkite-agent-scaler
+  - name: ":go: Check go fmt"
+    key: go-fmt
+    command: .buildkite/steps/test-go-fmt.sh
+    plugins:
+      - docker#v5.8.0:
+          image: golang:1.22
+          workdir: /go/src/github.com/buildkite/buildkite-agent-scaler
 
-- name: ":golang: Run Tests"
-  key: test
-  command: .buildkite/steps/tests.sh
-  plugins:
-  - docker#v5.8.0:
-      image: golang:1.19
-      workdir: /go/src/github.com/buildkite/buildkite-agent-scaler
+  - name: ":golang: Run Tests"
+    key: test
+    command: .buildkite/steps/tests.sh
+    plugins:
+      - docker#v5.8.0:
+          image: golang:1.22
+          workdir: /go/src/github.com/buildkite/buildkite-agent-scaler
 
-- name: ":lambda: Build Lambda"
-  key: build-lambda
-  depends_on:
-  - go-fmt
-  command: .buildkite/steps/build-lambda.sh
-  artifact_paths:
-  - handler.zip
+  - name: ":lambda: Build Lambda"
+    key: build-lambda
+    depends_on:
+      - go-fmt
+    command: .buildkite/steps/build-lambda.sh
+    artifact_paths:
+      - handler.zip
 
-- label: ":s3: Pubish to S3 Branch Location"
-  key: s3-branch
-  depends_on:
-  - test
-  - build-lambda
-  command: .buildkite/steps/upload-to-s3.sh
-  plugins:
-  - aws-assume-role-with-web-identity:
-      role-arn: arn:aws:iam::032379705303:role/pipeline-buildkite-buildkite-agent-scaler
+  - label: ":s3: Pubish to S3 Branch Location"
+    key: s3-branch
+    depends_on:
+      - test
+      - build-lambda
+    command: .buildkite/steps/upload-to-s3.sh
+    plugins:
+      - aws-assume-role-with-web-identity:
+          role-arn: arn:aws:iam::032379705303:role/pipeline-buildkite-buildkite-agent-scaler
 
-- if: build.tag =~ /^.+\$/ || build.env("RELEASE_DRY_RUN") == "true"
-  label: ":github: Draft GitHub Release"
-  key: github-release
-  depends_on:
-  - build-lambda
-  command: .buildkite/steps/github-release.sh
-  env:
-    BUILDKITE_AGENT_GIT_FETCH_FLAGS: -v --prune --tags
-  plugins:
-  - aws-assume-role-with-web-identity:
-      role-arn: arn:aws:iam::445615400570:role/pipeline-buildkite-buildkite-agent-scaler
-  - aws-ssm#v1.0.0:
-      parameters:
-        GITHUB_RELEASE_ACCESS_TOKEN: /pipelines/buildkite/buildkite-agent-scaler/GITHUB_RELEASE_ACCESS_TOKEN
-  - docker#v5.8.0:
-      image: alpine:3.18
-      propagate-environment: true
-      mount-buildkite-agent: true
-      environment:
-      - GITHUB_RELEASE_ACCESS_TOKEN
-      - BUILDKITE_AGENT_ACCESS_TOKEN
+  - if: build.tag =~ /^.+\$/ || build.env("RELEASE_DRY_RUN") == "true"
+    label: ":github: Draft GitHub Release"
+    key: github-release
+    depends_on:
+      - build-lambda
+    command: .buildkite/steps/github-release.sh
+    env:
+      BUILDKITE_AGENT_GIT_FETCH_FLAGS: -v --prune --tags
+    plugins:
+      - aws-assume-role-with-web-identity:
+          role-arn: arn:aws:iam::445615400570:role/pipeline-buildkite-buildkite-agent-scaler
+      - aws-ssm#v1.0.0:
+          parameters:
+            GITHUB_RELEASE_ACCESS_TOKEN: /pipelines/buildkite/buildkite-agent-scaler/GITHUB_RELEASE_ACCESS_TOKEN
+      - docker#v5.8.0:
+          image: alpine:3.18
+          propagate-environment: true
+          mount-buildkite-agent: true
+          environment:
+            - GITHUB_RELEASE_ACCESS_TOKEN
+            - BUILDKITE_AGENT_ACCESS_TOKEN
 
-- if: build.tag =~ /^.+\$/ || build.env("RELEASE_DRY_RUN") == "true"
-  key: block-s3-release
-  block: ":rocket: Draft :github: Release Approved?"
+  - if: build.tag =~ /^.+\$/ || build.env("RELEASE_DRY_RUN") == "true"
+    key: block-s3-release
+    block: ":rocket: Draft :github: Release Approved?"
 
-- if: build.tag =~ /^.+\$/ || build.env("RELEASE_DRY_RUN") == "true"
-  label: ":s3: Publish to S3 Release Location"
-  key: s3-release
-  depends_on:
-  - github-release
-  - block-s3-release
-  command: .buildkite/steps/upload-to-s3.sh release
-  plugins:
-  - aws-assume-role-with-web-identity:
-      role-arn: arn:aws:iam::032379705303:role/pipeline-buildkite-buildkite-agent-scaler
+  - if: build.tag =~ /^.+\$/ || build.env("RELEASE_DRY_RUN") == "true"
+    label: ":s3: Publish to S3 Release Location"
+    key: s3-release
+    depends_on:
+      - github-release
+      - block-s3-release
+    command: .buildkite/steps/upload-to-s3.sh release
+    plugins:
+      - aws-assume-role-with-web-identity:
+          role-arn: arn:aws:iam::032379705303:role/pipeline-buildkite-buildkite-agent-scaler
