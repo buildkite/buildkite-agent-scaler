@@ -4,11 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log"
 	"math"
 	"os"
-	"strconv"
 	"sync"
 	"time"
 
@@ -28,7 +26,7 @@ var (
 )
 
 func main() {
-	if os.Getenv("DEBUG") != "" {
+	if EnvBool("DEBUG") {
 		_, err := Handler(context.Background(), json.RawMessage([]byte{}))
 		if err != nil {
 			log.Fatal(err)
@@ -41,144 +39,43 @@ func main() {
 func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 	log.Printf("buildkite-agent-scaler version %s", version.VersionString())
 
-	var (
-		timeoutDuration time.Duration
-		timeout         <-chan time.Time
-		interval        = 10 * time.Second
-
-		asgActivityTimeoutDuration = 10 * time.Second
-
-		scaleInCooldownPeriod time.Duration
-		scaleInFactor         float64
-
-		scaleOutCooldownPeriod time.Duration
-		scaleOutFactor         float64
-
-		instanceBuffer = 0
-
-		scaleOnlyAfterAllEvent bool
-
-		includeWaiting bool
-		err            error
-
-		publishCloudWatchMetrics        bool
-		disableScaleOut, disableScaleIn bool
-	)
-
 	// Required environment variables
-	buildkiteQueue := os.Getenv("BUILDKITE_QUEUE")
-	if buildkiteQueue == "" {
-		return "", errors.New("BUILDKITE_QUEUE is required")
+	buildkiteQueue := RequireEnvString("BUILDKITE_QUEUE")
+	asgName := RequireEnvString("ASG_NAME")
+	agentsPerInstance := RequireEnvInt("AGENTS_PER_INSTANCE")
+
+	// Optional environment variables (but they must parse correctly if set).
+	interval := EnvDuration("LAMBDA_INTERVAL", 10*time.Second)
+
+	timeoutDuration := EnvDuration("LAMBDA_TIMEOUT", -1)
+	var timeout <-chan time.Time
+	if timeoutDuration >= 0 {
+		timeout = time.After(timeoutDuration)
 	}
 
-	asgName := os.Getenv("ASG_NAME")
-	if asgName == "" {
-		return "", errors.New("ASG_NAME is required")
+	asgActivityTimeoutDuration := EnvDuration("ASG_ACTIVITY_TIMEOUT", 10*time.Second)
+	scaleInCooldownPeriod := EnvDuration("SCALE_IN_COOLDOWN_PERIOD", 0)
+	scaleInFactor := math.Abs(EnvFloat("SCALE_IN_FACTOR"))
+	scaleOutCooldownPeriod := EnvDuration("SCALE_OUT_COOLDOWN_PERIOD", 0)
+	scaleOutFactor := math.Abs(EnvFloat("SCALE_OUT_FACTOR"))
+	scaleOnlyAfterAllEvent := EnvBool("SCALE_ONLY_AFTER_ALL_EVENT")
+	includeWaiting := EnvBool("INCLUDE_WAITING")
+	instanceBuffer := EnvInt("INSTANCE_BUFFER", 0)
+	maxDescribeScalingActivitiesPages := EnvInt("MAX_DESCRIBE_SCALING_ACTIVITIES_PAGES", -1)
+
+	publishCloudWatchMetrics := EnvBool("CLOUDWATCH_METRICS")
+	if publishCloudWatchMetrics {
+		log.Print("Publishing cloudwatch metrics")
 	}
 
-	agentsPerInstanceStr := os.Getenv("AGENTS_PER_INSTANCE")
-	if agentsPerInstanceStr == "" {
-		return "", errors.New("AGENTS_PER_INSTANCE is required")
-	}
-	agentsPerInstance, err := strconv.Atoi(agentsPerInstanceStr)
-	if err != nil {
-		return "", fmt.Errorf("AGENTS_PER_INSTANCE must be an integer: %w", err)
+	disableScaleIn := EnvBool("DISABLE_SCALE_IN")
+	if disableScaleIn {
+		log.Print("Disabling scale-in 🙅🏼‍")
 	}
 
-	if v := os.Getenv("LAMBDA_INTERVAL"); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return "", err
-		}
-		interval = d
-	}
-
-	if v := os.Getenv("LAMBDA_TIMEOUT"); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return "", err
-		}
-		timeoutDuration = d
-		timeout = time.After(d)
-	}
-
-	if v := os.Getenv("ASG_ACTIVITY_TIMEOUT"); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return "", err
-		}
-		asgActivityTimeoutDuration = d
-	}
-
-	if v := os.Getenv("SCALE_IN_COOLDOWN_PERIOD"); v != "" {
-		p, err := time.ParseDuration(v)
-		if err != nil {
-			return "", err
-		}
-		scaleInCooldownPeriod = p
-	}
-
-	if v := os.Getenv("SCALE_IN_FACTOR"); v != "" {
-		f, err := strconv.ParseFloat(v, 64)
-		if err != nil {
-			return "", err
-		}
-		scaleInFactor = math.Abs(f)
-	}
-
-	if v := os.Getenv("SCALE_ONLY_AFTER_ALL_EVENT"); v != "" {
-		scaleOnlyAfterAllEvent = v == "true" || v == "1"
-	}
-
-	if v := os.Getenv("SCALE_OUT_COOLDOWN_PERIOD"); v != "" {
-		p, err := time.ParseDuration(v)
-		if err != nil {
-			return "", err
-		}
-		scaleOutCooldownPeriod = p
-	}
-
-	if v := os.Getenv("SCALE_OUT_FACTOR"); v != "" {
-		f, err := strconv.ParseFloat(v, 64)
-		if err != nil {
-			return "", err
-		}
-		scaleOutFactor = math.Abs(f)
-	}
-
-	if v := os.Getenv("INCLUDE_WAITING"); v != "" {
-		includeWaiting = v == "true" || v == "1"
-	}
-
-	if v := os.Getenv("INSTANCE_BUFFER"); v != "" {
-		i, err := strconv.Atoi(v)
-		if err != nil {
-			return "", err
-		}
-		instanceBuffer = i
-	}
-
-	maxDescribeScalingActivitiesPages := -1
-	if v := os.Getenv("MAX_DESCRIBE_SCALING_ACTIVITIES_PAGES"); v != "" {
-		maxDescribeScalingActivitiesPages, err = strconv.Atoi(v)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to parse MAX_DESCRIBE_SCALING_ACTIVITIES_PAGES: %v", err)
-		}
-	}
-
-	if m := os.Getenv("CLOUDWATCH_METRICS"); m == "true" || m == "1" {
-		log.Printf("Publishing cloudwatch metrics")
-		publishCloudWatchMetrics = true
-	}
-
-	if m := os.Getenv("DISABLE_SCALE_IN"); m == "true" || m == "1" {
-		log.Printf("Disabling scale-in 🙅🏼‍")
-		disableScaleIn = true
-	}
-
-	if m := os.Getenv("DISABLE_SCALE_OUT"); m == "true" || m == "1" {
-		log.Printf("Disabling scale-out 🙅🏼‍♂️")
-		disableScaleOut = true
+	disableScaleOut := EnvBool("DISABLE_SCALE_OUT")
+	if disableScaleOut {
+		log.Print("Disabling scale-out 🙅🏼‍♂️")
 	}
 
 	// establish an AWS session to be re-used
