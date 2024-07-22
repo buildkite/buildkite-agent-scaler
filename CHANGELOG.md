@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## [v1.8.0](https://github.com/buildkite/buildkite-agent-scaler/tree/v1.8.0) (2024-07-18)
+[Full Changelog](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.7.0...v1.8.0)
+
+### Changed
+- The scaler will run at least once, regardless of `LAMBDA_TIMEOUT` [#188](https://github.com/buildkite/buildkite-agent-scaler/pull/188) (@DrJosh9000)
+
+### Internal
+- Dependabot updates [#185](https://github.com/buildkite/buildkite-agent-scaler/pull/185), [#186](https://github.com/buildkite/buildkite-agent-scaler/pull/186), [#114](https://github.com/buildkite/buildkite-agent-scaler/pull/114) (@dependabot[bot])
+- Fix dependabot reviewers [#187](https://github.com/buildkite/buildkite-agent-scaler/pull/187) (@DrJosh9000)
+- Added Using Cluster [#183](https://github.com/buildkite/buildkite-agent-scaler/pull/183) (@stephanieatte)
+- Calm dependabot down a little [#179](https://github.com/buildkite/buildkite-agent-scaler/pull/179) (@yob)
+- Update README example due to end of support for the Go 1.x runtime [#139](https://github.com/buildkite/buildkite-agent-scaler/pull/139) (@tomowatt)
+
 ## [v1.7.0](https://github.com/buildkite/buildkite-agent-scaler/tree/v1.7.0) (2023-10-13)
 [Full Changelog](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.6.0...v1.7.0)
 
