@@ -94,6 +94,16 @@ Parameters:
     Type: String
     Description: Minimum time interval between polls. If a larger interval is provided by Buildkite, that is used instead.
     Default: "10s"
+  
+  SecurityGroupIds:
+    Description: "Comma separated list of security group IDs to run the lambda in. Defaults to not configuring security groups."
+    Type: CommaDelimitedList
+    Default: ""
+    
+  SubnetIds:
+    Description: "Comma separated list of subnet IDs to run the lambda in. Defaults to not configuring subnets."
+    Type: CommaDelimitedList
+    Default: ""
 
 Conditions:
   CreateRole:
@@ -102,6 +112,20 @@ Conditions:
     !Not [ !Equals [ !Ref BuildkiteAgentTokenParameterStoreKMSKey, "" ] ]
   SetRolePermissionsBoundaryARN:
     !Not [ !Equals [ !Ref RolePermissionsBoundaryARN, "" ] ]
+  SetSecurityGroups:
+    Fn::Not:
+      - Fn::Equals:
+        - Fn::Join:
+           - ""
+           - Ref: SecurityGroupIds
+        - ""
+  SetSubnets:
+    Fn::Not:
+      - Fn::Equals:
+        - Fn::Join:
+           - ""
+           - Ref: SubnetIds
+        - ""
 
 Mappings:
   LambdaBucket:
@@ -195,6 +219,9 @@ Resources:
       Architectures:
         - x86_64
       MemorySize: 128
+      VpcConfig:
+        SecurityGroupIds: !If [ SetSecurityGroups, !Split [',', !Join [',', !Ref SecurityGroupIds]], !Ref "AWS::NoValue" ]
+        SubnetIds: !If [ SetSubnets, !Split [',', !Join [',', !Ref SubnetIds]], !Ref "AWS::NoValue" ]
       Environment:
         Variables:
           BUILDKITE_AGENT_TOKEN_SSM_KEY: !Ref BuildkiteAgentTokenParameter
