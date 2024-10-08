@@ -13,13 +13,13 @@ import (
 func main() {
 	var (
 		// aws params
-		asgName           = flag.String("asg-name", "", "The name of the autoscaling group")
+		asgName           = flag.String("asg-name", "ci-docker-medium-agent", "The name of the autoscaling group")
 		agentsPerInstance = flag.Int("agents-per-instance", 1, "The number of agents per instance")
 		cwMetrics         = flag.Bool("cloudwatch-metrics", false, "Whether to publish cloudwatch metrics")
 		ssmTokenKey       = flag.String("agent-token-ssm-key", "", "The AWS SSM Parameter Store key for the agent token")
 
 		// buildkite params
-		buildkiteQueue      = flag.String("queue", "default", "The queue to watch in the metrics")
+		buildkiteQueue      = flag.String("queue", "docker-medium", "The queue to watch in the metrics")
 		buildkiteAgentToken = flag.String("agent-token", "", "A buildkite agent registration token")
 		includeWaiting      = flag.Bool("include-waiting", false, "Whether to include jobs behind a wait step for scaling")
 
