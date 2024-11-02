@@ -134,6 +134,8 @@ func (s *Scaler) Run() (time.Duration, error) {
 }
 
 func (s *Scaler) scaleIn(desired int64, current AutoscaleGroupDetails) error {
+	s.scaleInParams.Disable = true
+	log.Print("Scale in disable is set to:", s.scaleInParams.Disable)
 	if s.scaleInParams.Disable {
 		return nil
 	}
