@@ -31,5 +31,5 @@ steps:
     depends_on:
       - release
     plugins:
-      - aws-assume-role-with-web-identity:
-          role-arn: arn:aws:iam::172840064832:role/pipeline-buildkite-agent-scaler-publish
+      - aws-assume-role-with-web-identity#v1.1.0:
+          role-arn: arn:aws:iam::172840064832:role/pipeline-buildkite-aws-stack-buildkite-agent-scaler-publish
