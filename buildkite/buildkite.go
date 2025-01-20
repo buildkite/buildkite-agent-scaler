@@ -13,8 +13,7 @@ import (
 )
 
 const (
-	DefaultMetricsEndpoint = "https://agent.buildkite.com/v3"
-	PollDurationHeader     = "Buildkite-Agent-Metrics-Poll-Duration"
+	PollDurationHeader = "Buildkite-Agent-Metrics-Poll-Duration"
 )
 
 type Client struct {
@@ -23,9 +22,9 @@ type Client struct {
 	UserAgent  string
 }
 
-func NewClient(agentToken string) *Client {
+func NewClient(agentToken, agentEndpoint string) *Client {
 	return &Client{
-		Endpoint:   DefaultMetricsEndpoint,
+		Endpoint:   agentEndpoint,
 		UserAgent:  fmt.Sprintf("buildkite-agent-scaler/%s", version.VersionString()),
 		AgentToken: agentToken,
 	}

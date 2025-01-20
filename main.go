@@ -19,9 +19,10 @@ func main() {
 		ssmTokenKey       = flag.String("agent-token-ssm-key", "", "The AWS SSM Parameter Store key for the agent token")
 
 		// buildkite params
-		buildkiteQueue      = flag.String("queue", "default", "The queue to watch in the metrics")
-		buildkiteAgentToken = flag.String("agent-token", "", "A buildkite agent registration token")
-		includeWaiting      = flag.Bool("include-waiting", false, "Whether to include jobs behind a wait step for scaling")
+		buildkiteAgentEndpoint = flag.String("agent-endpoint", "https://agent.buildkite.com/v3", "The buildkite agent API endpoint")
+		buildkiteQueue         = flag.String("queue", "default", "The queue to watch in the metrics")
+		buildkiteAgentToken    = flag.String("agent-token", "", "A buildkite agent registration token")
+		includeWaiting         = flag.Bool("include-waiting", false, "Whether to include jobs behind a wait step for scaling")
 
 		// scale in/out params
 		scaleInFactor  = flag.Float64("scale-in-factor", 1.0, "A factor to apply to scale ins")
@@ -46,7 +47,7 @@ func main() {
 		buildkiteAgentToken = &token
 	}
 
-	client := buildkite.NewClient(*buildkiteAgentToken)
+	client := buildkite.NewClient(*buildkiteAgentToken, *buildkiteAgentEndpoint)
 
 	scaler, err := scaler.NewScaler(client, sess, scaler.Params{
 		BuildkiteQueue:           *buildkiteQueue,

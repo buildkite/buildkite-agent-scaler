@@ -28,6 +28,16 @@ func RequireEnvInt(name string) int {
 	return i
 }
 
+// EnvString reads an environment variable, and if it is not set, returns def.
+func EnvString(name, def string) string {
+	v := os.Getenv(name)
+	if v == "" {
+		return def
+	}
+
+	return v
+}
+
 // EnvInt reads an environment variable, and if it is set, parses it with
 // [strconv.Atoi].If it is not set, it returns def. If it does not parse, it calls
 // [log.Fatalf].

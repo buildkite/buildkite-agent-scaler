@@ -39,6 +39,9 @@ func main() {
 func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 	log.Printf("buildkite-agent-scaler version %s", version.VersionString())
 
+	// optional agent endpoint
+	buildkiteAgentEndpoint := EnvString("BUILDKITE_AGENT_ENDPOINT", "https://agent.buildkite.com/v3")
+
 	// Required environment variables
 	buildkiteQueue := RequireEnvString("BUILDKITE_QUEUE")
 	asgName := RequireEnvString("ASG_NAME")
@@ -148,7 +151,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		return "", errors.New("Must provide either BUILDKITE_AGENT_TOKEN or BUILDKITE_AGENT_TOKEN_SSM_KEY")
 	}
 
-	client := buildkite.NewClient(token)
+	client := buildkite.NewClient(token, buildkiteAgentEndpoint)
 	params := scaler.Params{
 		BuildkiteQueue:       buildkiteQueue,
 		AutoScalingGroupName: asgName,
