@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## [1.9.1](https://github.com/buildkite/buildkite-agent-scaler/tree/1.9.1) (2025-01-20)
+[Full Changelog](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.9.0...1.9.1)
+
+### Changed
+- Add an option to override the agent endpoint URL via flag and env var [#203](https://github.com/buildkite/buildkite-agent-scaler/pull/203) (@wolfeidau)
+
+### Fixed
+- Fix errors in README [#196](https://github.com/buildkite/buildkite-agent-scaler/pull/196) (@DrJosh9000)
+
+### Internal
+- Assume an IAM role for publishing to SAR S3 bucket [#201](https://github.com/buildkite/buildkite-agent-scaler/pull/201) (@yob)
+- Update release process to assume new IAM roles via OIDC [#202](https://github.com/buildkite/buildkite-agent-scaler/pull/202) (@yob)
+- Update the role used to publish SAR [#200](https://github.com/buildkite/buildkite-agent-scaler/pull/200) (@yob)
+- Bump github.com/aws/aws-sdk-go from 1.54.19 to 1.55.5 [#192](https://github.com/buildkite/buildkite-agent-scaler/pull/192) (@dependabot[bot])
+
 ## [v1.9.0](https://github.com/buildkite/buildkite-agent-scaler/tree/v1.9.0) (2024-07-29)
 [Full Changelog](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.8.0...v1.9.0)
 
