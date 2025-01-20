@@ -12,7 +12,7 @@ func TestHappy(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		io.WriteString(w, `{"organization": {"slug": "llamacorp"}}`)
 	}))
-	c := NewClient("testtoken")
+	c := NewClient("testtoken", "https://agent.buildkite.com/v3")
 	c.Endpoint = s.URL
 	m, err := c.GetAgentMetrics("default")
 	if err != nil {
@@ -29,7 +29,7 @@ func TestUnauthorizedResponse(t *testing.T) {
 		w.WriteHeader(http.StatusUnauthorized)
 		io.WriteString(w, `{"message": "Eeep! You forgot to pass an agent registration token"}`)
 	}))
-	c := NewClient("testtoken")
+	c := NewClient("testtoken", "https://agent.buildkite.com/v3")
 	c.Endpoint = s.URL
 	_, err := c.GetAgentMetrics("default")
 	if err != nil {
