@@ -70,13 +70,25 @@ If `BUILDKITE_AGENT_TOKEN_SSM_KEY` is set, the token will be read from
 which [can also read from AWS Secrets Manager](https://docs.aws.amazon.com/systems-manager/latest/userguide/integration-ps-secretsmanager.html).
 
 ```bash
+# For x86 architecture
 aws lambda create-function \
   --function-name buildkite-agent-scaler \
   --memory 128 \
   --role arn:aws:iam::account-id:role/execution_role \
   --runtime provided.al2 \
   --zip-file fileb://handler.zip \
-  --handler bootstrap
+  --architectures x86_64 \
+  --handler bootstrap-amd64
+
+# For arm64 architecture
+aws lambda create-function \
+  --function-name buildkite-agent-scaler \
+  --memory 128 \
+  --role arn:aws:iam::account-id:role/execution_role \
+  --runtime provided.al2 \
+  --zip-file fileb://handler.zip \
+  --architectures arm64 \
+  --handler bootstrap-arm64
 ```
 
 ## Running locally for development

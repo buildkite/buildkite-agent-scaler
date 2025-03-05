@@ -1,3 +1,4 @@
 /lambda/handler
 /*.zip
+/bootstrap*
 /packaged.yml
