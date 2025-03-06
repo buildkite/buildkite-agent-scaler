@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/autoscaling"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/autoscaling"
+	"github.com/aws/aws-sdk-go-v2/service/autoscaling/types"
 )
 
 const (
@@ -26,23 +26,23 @@ type AutoscaleGroupDetails struct {
 
 type ASGDriver struct {
 	Name                              string
-	Sess                              *session.Session
+	Cfg                               aws.Config
 	MaxDescribeScalingActivitiesPages int
 }
 
 func (a *ASGDriver) Describe() (AutoscaleGroupDetails, error) {
 	log.Printf("Collecting AutoScaling details for ASG %q", a.Name)
 
-	svc := autoscaling.New(a.Sess)
+	svc := autoscaling.NewFromConfig(a.Cfg)
 	input := &autoscaling.DescribeAutoScalingGroupsInput{
-		AutoScalingGroupNames: []*string{
-			aws.String(a.Name),
+		AutoScalingGroupNames: []string{
+			a.Name,
 		},
 	}
 
 	t := time.Now()
 
-	result, err := svc.DescribeAutoScalingGroups(input)
+	result, err := svc.DescribeAutoScalingGroups(context.TODO(), input)
 	if err != nil {
 		return AutoscaleGroupDetails{}, err
 	}
@@ -53,7 +53,7 @@ func (a *ASGDriver) Describe() (AutoscaleGroupDetails, error) {
 
 	var pending int64
 	for _, instance := range asg.Instances {
-		lifecycleState := aws.StringValue(instance.LifecycleState)
+		lifecycleState := string(instance.LifecycleState)
 		if strings.HasPrefix(lifecycleState, "Pending") {
 			pending += 1
 		}
@@ -73,14 +73,14 @@ func (a *ASGDriver) Describe() (AutoscaleGroupDetails, error) {
 }
 
 func (a *ASGDriver) SetDesiredCapacity(count int64) error {
-	svc := autoscaling.New(a.Sess)
+	svc := autoscaling.NewFromConfig(a.Cfg)
 	input := &autoscaling.SetDesiredCapacityInput{
 		AutoScalingGroupName: aws.String(a.Name),
-		DesiredCapacity:      aws.Int64(count),
+		DesiredCapacity:      aws.Int32(int32(count)),
 		HonorCooldown:        aws.Bool(false),
 	}
 
-	_, err := svc.SetDesiredCapacity(input)
+	_, err := svc.SetDesiredCapacity(context.TODO(), input)
 	if err != nil {
 		return err
 	}
@@ -89,25 +89,26 @@ func (a *ASGDriver) SetDesiredCapacity(count int64) error {
 }
 
 func (a *ASGDriver) GetAutoscalingActivities(ctx context.Context, nextToken *string) (*autoscaling.DescribeScalingActivitiesOutput, error) {
-	svc := autoscaling.New(a.Sess)
+	svc := autoscaling.NewFromConfig(a.Cfg)
 	input := &autoscaling.DescribeScalingActivitiesInput{
 		AutoScalingGroupName: aws.String(a.Name),
 		NextToken:            nextToken,
 	}
-	return svc.DescribeScalingActivitiesWithContext(ctx, input)
+	return svc.DescribeScalingActivities(context.TODO(), input)
 }
 
-func (a *ASGDriver) GetLastScalingInAndOutActivity(ctx context.Context, findScaleOut, findScaleIn bool) (*autoscaling.Activity, *autoscaling.Activity, error) {
+func (a *ASGDriver) GetLastScalingInAndOutActivity(ctx context.Context, findScaleOut, findScaleIn bool) (*types.Activity, *types.Activity, error) {
 	const scalingOutKey = "increasing the capacity"
 	const shrinkingKey = "shrinking the capacity"
 	var nextToken *string
-	var lastScalingOutActivity *autoscaling.Activity
-	var lastScalingInActivity *autoscaling.Activity
+	var lastScalingOutActivity *types.Activity
+	var lastScalingInActivity *types.Activity
 	hasFoundScalingActivities := false
+
 	for i := 0; !hasFoundScalingActivities; {
 		i++
 		if a.MaxDescribeScalingActivitiesPages >= 0 && i >= a.MaxDescribeScalingActivitiesPages {
-			return lastScalingOutActivity, lastScalingInActivity, fmt.Errorf("%d exceedes allowed pages for autoscaling:DescribeScalingActivities, %d", i, a.MaxDescribeScalingActivitiesPages)
+			return lastScalingOutActivity, lastScalingInActivity, fmt.Errorf("%d exceeds allowed pages for autoscaling:DescribeScalingActivities, %d", i, a.MaxDescribeScalingActivitiesPages)
 		}
 
 		output, err := a.GetAutoscalingActivities(ctx, nextToken)
@@ -116,13 +117,13 @@ func (a *ASGDriver) GetLastScalingInAndOutActivity(ctx context.Context, findScal
 		}
 
 		for _, activity := range output.Activities {
-			// Filter for successful activity and explicit desired count changes
-			if *activity.StatusCode == activitySucessfulStatusCode &&
+			// Convert StatusCode to string and check if it matches the successful status
+			if string(activity.StatusCode) == activitySucessfulStatusCode &&
 				strings.Contains(*activity.Cause, userRequestForChangingDesiredCapacity) {
 				if lastScalingOutActivity == nil && strings.Contains(*activity.Cause, scalingOutKey) {
-					lastScalingOutActivity = activity
+					lastScalingOutActivity = &activity
 				} else if lastScalingInActivity == nil && strings.Contains(*activity.Cause, shrinkingKey) {
-					lastScalingInActivity = activity
+					lastScalingInActivity = &activity
 				}
 			}
 
@@ -140,6 +141,7 @@ func (a *ASGDriver) GetLastScalingInAndOutActivity(ctx context.Context, findScal
 			break
 		}
 	}
+
 	return lastScalingOutActivity, lastScalingInActivity, nil
 }
 
