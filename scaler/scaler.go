@@ -5,7 +5,7 @@ import (
 	"math"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/buildkite/buildkite-agent-scaler/buildkite"
 )
 
@@ -49,7 +49,7 @@ type Scaler struct {
 	scaleOnlyAfterAllEvent bool
 }
 
-func NewScaler(client *buildkite.Client, sess *session.Session, params Params) (*Scaler, error) {
+func NewScaler(client *buildkite.Client, cfg aws.Config, params Params) (*Scaler, error) {
 	scaler := &Scaler{
 		bk: &buildkiteDriver{
 			client: client,
@@ -76,12 +76,12 @@ func NewScaler(client *buildkite.Client, sess *session.Session, params Params) (
 
 	scaler.autoscaling = &ASGDriver{
 		Name: params.AutoScalingGroupName,
-		Sess: sess,
+		Cfg:  cfg,
 	}
 
 	if params.PublishCloudWatchMetrics {
 		scaler.metrics = &cloudWatchMetricsPublisher{
-			sess: sess,
+			cfg: cfg,
 		}
 	}
 
@@ -267,7 +267,7 @@ func (s *Scaler) setDesiredCapacity(desired int64) error {
 		return err
 	}
 
-	log.Printf("↳ Set desired to %d (took %v)", desired, time.Now().Sub(t))
+	log.Printf("↳ Set desired to %d (took %v)", desired, time.Since(t))
 	return nil
 }
 
