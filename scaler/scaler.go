@@ -7,8 +7,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/ssm"
 	"github.com/buildkite/buildkite-agent-scaler/buildkite"
@@ -64,7 +63,7 @@ type Scaler struct {
 	elasticCIMode          bool // Special mode for Elastic CI Stack
 }
 
-func NewScaler(client *buildkite.Client, sess *session.Session, params Params) (*Scaler, error) {
+func NewScaler(client *buildkite.Client, cfg aws.Config, params Params) (*Scaler, error) {
 	scaler := &Scaler{
 		bk: &buildkiteDriver{
 			client: client,
@@ -96,7 +95,7 @@ func NewScaler(client *buildkite.Client, sess *session.Session, params Params) (
 
 	scaler.autoscaling = &ASGDriver{
 		Name:                        params.AutoScalingGroupName,
-		Sess:                        sess,
+		Cfg:                         cfg,
 		ElasticCIMode:               params.ElasticCIMode,
 		MinimumInstanceUptime:       params.MinimumInstanceUptime,
 		MaxDanglingInstancesToCheck: params.MaxDanglingInstancesToCheck,
@@ -104,7 +103,7 @@ func NewScaler(client *buildkite.Client, sess *session.Session, params Params) (
 
 	if params.PublishCloudWatchMetrics {
 		scaler.metrics = &cloudWatchMetricsPublisher{
-			sess: sess,
+			cfg: cfg,
 		}
 	}
 

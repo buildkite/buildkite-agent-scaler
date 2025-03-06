@@ -1,11 +1,12 @@
 package scaler
 
 import (
+	"context"
 	"log"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/cloudwatch"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatch"
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatch/types"
 )
 
 const (
@@ -14,22 +15,22 @@ const (
 
 // cloudWatchMetricsPublisher sends queue metrics to AWS CloudWatch
 type cloudWatchMetricsPublisher struct {
-	sess *session.Session
+	cfg aws.Config
 }
 
 // Publish queue metrics to CloudWatch Metrics
 func (cp *cloudWatchMetricsPublisher) Publish(orgSlug, queue string, metrics map[string]int64) error {
-	svc := cloudwatch.New(cp.sess)
+	svc := cloudwatch.NewFromConfig(cp.cfg)
 
-	datum := []*cloudwatch.MetricDatum{}
+	datum := make([]types.MetricDatum, 0, len(metrics))
 
 	for k, v := range metrics {
 		log.Printf("Publishing metric %s=%d [org=%s,queue=%s]",
 			k, v, orgSlug, queue)
 
-		datum = append(datum, &cloudwatch.MetricDatum{
+		datum = append(datum, types.MetricDatum{
 			MetricName: aws.String(k),
-			Unit:       aws.String("Count"),
+			Unit:       types.StandardUnitCount,
 			Value:      aws.Float64(float64(v)),
 			Dimensions: []*cloudwatch.Dimension{
 				{
@@ -44,7 +45,7 @@ func (cp *cloudWatchMetricsPublisher) Publish(orgSlug, queue string, metrics map
 		})
 	}
 
-	_, err := svc.PutMetricData(&cloudwatch.PutMetricDataInput{
+	_, err := svc.PutMetricData(context.TODO(), &cloudwatch.PutMetricDataInput{
 		Namespace:  aws.String(cloudWatchMetricsNamespace),
 		MetricData: datum,
 	})

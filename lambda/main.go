@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
-	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/buildkite/buildkite-agent-scaler/buildkite"
 	"github.com/buildkite/buildkite-agent-scaler/scaler"
 	"github.com/buildkite/buildkite-agent-scaler/version"
@@ -49,7 +49,6 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 
 	// Optional environment variables (but they must parse correctly if set).
 	interval := EnvDuration("LAMBDA_INTERVAL", 10*time.Second)
-
 	timeoutDuration := EnvDuration("LAMBDA_TIMEOUT", -1)
 	var timeout <-chan time.Time
 	if timeoutDuration >= 0 {
@@ -98,7 +97,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 	}
 
 	// establish an AWS session to be re-used
-	sess, err := session.NewSession()
+	cfg, err := config.LoadDefaultConfig(context.TODO())
 	if err != nil {
 		return "", err
 	}
@@ -117,7 +116,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 
 		asg := &scaler.ASGDriver{
 			Name:                              asgName,
-			Sess:                              sess,
+			Cfg:                               cfg,
 			MaxDescribeScalingActivitiesPages: maxDescribeScalingActivitiesPages,
 			MaxDanglingInstancesToCheck:       maxDanglingInstancesToCheck,
 		}
@@ -150,14 +149,14 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		lastScaleTimesFetched = true
 
 		scalingTimeDiff := time.Since(scalingLastActivityStartTime)
-		log.Printf("Succesfully retrieved last scaling activity events. Last scale out %s, last scale in %s. Discovery took %s.", lastScaleOutStr, lastScaleInStr, scalingTimeDiff)
+		log.Printf("Successfully retrieved last scaling activity events. Last scale out %s, last scale in %s. Discovery took %s.", lastScaleOutStr, lastScaleInStr, scalingTimeDiff)
 	}()
 
 	token := os.Getenv("BUILDKITE_AGENT_TOKEN")
 	ssmTokenKey := os.Getenv("BUILDKITE_AGENT_TOKEN_SSM_KEY")
 
 	if ssmTokenKey != "" {
-		tk, err := scaler.RetrieveFromParameterStore(sess, ssmTokenKey)
+		tk, err := scaler.RetrieveFromParameterStore(cfg, ssmTokenKey)
 		if err != nil {
 			return "", err
 		}
@@ -165,7 +164,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 	}
 
 	if token == "" {
-		return "", errors.New("Must provide either BUILDKITE_AGENT_TOKEN or BUILDKITE_AGENT_TOKEN_SSM_KEY")
+		return "", errors.New("must provide either BUILDKITE_AGENT_TOKEN or BUILDKITE_AGENT_TOKEN_SSM_KEY")
 	}
 
 	client := buildkite.NewClient(token, buildkiteAgentEndpoint)
@@ -197,7 +196,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		MaxDanglingInstancesToCheck: maxDanglingInstancesToCheck,
 	}
 
-	scaler, err := scaler.NewScaler(client, sess, params)
+	scaler, err := scaler.NewScaler(client, cfg, params)
 	if err != nil {
 		log.Fatalf("Couldn't create new scaler: %v", err)
 	}
@@ -210,8 +209,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 
 		if interval < minPollDuration {
 			interval = minPollDuration
-			log.Printf("Increasing poll interval to %v based on rate limit",
-				interval)
+			log.Printf("Increasing poll interval to %v based on rate limit", interval)
 		}
 
 		// Persist the times back into the global state
@@ -223,11 +221,11 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 			logMsg += " or timeout"
 		}
 		log.Printf(logMsg, interval)
+
 		select {
 		case <-timeout:
 			log.Printf("Exiting due to LAMBDA_TIMEOUT (%v)", timeoutDuration)
 			return "", nil
-
 		case <-time.After(interval):
 			// Continue
 		}
