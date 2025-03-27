@@ -17,11 +17,26 @@ const (
 	userRequestForChangingDesiredCapacity = "a user request explicitly set group desired capacity changing the desired capacity"
 )
 
+type InstanceState string
+
+const (
+	InstanceStatePending     InstanceState = "Pending"
+	InstanceStateInService   InstanceState = "InService"
+	InstanceStateTerminating InstanceState = "Terminating"
+	InstanceStateTerminated  InstanceState = "Terminated"
+)
+
+type InstanceDetails struct {
+	InstanceID     string
+	LifecycleState InstanceState
+}
+
 type AutoscaleGroupDetails struct {
 	Pending      int64
 	DesiredCount int64
 	MinSize      int64
 	MaxSize      int64
+	Instances    map[string]InstanceDetails
 }
 
 type ASGDriver struct {
@@ -52,10 +67,19 @@ func (a *ASGDriver) Describe() (AutoscaleGroupDetails, error) {
 	asg := result.AutoScalingGroups[0]
 
 	var pending int64
+	instances := make(map[string]InstanceDetails)
+
 	for _, instance := range asg.Instances {
+		instanceID := aws.StringValue(instance.InstanceId)
 		lifecycleState := aws.StringValue(instance.LifecycleState)
+
 		if strings.HasPrefix(lifecycleState, "Pending") {
 			pending += 1
+		}
+
+		instances[instanceID] = InstanceDetails{
+			InstanceID:     instanceID,
+			LifecycleState: InstanceState(lifecycleState),
 		}
 	}
 
@@ -64,10 +88,12 @@ func (a *ASGDriver) Describe() (AutoscaleGroupDetails, error) {
 		DesiredCount: int64(*result.AutoScalingGroups[0].DesiredCapacity),
 		MinSize:      int64(*result.AutoScalingGroups[0].MinSize),
 		MaxSize:      int64(*result.AutoScalingGroups[0].MaxSize),
+		Instances:    instances,
 	}
 
-	log.Printf("↳ Got pending=%d, desired=%d, min=%d, max=%d (took %v)",
-		details.Pending, details.DesiredCount, details.MinSize, details.MaxSize, queryDuration)
+	log.Printf("↳ Got pending=%d, desired=%d, min=%d, max=%d, instances=%d (took %v)",
+		details.Pending, details.DesiredCount, details.MinSize, details.MaxSize,
+		len(details.Instances), queryDuration)
 
 	return details, nil
 }
@@ -147,7 +173,9 @@ type dryRunASG struct {
 }
 
 func (a *dryRunASG) Describe() (AutoscaleGroupDetails, error) {
-	return AutoscaleGroupDetails{}, nil
+	return AutoscaleGroupDetails{
+		Instances: make(map[string]InstanceDetails),
+	}, nil
 }
 
 func (a *dryRunASG) SetDesiredCapacity(count int64) error {

@@ -452,6 +452,7 @@ func (d *asgTestDriver) Describe() (AutoscaleGroupDetails, error) {
 		DesiredCount: d.desiredCapacity,
 		MinSize:      0,
 		MaxSize:      100,
+		Instances:    make(map[string]InstanceDetails),
 	}, nil
 }
 

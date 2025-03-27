@@ -152,6 +152,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 	}
 
 	client := buildkite.NewClient(token, buildkiteAgentEndpoint)
+
 	params := scaler.Params{
 		BuildkiteQueue:       buildkiteQueue,
 		AutoScalingGroupName: asgName,
