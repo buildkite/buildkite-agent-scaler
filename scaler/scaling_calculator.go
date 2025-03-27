@@ -21,13 +21,15 @@ func (sc *ScalingCalculator) perInstance(count int64, metrics *buildkite.AgentMe
 	// If we have actual agents and instances, calculate the real ratio
 	if metrics.TotalAgents > 0 && asg.DesiredCount > 0 {
 		effectiveRatio := float64(metrics.TotalAgents) / float64(asg.DesiredCount)
-		actualAgentsPerInstance := int(math.Ceil(effectiveRatio))
-
-		// During graceful termination, agents terminate before instances
-		// If actual ratio is lower, use it instead of configured value
-		if actualAgentsPerInstance < sc.agentsPerInstance {
+		
+		// Use the smaller of:
+		// 1. The configured agents per instance (to avoid under-capacity)
+		// 2. The actual observed ratio (to avoid over-provisioning during termination)
+		// But ensure we never go below 1 agent per instance
+		if effectiveRatio < float64(sc.agentsPerInstance) && effectiveRatio >= 1.0 {
+			actualAgentsPerInstance := int(math.Ceil(effectiveRatio))
 			effectiveAgentsPerInstance = actualAgentsPerInstance
-			log.Printf("Fewer agents than expected: %d agents across %d instances (%.1f per instance vs %d configured)",
+			log.Printf("Using actual agent ratio: %d agents across %d instances (%.1f per instance vs %d configured)",
 				metrics.TotalAgents, asg.DesiredCount, effectiveRatio, sc.agentsPerInstance)
 		}
 	}

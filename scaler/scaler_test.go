@@ -15,6 +15,38 @@ func TestScalingOutWithoutError(t *testing.T) {
 		currentDesiredCapacity  int64
 		expectedDesiredCapacity int64
 	}{
+		// Test low agent ratio during termination but ensure ratio is >= 1.0
+		{
+			metrics: buildkite.AgentMetrics{
+				ScheduledJobs: 10,
+				RunningJobs:   4,
+				TotalAgents:   8, // 8 agents across 5 instances (1.6 per instance)
+			},
+			params: Params{
+				AgentsPerInstance: 3, // Configured for 3 per instance
+			},
+			asg: AutoscaleGroupDetails{
+				DesiredCount: 5,
+			},
+			currentDesiredCapacity:  5,
+			expectedDesiredCapacity: 7, // Should use actual ratio (ceil(1.6)=2) to calculate: (10+4)/2 = 7
+		},
+		// Test ratio < 1.0 case, should use configured value to avoid under-provisioning
+		{
+			metrics: buildkite.AgentMetrics{
+				ScheduledJobs: 10,
+				RunningJobs:   4,
+				TotalAgents:   3, // 3 agents across 5 instances (0.6 per instance) - below 1.0
+			},
+			params: Params{
+				AgentsPerInstance: 3,
+			},
+			asg: AutoscaleGroupDetails{
+				DesiredCount: 5,
+			},
+			currentDesiredCapacity:  5,
+			expectedDesiredCapacity: 5, // Should use configured ratio: (10+4)/3 = 4.67, rounded up to 5
+		},
 		// Basic scale out without waiting jobs
 		{
 			metrics: buildkite.AgentMetrics{
