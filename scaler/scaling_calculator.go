@@ -15,23 +15,21 @@ type ScalingCalculator struct {
 // Calculate how many instances are needed for a given agent count
 // Takes into account the actual agent distribution across instances
 func (sc *ScalingCalculator) perInstance(count int64, metrics *buildkite.AgentMetrics, asg *AutoscaleGroupDetails) int64 {
-	// Get the effective agents per instance ratio based on actual reported agents
-	var effectiveAgentsPerInstance int
+	// Calculate effective agents per instance
+	effectiveAgentsPerInstance := sc.agentsPerInstance
+
+	// If we have actual agents and instances, calculate the real ratio
 	if metrics.TotalAgents > 0 && asg.DesiredCount > 0 {
 		effectiveRatio := float64(metrics.TotalAgents) / float64(asg.DesiredCount)
-		effectiveAgentsPerInstance = int(math.Ceil(effectiveRatio))
+		actualAgentsPerInstance := int(math.Ceil(effectiveRatio))
 
-		// If there are fewer agents per instance than configured, use the lower value
-		// This happens during graceful termination when agents self-terminate
-		if effectiveAgentsPerInstance < sc.agentsPerInstance {
+		// During graceful termination, agents terminate before instances
+		// If actual ratio is lower, use it instead of configured value
+		if actualAgentsPerInstance < sc.agentsPerInstance {
+			effectiveAgentsPerInstance = actualAgentsPerInstance
 			log.Printf("Fewer agents than expected: %d agents across %d instances (%.1f per instance vs %d configured)",
 				metrics.TotalAgents, asg.DesiredCount, effectiveRatio, sc.agentsPerInstance)
-		} else {
-			effectiveAgentsPerInstance = sc.agentsPerInstance
 		}
-	} else {
-		// Fall back to configured value if we don't have instances or agents
-		effectiveAgentsPerInstance = sc.agentsPerInstance
 	}
 
 	if effectiveAgentsPerInstance <= 0 {
@@ -44,16 +42,12 @@ func (sc *ScalingCalculator) perInstance(count int64, metrics *buildkite.AgentMe
 func (sc *ScalingCalculator) DesiredCount(metrics *buildkite.AgentMetrics, asg *AutoscaleGroupDetails) int64 {
 	log.Printf("Calculating desired instance count for Buildkite Jobs")
 
-	agentsRequired := metrics.ScheduledJobs
+	// Calculate total agents required based on jobs
+	agentsRequired := metrics.ScheduledJobs + metrics.RunningJobs
 
-	// If waiting jobs are greater than running jobs then optionally
-	// use waiting jobs for scaling so that we have instances booted
-	// by the time we get to them. This is a gamble, as if the instances
-	// scale down before the jobs get scheduled, it's a huge waste.
+	// Optionally include waiting jobs when they exceed running jobs
 	if sc.includeWaiting && metrics.WaitingJobs > metrics.RunningJobs {
-		agentsRequired += metrics.WaitingJobs
-	} else {
-		agentsRequired += metrics.RunningJobs
+		agentsRequired = metrics.ScheduledJobs + metrics.WaitingJobs
 	}
 
 	var desired int64
@@ -61,9 +55,11 @@ func (sc *ScalingCalculator) DesiredCount(metrics *buildkite.AgentMetrics, asg *
 		desired = sc.perInstance(agentsRequired, metrics, asg)
 	}
 
+	isUsingActualRatio := metrics.TotalAgents > 0 && asg.DesiredCount > 0 &&
+		float64(metrics.TotalAgents)/float64(asg.DesiredCount) < float64(sc.agentsPerInstance)
+
 	effectiveAgentsStr := "configured"
-	if metrics.TotalAgents > 0 && asg.DesiredCount > 0 &&
-		float64(metrics.TotalAgents)/float64(asg.DesiredCount) < float64(sc.agentsPerInstance) {
+	if isUsingActualRatio {
 		effectiveAgentsStr = "actual"
 	}
 
