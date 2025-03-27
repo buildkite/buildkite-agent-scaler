@@ -45,6 +45,10 @@ func (sc *ScalingCalculator) DesiredCount(metrics *buildkite.AgentMetrics, asg *
 	// Calculate total agents required based on jobs
 	agentsRequired := metrics.ScheduledJobs + metrics.RunningJobs
 
+	// If waiting jobs are greater than running jobs then optionally
+	// use waiting jobs for scaling so that we have instances booted
+	// by the time we get to them. This is a gamble, as if the instances
+	// scale down before the jobs get scheduled, it's a huge waste.
 	// Optionally include waiting jobs when they exceed running jobs
 	if sc.includeWaiting && metrics.WaitingJobs > metrics.RunningJobs {
 		agentsRequired = metrics.ScheduledJobs + metrics.WaitingJobs
