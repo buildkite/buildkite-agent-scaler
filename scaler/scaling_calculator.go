@@ -21,7 +21,7 @@ func (sc *ScalingCalculator) perInstance(count int64, metrics *buildkite.AgentMe
 	// If we have actual agents and instances, calculate the real ratio
 	if metrics.TotalAgents > 0 && asg.DesiredCount > 0 {
 		effectiveRatio := float64(metrics.TotalAgents) / float64(asg.DesiredCount)
-		
+
 		// Use the smaller of:
 		// 1. The configured agents per instance (to avoid under-capacity)
 		// 2. The actual observed ratio (to avoid over-provisioning during termination)
