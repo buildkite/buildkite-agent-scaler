@@ -32,11 +32,11 @@ func (cp *cloudWatchMetricsPublisher) Publish(orgSlug, queue string, metrics map
 			Unit:       aws.String("Count"),
 			Value:      aws.Float64(float64(v)),
 			Dimensions: []*cloudwatch.Dimension{
-				&cloudwatch.Dimension{
+				{
 					Name:  aws.String("Org"),
 					Value: aws.String(orgSlug),
 				},
-				&cloudwatch.Dimension{
+				{
 					Name:  aws.String("Queue"),
 					Value: aws.String(queue),
 				},

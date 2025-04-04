@@ -1,6 +1,7 @@
 package scaler
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -448,14 +449,28 @@ type asgTestDriver struct {
 }
 
 func (d *asgTestDriver) Describe() (AutoscaleGroupDetails, error) {
+	instanceIDs := make([]string, d.desiredCapacity)
+	for i := int64(0); i < d.desiredCapacity; i++ {
+		instanceIDs[i] = fmt.Sprintf("i-%012d", i)
+	}
+
 	return AutoscaleGroupDetails{
 		DesiredCount: d.desiredCapacity,
 		MinSize:      0,
 		MaxSize:      100,
+		InstanceIDs:  instanceIDs,
 	}, nil
 }
 
 func (d *asgTestDriver) SetDesiredCapacity(count int64) error {
 	d.desiredCapacity = count
+	return d.err
+}
+
+func (d *asgTestDriver) DetachInstance(instanceID string) error {
+	return d.err
+}
+
+func (d *asgTestDriver) SendSIGTERMToAgents(instanceID string) error {
 	return d.err
 }

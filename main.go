@@ -30,7 +30,8 @@ func main() {
 		instanceBuffer = flag.Int("instance-buffer", 0, "Keep this many instances as extra capacity")
 
 		// general params
-		dryRun = flag.Bool("dry-run", false, "Whether to just show what would be done")
+		dryRun              = flag.Bool("dry-run", false, "Whether to just show what would be done")
+		gracefulTermination = flag.Bool("graceful-termination", true, "Whether to enable graceful termination of instances")
 	)
 	flag.Parse()
 
@@ -59,6 +60,7 @@ func main() {
 		ScaleInParams:            scaler.ScaleParams{Factor: *scaleInFactor},
 		ScaleOutParams:           scaler.ScaleParams{Factor: *scaleOutFactor},
 		InstanceBuffer:           *instanceBuffer,
+		GracefulTermination:      *gracefulTermination,
 	})
 	if err != nil {
 		log.Fatal(err)

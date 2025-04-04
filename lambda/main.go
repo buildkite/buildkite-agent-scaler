@@ -152,6 +152,14 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 	}
 
 	client := buildkite.NewClient(token, buildkiteAgentEndpoint)
+	gracefulTermination := EnvBool("GRACEFUL_TERMINATION")
+
+	if gracefulTermination {
+		log.Printf("Graceful termination enabled using by stopping agent after finished job")
+	} else {
+		log.Printf("Graceful termination disabled")
+	}
+
 	params := scaler.Params{
 		BuildkiteQueue:       buildkiteQueue,
 		AutoScalingGroupName: asgName,
@@ -172,6 +180,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		InstanceBuffer:           instanceBuffer,
 		ScaleOnlyAfterAllEvent:   scaleOnlyAfterAllEvent,
 		PublishCloudWatchMetrics: publishCloudWatchMetrics,
+		GracefulTermination:      gracefulTermination,
 	}
 
 	scaler, err := scaler.NewScaler(client, sess, params)

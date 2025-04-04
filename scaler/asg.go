@@ -10,6 +10,8 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/autoscaling"
+	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/aws/aws-sdk-go/service/ssm"
 )
 
 const (
@@ -22,12 +24,39 @@ type AutoscaleGroupDetails struct {
 	DesiredCount int64
 	MinSize      int64
 	MaxSize      int64
+	InstanceIDs  []string // Instance IDs in the ASG
 }
 
 type ASGDriver struct {
 	Name                              string
 	Sess                              *session.Session
 	MaxDescribeScalingActivitiesPages int
+	GracefulTermination               bool
+}
+
+// CountTerminationLifecycleHooks counts how many termination lifecycle hooks
+// are configured for the ASG. Returns 0 if none are found.
+func (a *ASGDriver) CountTerminationLifecycleHooks() (int, error) {
+	svc := autoscaling.New(a.Sess)
+
+	input := &autoscaling.DescribeLifecycleHooksInput{
+		AutoScalingGroupName: aws.String(a.Name),
+	}
+
+	result, err := svc.DescribeLifecycleHooks(input)
+	if err != nil {
+		return 0, fmt.Errorf("failed to describe lifecycle hooks: %v", err)
+	}
+
+	var count int
+	for _, hook := range result.LifecycleHooks {
+		if hook.LifecycleTransition != nil &&
+			*hook.LifecycleTransition == "autoscaling:EC2_INSTANCE_TERMINATING" {
+			count++
+		}
+	}
+
+	return count, nil
 }
 
 func (a *ASGDriver) Describe() (AutoscaleGroupDetails, error) {
@@ -59,11 +88,19 @@ func (a *ASGDriver) Describe() (AutoscaleGroupDetails, error) {
 		}
 	}
 
+	instanceIDs := make([]string, 0, len(asg.Instances))
+	for _, instance := range asg.Instances {
+		if instance.InstanceId != nil {
+			instanceIDs = append(instanceIDs, *instance.InstanceId)
+		}
+	}
+
 	details := AutoscaleGroupDetails{
 		Pending:      pending,
 		DesiredCount: int64(*result.AutoScalingGroups[0].DesiredCapacity),
 		MinSize:      int64(*result.AutoScalingGroups[0].MinSize),
 		MaxSize:      int64(*result.AutoScalingGroups[0].MaxSize),
+		InstanceIDs:  instanceIDs,
 	}
 
 	log.Printf("↳ Got pending=%d, desired=%d, min=%d, max=%d (took %v)",
@@ -151,5 +188,251 @@ func (a *dryRunASG) Describe() (AutoscaleGroupDetails, error) {
 }
 
 func (a *dryRunASG) SetDesiredCapacity(count int64) error {
+	return nil
+}
+
+func (a *dryRunASG) DetachInstance(instanceID string) error {
+	log.Printf("DRY RUN: Would detach instance %s from ASG", instanceID)
+	return nil
+}
+
+func (a *dryRunASG) SendSIGTERMToAgents(instanceID string) error {
+	log.Printf("DRY RUN: Would send SIGTERM to buildkite agents on instance %s", instanceID)
+	return nil
+}
+
+// DetachInstance detaches an instance from the ASG with a decrement to desired capacity
+// This allows for graceful termination of agents by keeping the instance running
+// but removing it from the ASG's management, so an instance can be prepared for termination
+// Why do we do it that way?
+// As per https://docs.aws.amazon.com/autoscaling/ec2/userguide/lifecycle-hooks.html#lifecycle-hooks-availability —
+// Lambda does support scaling in via setting DesiredCount, Amazon ASGs appear to not send Lifecycle Hooks before terminating instances, so jobs in progress are interrupted
+func (a *ASGDriver) DetachInstance(instanceID string) error {
+	log.Printf("Detaching instance %s from ASG %s", instanceID, a.Name)
+
+	svc := autoscaling.New(a.Sess)
+
+	input := &autoscaling.DetachInstancesInput{
+		AutoScalingGroupName:           aws.String(a.Name),
+		InstanceIds:                    []*string{aws.String(instanceID)},
+		ShouldDecrementDesiredCapacity: aws.Bool(true),
+	}
+
+	result, err := svc.DetachInstances(input)
+	if err != nil {
+		return fmt.Errorf("failed to detach instance: %v", err)
+	}
+
+	for _, activity := range result.Activities {
+		log.Printf("Detach operation started - ActivityID: %s", *activity.ActivityId)
+	}
+
+	log.Printf("Successfully initiated detachment of instance %s", instanceID)
+	return nil
+}
+
+func (a *ASGDriver) SendSIGTERMToAgents(instanceID string) error {
+	log.Printf("Sending SIGTERM to buildkite agents on instance %s", instanceID)
+
+	// Check if the instance is in a proper state for receiving commands
+	ec2Svc := ec2.New(a.Sess)
+	instanceStatus, err := ec2Svc.DescribeInstanceStatus(&ec2.DescribeInstanceStatusInput{
+		InstanceIds: []*string{aws.String(instanceID)},
+	})
+	if err != nil {
+		log.Printf("Warning: Could not check instance status: %v", err)
+	} else if len(instanceStatus.InstanceStatuses) > 0 {
+		status := *instanceStatus.InstanceStatuses[0].InstanceState.Name
+		if status != "running" {
+			log.Printf("Instance %s is in %s state, not sending SIGTERM", instanceID, status)
+			return fmt.Errorf("instance %s is in %s state, not ready for SIGTERM", instanceID, status)
+		}
+	}
+
+	ssmSvc := ssm.New(a.Sess)
+
+	// First check if buildkite-agent service is running
+	checkServiceCmd := `
+#!/bin/bash
+# Check if buildkite-agent.service is running
+if systemctl is-active buildkite-agent.service >/dev/null; then
+  echo "buildkite-agent service is running"
+  exit 0
+else
+  echo "buildkite-agent service is not running"
+  exit 1
+fi
+`
+
+	checkInput := &ssm.SendCommandInput{
+		InstanceIds:  []*string{aws.String(instanceID)},
+		DocumentName: aws.String("AWS-RunShellScript"),
+		Parameters: map[string][]*string{
+			"commands": {aws.String(checkServiceCmd)},
+		},
+		Comment: aws.String("Check if buildkite-agent service is running"),
+	}
+
+	checkOutput, err := ssmSvc.SendCommand(checkInput)
+	if err != nil {
+		return fmt.Errorf("failed to check service status via SSM: %v", err)
+	}
+
+	checkCommandID := *checkOutput.Command.CommandId
+	log.Printf("Started service check for instance %s with CommandID: %s", instanceID, checkCommandID)
+
+	// Wait and check with retries
+	maxRetries := 3
+	retryWaitTime := 5 * time.Second
+
+	var checkResult *ssm.GetCommandInvocationOutput
+	var serviceRunning bool
+
+	for i := 0; i < maxRetries; i++ {
+		// Wait between retries
+		time.Sleep(retryWaitTime)
+
+		checkResult, err = ssmSvc.GetCommandInvocation(&ssm.GetCommandInvocationInput{
+			CommandId:  aws.String(checkCommandID),
+			InstanceId: aws.String(instanceID),
+		})
+
+		if err != nil {
+			log.Printf("Retry %d/%d: Could not check service status: %v", i+1, maxRetries, err)
+			continue
+		}
+
+		if checkResult.Status != nil {
+			status := *checkResult.Status
+			log.Printf("Retry %d/%d: Service check status: %s", i+1, maxRetries, status)
+
+			if status == "Success" {
+				// Exit code 0 means service is running
+				serviceRunning = true
+				log.Printf("Confirmed buildkite-agent service is running on %s", instanceID)
+				break
+			} else if status == "Failed" || status == "Cancelled" || status == "TimedOut" {
+				// Command definitively failed
+				if checkResult.StandardOutputContent != nil {
+					log.Printf("Service check output: %s", *checkResult.StandardOutputContent)
+				}
+				if checkResult.StandardErrorContent != nil {
+					log.Printf("Service check error: %s", *checkResult.StandardErrorContent)
+				}
+				break
+			}
+		}
+	}
+
+	if !serviceRunning {
+		return fmt.Errorf("buildkite-agent service is not running or could not be verified on instance %s", instanceID)
+	}
+
+	// Simplified command: Use the existing terminate-instance script
+	command := `
+#!/bin/bash
+# Graceful termination using systemctl kill
+set -euo pipefail
+
+echo "Starting graceful termination of buildkite-agent service at $(date)"
+
+# Set the environment variable for termination
+# This tells the agent to terminate the instance when it finishes its jobs
+echo 'BUILDKITE_TERMINATE_INSTANCE_AFTER_JOB=true' >> /var/lib/buildkite-agent/env
+
+# Let the agent know that this is a scale-in event
+# So it can use the terminate-instance script correctly
+echo 'AUTO_SCALING_GROUP_NAME="detached"' >> /var/lib/buildkite-agent/env
+
+# Now send SIGTERM to the buildkite-agent process
+# This will trigger the graceful shutdown, allowing jobs to complete
+# When the agent stops, the ExecStopPost script in systemd will call terminate-instance
+systemctl kill --kill-who=main --signal=SIGTERM buildkite-agent
+`
+
+	input := &ssm.SendCommandInput{
+		InstanceIds:  []*string{aws.String(instanceID)},
+		DocumentName: aws.String("AWS-RunShellScript"),
+		Parameters: map[string][]*string{
+			"commands": {aws.String(command)},
+		},
+		Comment: aws.String("Graceful termination: Send SIGTERM to buildkite-agent processes"),
+	}
+
+	output, err := ssmSvc.SendCommand(input)
+	if err != nil {
+		return fmt.Errorf("failed to send SIGTERM command via SSM: %v", err)
+	}
+
+	commandID := *output.Command.CommandId
+	log.Printf("Started SIGTERM command for instance %s with CommandID: %s", instanceID, commandID)
+
+	// Wait and check with retries to get proper status - commands might take time to execute
+	maxRetries = 5
+	retryWaitTime = 5 * time.Second
+
+	var cmdOutput *ssm.GetCommandInvocationOutput
+	var commandSucceeded bool
+
+	for i := 0; i < maxRetries; i++ {
+		// Wait between retries
+		time.Sleep(retryWaitTime)
+
+		cmdOutput, err = ssmSvc.GetCommandInvocation(&ssm.GetCommandInvocationInput{
+			CommandId:  aws.String(commandID),
+			InstanceId: aws.String(instanceID),
+		})
+
+		if err != nil {
+			log.Printf("Retry %d/%d: Could not check command status: %v", i+1, maxRetries, err)
+			continue
+		}
+
+		// If command is still in progress, wait and try again
+		if cmdOutput.Status != nil {
+			status := *cmdOutput.Status
+			log.Printf("Retry %d/%d: Command status: %s", i+1, maxRetries, status)
+
+			if status == "Success" {
+				commandSucceeded = true
+				break
+			} else if status == "Failed" || status == "Cancelled" || status == "TimedOut" {
+				break
+			}
+			// If status is "InProgress" or "Pending", continue retrying
+		}
+	}
+
+	// Final status check
+	if !commandSucceeded {
+		status := "unknown"
+		if cmdOutput != nil && cmdOutput.Status != nil {
+			status = *cmdOutput.Status
+		}
+
+		errorMsg := fmt.Sprintf("SIGTERM command to %s failed with status: %s", instanceID, status)
+		log.Printf("%s", errorMsg)
+
+		if cmdOutput != nil {
+			if cmdOutput.StandardOutputContent != nil && *cmdOutput.StandardOutputContent != "" {
+				log.Printf("Command output: %s", *cmdOutput.StandardOutputContent)
+			}
+			if cmdOutput.StandardErrorContent != nil && *cmdOutput.StandardErrorContent != "" {
+				log.Printf("Command error: %s", *cmdOutput.StandardErrorContent)
+			}
+		}
+
+		if err != nil {
+			return fmt.Errorf("%s: %v", errorMsg, err)
+		}
+		return fmt.Errorf("%s", errorMsg)
+	}
+
+	log.Printf("Successfully sent SIGTERM to buildkite-agent on instance %s", instanceID)
+	log.Printf("Instance %s will self-terminate after current jobs complete", instanceID)
+	if cmdOutput != nil && cmdOutput.StandardOutputContent != nil && *cmdOutput.StandardOutputContent != "" {
+		log.Printf("Command output: %s", *cmdOutput.StandardOutputContent)
+	}
+
 	return nil
 }

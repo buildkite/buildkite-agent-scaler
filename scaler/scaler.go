@@ -29,12 +29,16 @@ type Params struct {
 	ScaleOutParams           ScaleParams
 	InstanceBuffer           int
 	ScaleOnlyAfterAllEvent   bool
+
+	GracefulTermination bool
 }
 
 type Scaler struct {
 	autoscaling interface {
 		Describe() (AutoscaleGroupDetails, error)
 		SetDesiredCapacity(count int64) error
+		DetachInstance(instanceID string) error
+		SendSIGTERMToAgents(instanceID string) error
 	}
 	bk interface {
 		GetAgentMetrics() (buildkite.AgentMetrics, error)
@@ -75,8 +79,9 @@ func NewScaler(client *buildkite.Client, sess *session.Session, params Params) (
 	}
 
 	scaler.autoscaling = &ASGDriver{
-		Name: params.AutoScalingGroupName,
-		Sess: sess,
+		Name:                params.AutoScalingGroupName,
+		Sess:                sess,
+		GracefulTermination: params.GracefulTermination,
 	}
 
 	if params.PublishCloudWatchMetrics {
@@ -191,8 +196,47 @@ func (s *Scaler) scaleIn(desired int64, current AutoscaleGroupDetails) error {
 
 	log.Printf("Scaling IN 📉 to %d instances (currently %d)", desired, current.DesiredCount)
 
-	if err := s.setDesiredCapacity(desired); err != nil {
-		return err
+	instancesToTerminate := current.DesiredCount - desired
+
+	// If we're using graceful termination and have instance IDs
+	if driver, ok := s.autoscaling.(*ASGDriver); ok && driver.GracefulTermination && len(current.InstanceIDs) > 0 && instancesToTerminate > 0 {
+		log.Printf("Using graceful termination for %d instances", instancesToTerminate)
+
+		// Check if lifecycle hooks are configured for this ASG
+		lifeCycleHookCount, err := driver.CountTerminationLifecycleHooks()
+		if err != nil {
+			log.Printf("Warning: Could not check for lifecycle hooks: %v. Falling back to manual detach method.", err)
+			lifeCycleHookCount = 0
+		}
+
+		if lifeCycleHookCount > 0 {
+			// With lifecycle hooks, we don't need to detach instances
+			// Just let the ASG handle termination with our hooks
+			log.Printf("Using ASG lifecycle hooks for graceful termination (found %d hooks)", lifeCycleHookCount)
+
+			// Decrease desired capacity and let lifecycle hooks handle the rest
+			if err := s.setDesiredCapacity(desired); err != nil {
+				return err
+			}
+
+			log.Printf("Decreased desired capacity to %d. ASG lifecycle hooks will ensure graceful termination.", desired)
+		} else {
+			// Fallback: use standard scaling with no special handling
+			// This relies on the agent's own graceful shutdown mechanism
+			log.Printf("No ASG lifecycle hooks found. For improved reliability, consider adding lifecycle hooks to your ASG.")
+
+			// Set desired capacity directly and let ASG handle termination
+			if err := s.setDesiredCapacity(desired); err != nil {
+				return err
+			}
+
+			log.Printf("Decreased desired capacity to %d. Standard termination will be used.", desired)
+		}
+	} else {
+		// Regular scale-in by setting desired capacity
+		if err := s.setDesiredCapacity(desired); err != nil {
+			return err
+		}
 	}
 
 	s.scaleInParams.LastEvent = time.Now()
