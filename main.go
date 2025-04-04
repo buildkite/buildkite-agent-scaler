@@ -25,12 +25,17 @@ func main() {
 		includeWaiting         = flag.Bool("include-waiting", false, "Whether to include jobs behind a wait step for scaling")
 
 		// scale in/out params
-		scaleInFactor  = flag.Float64("scale-in-factor", 1.0, "A factor to apply to scale ins")
-		scaleOutFactor = flag.Float64("scale-out-factor", 1.0, "A factor to apply to scale outs")
-		instanceBuffer = flag.Int("instance-buffer", 0, "Keep this many instances as extra capacity")
+		scaleInFactor    = flag.Float64("scale-in-factor", 1.0, "A factor to apply to scale ins")
+		scaleOutFactor   = flag.Float64("scale-out-factor", 1.0, "A factor to apply to scale outs")
+		scaleInCooldown  = flag.Duration("scale-in-cooldown", 1*time.Hour, "How long to wait between scale in events")
+		scaleOutCooldown = flag.Duration("scale-out-cooldown", 0, "How long to wait between scale out events")
+		instanceBuffer   = flag.Int("instance-buffer", 0, "Keep this many instances as extra capacity")
 
 		// general params
-		dryRun = flag.Bool("dry-run", false, "Whether to just show what would be done")
+		dryRun                      = flag.Bool("dry-run", false, "Whether to just show what would be done")
+		elasticCIMode               = flag.Bool("elastic-ci-mode", false, "Whether to enable Elastic CI mode with additional safety checks")
+		minimumInstanceUptime       = flag.Duration("minimum-instance-uptime", 1*time.Hour, "Minimum instance uptime before being eligible for dangling instance check")
+		maxDanglingInstancesToCheck = flag.Int("max-dangling-instances-to-check", 5, "Maximum number of instances to check for dangling instances (only used for dangling instance scanning, not for normal scale-in)")
 	)
 	flag.Parse()
 
@@ -56,9 +61,18 @@ func main() {
 		PublishCloudWatchMetrics: *cwMetrics,
 		DryRun:                   *dryRun,
 		IncludeWaiting:           *includeWaiting,
-		ScaleInParams:            scaler.ScaleParams{Factor: *scaleInFactor},
-		ScaleOutParams:           scaler.ScaleParams{Factor: *scaleOutFactor},
-		InstanceBuffer:           *instanceBuffer,
+		ScaleInParams: scaler.ScaleParams{
+			Factor:         *scaleInFactor,
+			CooldownPeriod: *scaleInCooldown,
+		},
+		ScaleOutParams: scaler.ScaleParams{
+			Factor:         *scaleOutFactor,
+			CooldownPeriod: *scaleOutCooldown,
+		},
+		InstanceBuffer:              *instanceBuffer,
+		ElasticCIMode:               *elasticCIMode,
+		MinimumInstanceUptime:       *minimumInstanceUptime,
+		MaxDanglingInstancesToCheck: *maxDanglingInstancesToCheck,
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -68,7 +82,7 @@ func main() {
 		log.Printf("Running as a dry-run, no changes will be made")
 	}
 
-	var interval time.Duration = 10 * time.Second
+	var interval = 10 * time.Second
 
 	for {
 		minPollDuration, err := scaler.Run()

@@ -1,11 +1,16 @@
 package scaler
 
 import (
+	"context"
 	"log"
 	"math"
+	"sort"
 	"time"
 
+	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/aws/aws-sdk-go/service/ssm"
 	"github.com/buildkite/buildkite-agent-scaler/buildkite"
 )
 
@@ -17,24 +22,32 @@ type ScaleParams struct {
 }
 
 type Params struct {
-	AutoScalingGroupName     string
-	AgentsPerInstance        int
-	BuildkiteAgentToken      string
-	BuildkiteQueue           string
-	UserAgent                string
-	PublishCloudWatchMetrics bool
-	DryRun                   bool
-	IncludeWaiting           bool
-	ScaleInParams            ScaleParams
-	ScaleOutParams           ScaleParams
-	InstanceBuffer           int
-	ScaleOnlyAfterAllEvent   bool
+	AutoScalingGroupName        string
+	AgentsPerInstance           int
+	BuildkiteAgentToken         string
+	BuildkiteQueue              string
+	UserAgent                   string
+	PublishCloudWatchMetrics    bool
+	DryRun                      bool
+	IncludeWaiting              bool
+	ScaleInParams               ScaleParams
+	ScaleOutParams              ScaleParams
+	InstanceBuffer              int
+	ScaleOnlyAfterAllEvent      bool
+	AvailabilityThreshold       float64       // Threshold for agent availability
+	MinAgentsPercentage         float64       // Minimum acceptable percentage of expected agents
+	ASGActivityCooldown         time.Duration // How long to wait after an ASG activity before scaling again
+	ElasticCIMode               bool          // Special mode for Elastic CI Stack with additional safety checks
+	MinimumInstanceUptime       time.Duration // How long instance should be online before being eligible for dangling instance check
+	MaxDanglingInstancesToCheck int           // Maximum number of instances to check for dangling instances (only used for dangling instance scanning, not for normal scale-in)
 }
 
 type Scaler struct {
 	autoscaling interface {
 		Describe() (AutoscaleGroupDetails, error)
 		SetDesiredCapacity(count int64) error
+		SendSIGTERMToAgents(instanceID string) error
+		CleanupDanglingInstances() error
 	}
 	bk interface {
 		GetAgentMetrics() (buildkite.AgentMetrics, error)
@@ -47,6 +60,8 @@ type Scaler struct {
 	scaleOutParams         ScaleParams
 	instanceBuffer         int
 	scaleOnlyAfterAllEvent bool
+	asgActivityCooldown    time.Duration
+	elasticCIMode          bool // Special mode for Elastic CI Stack
 }
 
 func NewScaler(client *buildkite.Client, sess *session.Session, params Params) (*Scaler, error) {
@@ -59,11 +74,16 @@ func NewScaler(client *buildkite.Client, sess *session.Session, params Params) (
 		scaleOutParams:         params.ScaleOutParams,
 		instanceBuffer:         params.InstanceBuffer,
 		scaleOnlyAfterAllEvent: params.ScaleOnlyAfterAllEvent,
+		asgActivityCooldown:    params.ASGActivityCooldown,
+		elasticCIMode:          params.ElasticCIMode,
 	}
 
 	scaler.scaling = ScalingCalculator{
-		includeWaiting:    params.IncludeWaiting,
-		agentsPerInstance: params.AgentsPerInstance,
+		includeWaiting:        params.IncludeWaiting,
+		agentsPerInstance:     params.AgentsPerInstance,
+		availabilityThreshold: params.AvailabilityThreshold,
+		minAgentsPercentage:   params.MinAgentsPercentage,
+		elasticCIMode:         params.ElasticCIMode,
 	}
 
 	if params.DryRun {
@@ -75,8 +95,11 @@ func NewScaler(client *buildkite.Client, sess *session.Session, params Params) (
 	}
 
 	scaler.autoscaling = &ASGDriver{
-		Name: params.AutoScalingGroupName,
-		Sess: sess,
+		Name:                        params.AutoScalingGroupName,
+		Sess:                        sess,
+		ElasticCIMode:               params.ElasticCIMode,
+		MinimumInstanceUptime:       params.MinimumInstanceUptime,
+		MaxDanglingInstancesToCheck: params.MaxDanglingInstancesToCheck,
 	}
 
 	if params.PublishCloudWatchMetrics {
@@ -89,9 +112,31 @@ func NewScaler(client *buildkite.Client, sess *session.Session, params Params) (
 }
 
 func (s *Scaler) Run() (time.Duration, error) {
+	if s.elasticCIMode {
+		log.Printf("🛡️ [Elastic CI Mode] Running scaler with enhanced safety features (stale metrics detection, dangling instance protection)")
+		if s.scaleInParams.Disable {
+			log.Printf("ℹ️ [Elastic CI Mode] DISABLE_SCALE_IN=true is set but will be ignored in ElasticCIMode to allow proper bidirectional scaling")
+		}
+	}
+
+	// In Elastic CI mode, check for any dangling instances (where buildkite-agent is not running)
+	// This runs first, before getting metrics or scaling
+	if driver, ok := s.autoscaling.(*ASGDriver); ok && s.elasticCIMode {
+		if err := driver.CleanupDanglingInstances(); err != nil {
+			log.Printf("[Elastic CI Mode] Warning: Failed to cleanup dangling instances: %v", err)
+			// Continue with normal scaling operations even if dangling instance cleanup fails
+		}
+	}
+
 	metrics, err := s.bk.GetAgentMetrics()
 	if err != nil {
 		return metrics.PollDuration, err
+	}
+
+	// Check if metrics are stale (older than 60 seconds)
+	metricAge := time.Since(metrics.Timestamp)
+	if !metrics.Timestamp.IsZero() && metricAge > 60*time.Second {
+		log.Printf("⚠️ [Elastic CI Mode] Warning: Using metrics that are %.1f seconds old", metricAge.Seconds())
 	}
 
 	if s.metrics != nil {
@@ -110,7 +155,14 @@ func (s *Scaler) Run() (time.Duration, error) {
 		return metrics.PollDuration, err
 	}
 
-	desired := s.scaling.DesiredCount(&metrics, &asg) + int64(s.instanceBuffer)
+	log.Printf("Scaling calculation based on metrics collected at %s", metrics.Timestamp.Format(time.RFC3339))
+
+	desired := s.scaling.DesiredCount(&metrics, &asg)
+
+	// Only add instance buffer if there are agents required (any jobs that need processing)
+	if metrics.ScheduledJobs > 0 || metrics.RunningJobs > 0 || metrics.WaitingJobs > 0 {
+		desired += int64(s.instanceBuffer)
+	}
 
 	if desired > asg.MaxSize {
 		log.Printf("⚠️  Desired count exceed MaxSize, capping at %d", asg.MaxSize)
@@ -121,21 +173,45 @@ func (s *Scaler) Run() (time.Duration, error) {
 		desired = asg.MinSize
 	}
 
-	if desired > asg.DesiredCount {
+	// Use actual count for comparison if available, otherwise fall back to desired count
+	instanceCount := asg.ActualCount
+	if instanceCount == 0 {
+		instanceCount = asg.DesiredCount
+	}
+
+	if desired > instanceCount {
+		log.Printf("Scaling decision: need %d instances, have %d actual running instances (desired set to %d)",
+			desired, instanceCount, asg.DesiredCount)
 		return metrics.PollDuration, s.scaleOut(desired, asg)
 	}
 
-	if asg.DesiredCount > desired {
+	if instanceCount > desired {
+		// In Elastic CI mode, check for pending instances before scaling down
+		// If there are pending instances, it means ASG is already scaling, so we should wait
+		if s.elasticCIMode && asg.Pending > 0 {
+			log.Printf("⏳ [Elastic CI Mode] ASG has %d pending instances, waiting before scaling in", asg.Pending)
+			return metrics.PollDuration, nil
+		}
+
+		log.Printf("Scaling decision: need %d instances, have %d actual running instances (desired set to %d)",
+			desired, instanceCount, asg.DesiredCount)
 		return metrics.PollDuration, s.scaleIn(desired, asg)
 	}
 
-	log.Printf("No scaling required, currently %d", asg.DesiredCount)
+	log.Printf("No scaling required, currently %d actual instances (desired set to %d)",
+		instanceCount, asg.DesiredCount)
 	return metrics.PollDuration, nil
 }
 
 func (s *Scaler) scaleIn(desired int64, current AutoscaleGroupDetails) error {
-	if s.scaleInParams.Disable {
+	// In ElasticCIMode, we ignore DISABLE_SCALE_IN since we have safer scaling mechanisms
+	if s.scaleInParams.Disable && !s.elasticCIMode {
 		return nil
+	}
+
+	// If we're in ElasticCIMode and DISABLE_SCALE_IN is true, log that we're ignoring it
+	if s.scaleInParams.Disable && s.elasticCIMode {
+		log.Printf("ℹ️ [Elastic CI Mode] Ignoring DISABLE_SCALE_IN=true since ElasticCIMode has safer scaling mechanisms")
 	}
 
 	// If we've scaled down before, check if a cooldown should be enforced
@@ -151,6 +227,45 @@ func (s *Scaler) scaleIn(desired int64, current AutoscaleGroupDetails) error {
 		if cooldownRemaining > 0 {
 			log.Printf("⏲ Want to scale IN but in cooldown for %d seconds", cooldownRemaining/time.Second)
 			return nil
+		}
+	}
+
+	// Special Elastic CI Stack mode with additional safety checks
+	if s.elasticCIMode {
+		// Check for recent ASG scale-down activity to avoid scaling down too quickly
+		// Only do this check if we have access to the ASG activities
+		if driver, ok := s.autoscaling.(*ASGDriver); ok {
+			// In ElasticCIMode, override the page limit to allow unlimited pages
+			if driver.MaxDescribeScalingActivitiesPages >= 0 {
+				// Override to allow unlimited pages (-1) for full activity history in ElasticCIMode
+				log.Printf("ℹ️ [Elastic CI Mode] Setting MAX_DESCRIBE_SCALING_ACTIVITIES_PAGES from %d to -1 (unlimited) for better safety checks",
+					driver.MaxDescribeScalingActivitiesPages)
+				driver.MaxDescribeScalingActivitiesPages = -1
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
+			// Get the last scale-in activity from ASG history
+			_, lastScaleInActivity, err := driver.GetLastScalingInAndOutActivity(ctx, false, true)
+			if err != nil {
+				log.Printf("⚠️ [Elastic CI Mode] Could not check last ASG scale-in activity: %v", err)
+			} else if lastScaleInActivity != nil && lastScaleInActivity.StartTime != nil {
+				// Check how recently the ASG scaled down
+				lastScaleInTime := *lastScaleInActivity.StartTime
+				timeSinceLastScaleIn := time.Since(lastScaleInTime)
+
+				// Check if we're in cooldown period based on the last ASG scale-in activity
+				if s.scaleInParams.CooldownPeriod > 0 && timeSinceLastScaleIn < s.scaleInParams.CooldownPeriod {
+					log.Printf("⏲ [Elastic CI Mode] Last ASG scale-in was %s ago, in cooldown period for %s more (cooldown: %s)",
+						timeSinceLastScaleIn.Round(time.Second),
+						(s.scaleInParams.CooldownPeriod - timeSinceLastScaleIn).Round(time.Second),
+						s.scaleInParams.CooldownPeriod)
+					return nil
+				}
+
+				log.Printf("[Elastic CI Mode] Last ASG scale-in was %s ago", timeSinceLastScaleIn.Round(time.Second))
+			}
 		}
 	}
 
@@ -191,8 +306,133 @@ func (s *Scaler) scaleIn(desired int64, current AutoscaleGroupDetails) error {
 
 	log.Printf("Scaling IN 📉 to %d instances (currently %d)", desired, current.DesiredCount)
 
-	if err := s.setDesiredCapacity(desired); err != nil {
-		return err
+	instancesToTerminate := current.DesiredCount - desired
+
+	// In Elastic CI Mode, use graceful termination if we have instance IDs
+	if driver, ok := s.autoscaling.(*ASGDriver); ok && driver.ElasticCIMode && len(current.InstanceIDs) > 0 && instancesToTerminate > 0 {
+		log.Printf("[Elastic CI Mode] Using graceful termination for %d instances", instancesToTerminate)
+
+		// Determine instances to terminate by sorting by launch time (oldest first)
+		maxToTerminate := instancesToTerminate
+
+		instancesForTermination := make([]string, 0, maxToTerminate)
+
+		if len(current.InstanceIDs) > 0 {
+			// Define a struct to hold instance info for sorting
+			type instanceInfo struct {
+				ID         string
+				LaunchTime time.Time
+			}
+
+			ec2Svc := ec2.New(driver.Sess)
+
+			// Convert to AWS string pointers for API call - using aws.StringSlice helper
+			instanceIDPtrs := aws.StringSlice(current.InstanceIDs)
+
+			instances := make([]instanceInfo, 0, len(current.InstanceIDs))
+			describeResult, err := ec2Svc.DescribeInstances(&ec2.DescribeInstancesInput{
+				InstanceIds: instanceIDPtrs,
+			})
+
+			if err != nil {
+				log.Printf("[Elastic CI Mode] Warning: Could not get instance launch times: %v", err)
+				// Fall back to unsorted if we can't get launch times
+				instancesForTermination = current.InstanceIDs
+				if int64(len(instancesForTermination)) > maxToTerminate {
+					instancesForTermination = instancesForTermination[:maxToTerminate]
+				}
+			} else {
+				// Process results and build list of instances with launch times
+				// We need to iterate through reservations as that's how AWS groups the instances
+				for _, reservation := range describeResult.Reservations {
+					for _, instance := range reservation.Instances {
+						if instance.InstanceId != nil && instance.LaunchTime != nil {
+							instances = append(instances, instanceInfo{
+								ID:         *instance.InstanceId,
+								LaunchTime: *instance.LaunchTime,
+							})
+						}
+					}
+				}
+
+				// Sort instances by launch time (oldest first)
+				sort.Slice(instances, func(i, j int) bool {
+					return instances[i].LaunchTime.Before(instances[j].LaunchTime)
+				})
+
+				limit := int(maxToTerminate)
+				if len(instances) < limit {
+					limit = len(instances)
+				}
+
+				instancesForTermination = make([]string, limit)
+				for i := 0; i < limit; i++ {
+					instancesForTermination[i] = instances[i].ID
+				}
+
+				if len(instances) > 0 {
+					oldestTime := instances[0].LaunchTime.Format(time.RFC3339)
+					log.Printf("[Elastic CI Mode] Selecting %d oldest instances by launch time for termination (oldest from %s)",
+						len(instancesForTermination), oldestTime)
+				}
+			}
+		}
+
+		log.Printf("Sending SIGTERM to %d instances: %v", len(instancesForTermination), instancesForTermination)
+
+		sigTermErrors := 0
+		for _, instanceID := range instancesForTermination {
+			if err := driver.SendSIGTERMToAgents(instanceID); err != nil {
+				log.Printf("⚠️  Failed to send SIGTERM to instance %s: %v", instanceID, err)
+				sigTermErrors++
+			} else {
+				log.Printf("✅ Successfully sent SIGTERM to instance %s", instanceID)
+			}
+		}
+
+		if sigTermErrors > 0 {
+			log.Printf("⚠️  Failed to send SIGTERM to %d/%d instances",
+				sigTermErrors, len(instancesForTermination))
+		} else {
+			log.Printf("✅ Successfully sent SIGTERM to all %d instances",
+				len(instancesForTermination))
+		}
+
+		if current.DesiredCount <= 1 && len(current.InstanceIDs) == 1 {
+			instanceID := current.InstanceIDs[0]
+			log.Printf("[Elastic CI Mode] Single-instance ASG detected - checking if instance %s is a dangling instance", instanceID)
+
+			// Only consider direct termination for dangling instances
+			ssmSvc := ssm.New(driver.Sess)
+			ec2Svc := ec2.New(driver.Sess)
+
+			// Try to check if buildkite-agent is running via SSM
+			_, err := ssmSvc.SendCommand(&ssm.SendCommandInput{
+				InstanceIds:  []*string{aws.String(instanceID)},
+				DocumentName: aws.String("AWS-RunShellScript"),
+				Parameters: map[string][]*string{
+					"commands": {aws.String("systemctl is-active buildkite-agent")},
+				},
+				Comment: aws.String("Check if buildkite-agent service is running"),
+			})
+
+			// Only terminate if we can't check agent status, suggesting it's likely a dangling instance
+			if err != nil {
+				log.Printf("[Elastic CI Mode] Warning: Cannot check agent status, assuming dangling instance: %v", err)
+				log.Printf("[Elastic CI Mode] Directly terminating probable dangling instance")
+
+				if termErr := directlyTerminateInstance(ec2Svc, instanceID); termErr != nil {
+					log.Printf("[Elastic CI Mode] Error: Failed to terminate: %v", termErr)
+				}
+			} else {
+				log.Printf("[Elastic CI Mode] Instance appears responsive, not terminating directly")
+			}
+		}
+	} else {
+		log.Printf("Using standard scale-in (Elastic CI Mode disabled or no instances to terminate)")
+		if err := s.setDesiredCapacity(desired); err != nil {
+			return err
+		}
 	}
 
 	s.scaleInParams.LastEvent = time.Now()
@@ -267,7 +507,7 @@ func (s *Scaler) setDesiredCapacity(desired int64) error {
 		return err
 	}
 
-	log.Printf("↳ Set desired to %d (took %v)", desired, time.Now().Sub(t))
+	log.Printf("↳ Set desired to %d (took %v)", desired, time.Since(t))
 	return nil
 }
 
@@ -277,6 +517,21 @@ func (s *Scaler) LastScaleOut() time.Time {
 
 func (s *Scaler) LastScaleIn() time.Time {
 	return s.scaleInParams.LastEvent
+}
+
+// directlyTerminateInstance terminates an EC2 instance directly via EC2 API
+// This is a helper function for dangling instance termination
+func directlyTerminateInstance(ec2Svc *ec2.EC2, instanceID string) error {
+	_, err := ec2Svc.TerminateInstances(&ec2.TerminateInstancesInput{
+		InstanceIds: []*string{aws.String(instanceID)},
+	})
+
+	if err != nil {
+		return err
+	}
+
+	log.Printf("[Elastic CI Mode] Successfully terminated instance %s via EC2 API", instanceID)
+	return nil
 }
 
 type buildkiteDriver struct {

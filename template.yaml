@@ -64,6 +64,26 @@ Parameters:
     Type: Number
     Default: "0"
 
+  AvailabilityThreshold:
+    Description: Threshold percentage for agent availability (0.0-1.0), e.g., 0.9 for 90%
+    Type: Number
+    Default: 0.9
+
+  ScaleInCooldownPeriod:
+    Description: Cooldown period in seconds before allowing another scale-in event
+    Type: Number
+    Default: 3600
+
+  ScaleOutCooldownPeriod:
+    Description: Cooldown period in seconds before allowing another scale-out event
+    Type: Number
+    Default: 300
+
+  MaxDanglingInstancesToCheck:
+    Description: Maximum number of instances to check for inactive buildkite-agent service during dangling instance scan (only used for dangling instance scanning, not for normal scale-in)
+    Type: Number
+    Default: 5
+
   ScaleOutForWaitingJobs:
     Description: ""
     Type: String
@@ -99,16 +119,24 @@ Parameters:
     Type: String
     Description: Minimum time interval between polls. If a larger interval is provided by Buildkite, that is used instead.
     Default: "10s"
-  
+
   SecurityGroupIds:
     Description: "Comma separated list of security group IDs to run the lambda in. Defaults to not configuring security groups."
     Type: CommaDelimitedList
     Default: ""
-    
+
   SubnetIds:
     Description: "Comma separated list of subnet IDs to run the lambda in. Defaults to not configuring subnets."
     Type: CommaDelimitedList
     Default: ""
+
+  EnableElasticCIMode:
+    Description: "Enable the Elastic CI Mode with enhanced features like safety checks, agent sorting, dangling instance detection, and graceful termination"
+    Type: String
+    AllowedValues:
+      - "true"
+      - "false"
+    Default: "false"
 
 Conditions:
   CreateRole:
@@ -244,6 +272,11 @@ Resources:
           LAMBDA_TIMEOUT:                "50s"
           LAMBDA_INTERVAL:               !Ref MinPollInterval
           MAX_DESCRIBE_SCALING_ACTIVITIES_PAGES: !Ref MaxDescribeScalingActivitiesPages
+          AVAILABILITY_THRESHOLD:        !Ref AvailabilityThreshold
+          SCALE_IN_COOLDOWN_PERIOD:      !Sub "${ScaleInCooldownPeriod}s"
+          SCALE_OUT_COOLDOWN_PERIOD:     !Sub "${ScaleOutCooldownPeriod}s"
+          MAX_DANGLING_INSTANCES_TO_CHECK: !Ref MaxDanglingInstancesToCheck
+          ELASTIC_CI_MODE:               !Ref EnableElasticCIMode
       Events:
         Timer:
           Type: Schedule
