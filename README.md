@@ -25,10 +25,32 @@ results sets the `DesiredCount` to exactly what is needed. This allows much fast
 
 ## Gracefully scaling in
 
-Whilst the lambda does support scaling in via setting `DesiredCount`, Amazon ASGs appear to not send
-[Lifecycle Hooks][] before terminating instances, so jobs in progress are interrupted.
+The lambda supports graceful termination of instances during scale-in to allow jobs in progress to complete before instances are terminated.
 
-Instead, in the [Elastic CI Stack][] we run the scaler with scale-in disabled (`DISABLE_SCALE_IN`)
+### Using ASG Lifecycle Hooks (Recommended)
+
+The recommended approach is to use AWS Auto Scaling Group (ASG) lifecycle hooks for graceful termination:
+
+1. Deploy the `lifecycle-hook.yml` CloudFormation template alongside your Elastic CI Stack
+2. Set the following environment variables in the lambda:
+   - `GRACEFUL_TERMINATION`: Set to `true` to enable graceful termination
+
+When an instance is selected for scale-in:
+1. The ASG lifecycle hook pauses the termination process
+2. The stop-agent-gracefully script is triggered
+3. Agents receive SIGTERM and complete their current jobs (with a configurable timeout, default 1 hour)
+4. The instance completes the lifecycle action and is terminated by ASG
+
+Benefits of lifecycle hooks:
+- More reliable and standard AWS approach
+- Configurable timeout (default 1 hour)
+- Proper handling of ASG termination policies
+
+Note: When lifecycle hooks are available, the scaler automatically uses them for graceful termination. If lifecycle hooks are not found, standard ASG termination will be used without guaranteeing job completion.
+
+### Older Approach Using Agent Self-Termination
+
+As an alternative, in the [Elastic CI Stack][] we run the scaler with scale-in disabled (`DISABLE_SCALE_IN`)
 and rely on the
 [recent addition in buildkite-agent v3.10.0](https://github.com/buildkite/agent/releases/tag/v3.10.0)
 of `--disconnect-after-idle-timeout` in the Agent combined with a
@@ -57,6 +79,10 @@ the following IAM permissions:
 - `autoscaling:DescribeAutoScalingGroups`
 - `autoscaling:DescribeScalingActivities`
 - `autoscaling:SetDesiredCapacity`
+- `autoscaling:DetachInstances`
+- `autoscaling:DescribeAutoScalingInstances`
+- `ec2:TerminateInstances`
+- `ssm:SendCommand` (for sending SIGTERM via SSM)
 
 Its handler is `bootstrap`, it uses a `provided.al2` runtime and requires the following env vars:
 
@@ -64,6 +90,9 @@ Its handler is `bootstrap`, it uses a `provided.al2` runtime and requires the fo
 - `BUILDKITE_QUEUE`
 - `AGENTS_PER_INSTANCE`
 - `ASG_NAME`
+
+Optional graceful termination environment variable:
+- `GRACEFUL_TERMINATION` - Set to `true` to enable graceful termination
 
 If `BUILDKITE_AGENT_TOKEN_SSM_KEY` is set, the token will be read from
 [AWS Systems Manager Parameter Store GetParameter](https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_GetParameter.html)
