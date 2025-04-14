@@ -37,7 +37,6 @@ type Scaler struct {
 	autoscaling interface {
 		Describe() (AutoscaleGroupDetails, error)
 		SetDesiredCapacity(count int64) error
-		DetachInstance(instanceID string) error
 		SendSIGTERMToAgents(instanceID string) error
 	}
 	bk interface {
@@ -205,13 +204,12 @@ func (s *Scaler) scaleIn(desired int64, current AutoscaleGroupDetails) error {
 		// Check if lifecycle hooks are configured for this ASG
 		lifeCycleHookCount, err := driver.CountTerminationLifecycleHooks()
 		if err != nil {
-			log.Printf("Warning: Could not check for lifecycle hooks: %v. Falling back to manual detach method.", err)
+			log.Printf("Warning: Could not check for lifecycle hooks: %v. Falling back to standard termination.", err)
 			lifeCycleHookCount = 0
 		}
 
 		if lifeCycleHookCount > 0 {
-			// With lifecycle hooks, we don't need to detach instances
-			// Just let the ASG handle termination with our hooks
+			// With lifecycle hooks, ASG will handle termination with our hooks
 			log.Printf("Using ASG lifecycle hooks for graceful termination (found %d hooks)", lifeCycleHookCount)
 
 			// Decrease desired capacity and let lifecycle hooks handle the rest

@@ -467,10 +467,6 @@ func (d *asgTestDriver) SetDesiredCapacity(count int64) error {
 	return d.err
 }
 
-func (d *asgTestDriver) DetachInstance(instanceID string) error {
-	return d.err
-}
-
 func (d *asgTestDriver) SendSIGTERMToAgents(instanceID string) error {
 	return d.err
 }

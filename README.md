@@ -79,7 +79,6 @@ the following IAM permissions:
 - `autoscaling:DescribeAutoScalingGroups`
 - `autoscaling:DescribeScalingActivities`
 - `autoscaling:SetDesiredCapacity`
-- `autoscaling:DetachInstances`
 - `autoscaling:DescribeAutoScalingInstances`
 - `ec2:TerminateInstances`
 - `ssm:SendCommand` (for sending SIGTERM via SSM)

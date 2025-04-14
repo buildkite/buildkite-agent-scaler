@@ -191,43 +191,8 @@ func (a *dryRunASG) SetDesiredCapacity(count int64) error {
 	return nil
 }
 
-func (a *dryRunASG) DetachInstance(instanceID string) error {
-	log.Printf("DRY RUN: Would detach instance %s from ASG", instanceID)
-	return nil
-}
-
 func (a *dryRunASG) SendSIGTERMToAgents(instanceID string) error {
 	log.Printf("DRY RUN: Would send SIGTERM to buildkite agents on instance %s", instanceID)
-	return nil
-}
-
-// DetachInstance detaches an instance from the ASG with a decrement to desired capacity
-// This allows for graceful termination of agents by keeping the instance running
-// but removing it from the ASG's management, so an instance can be prepared for termination
-// Why do we do it that way?
-// As per https://docs.aws.amazon.com/autoscaling/ec2/userguide/lifecycle-hooks.html#lifecycle-hooks-availability —
-// Lambda does support scaling in via setting DesiredCount, Amazon ASGs appear to not send Lifecycle Hooks before terminating instances, so jobs in progress are interrupted
-func (a *ASGDriver) DetachInstance(instanceID string) error {
-	log.Printf("Detaching instance %s from ASG %s", instanceID, a.Name)
-
-	svc := autoscaling.New(a.Sess)
-
-	input := &autoscaling.DetachInstancesInput{
-		AutoScalingGroupName:           aws.String(a.Name),
-		InstanceIds:                    []*string{aws.String(instanceID)},
-		ShouldDecrementDesiredCapacity: aws.Bool(true),
-	}
-
-	result, err := svc.DetachInstances(input)
-	if err != nil {
-		return fmt.Errorf("failed to detach instance: %v", err)
-	}
-
-	for _, activity := range result.Activities {
-		log.Printf("Detach operation started - ActivityID: %s", *activity.ActivityId)
-	}
-
-	log.Printf("Successfully initiated detachment of instance %s", instanceID)
 	return nil
 }
 
@@ -328,26 +293,16 @@ fi
 		return fmt.Errorf("buildkite-agent service is not running or could not be verified on instance %s", instanceID)
 	}
 
-	// Simplified command: Use the existing terminate-instance script
+	// Use the existing stop-agent-gracefully script
 	command := `
 #!/bin/bash
-# Graceful termination using systemctl kill
 set -euo pipefail
 
-echo "Starting graceful termination of buildkite-agent service at $(date)"
+echo "Starting graceful termination using stop-agent-gracefully at $(date)"
 
-# Set the environment variable for termination
-# This tells the agent to terminate the instance when it finishes its jobs
-echo 'BUILDKITE_TERMINATE_INSTANCE_AFTER_JOB=true' >> /var/lib/buildkite-agent/env
-
-# Let the agent know that this is a scale-in event
-# So it can use the terminate-instance script correctly
-echo 'AUTO_SCALING_GROUP_NAME="detached"' >> /var/lib/buildkite-agent/env
-
-# Now send SIGTERM to the buildkite-agent process
-# This will trigger the graceful shutdown, allowing jobs to complete
-# When the agent stops, the ExecStopPost script in systemd will call terminate-instance
-systemctl kill --kill-who=main --signal=SIGTERM buildkite-agent
+# Call the existing stop-agent-gracefully script with proper lifecycle transition
+# This script handles everything: SIGTERM, waiting for jobs, and termination
+/usr/local/bin/stop-agent-gracefully "autoscaling:EC2_INSTANCE_TERMINATING"
 `
 
 	input := &ssm.SendCommandInput{
