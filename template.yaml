@@ -159,6 +159,8 @@ Conditions:
            - ""
            - Ref: SubnetIds
         - ""
+  ElasticCIModeEnabled:
+    !Equals [ !Ref EnableElasticCIMode, "true" ]
 
 Mappings:
   LambdaBucket:
@@ -237,6 +239,27 @@ Resources:
                 - Effect: Allow
                   Action: kms:Decrypt
                   Resource: !Sub arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/${BuildkiteAgentTokenParameterStoreKMSKey}
+          - !Ref 'AWS::NoValue'
+        - !If
+          - ElasticCIModeEnabled
+          - PolicyName: ElasticCIModeSSMAndEC2
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - ssm:SendCommand
+                    - ssm:GetCommandInvocation
+                  Resource: '*'
+                  Condition:
+                    StringEquals:
+                      "ec2:ResourceTag/aws:autoscaling:groupName": !Ref AgentAutoScaleGroup
+                - Effect: Allow
+                  Action:
+                    - ssm:DescribeInstanceInformation
+                    - ec2:DescribeInstanceStatus
+                    - ec2:DescribeInstances
+                  Resource: '*'
           - !Ref 'AWS::NoValue'
 
   AutoscalingFunction:
