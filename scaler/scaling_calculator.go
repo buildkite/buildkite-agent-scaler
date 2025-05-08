@@ -22,19 +22,16 @@ type ScalingCalculator struct {
 }
 
 func (sc *ScalingCalculator) perInstance(count int64) int64 {
-	// Handle division by zero or very small values
 	if sc.agentsPerInstance <= 0 {
 		log.Printf("⚠️  Invalid agentsPerInstance value %d, defaulting to 1", sc.agentsPerInstance)
 		return count // Default to 1:1 mapping
 	}
 
-	// Use a safe division to avoid overflow
 	result := int64(math.Ceil(float64(count) / float64(sc.agentsPerInstance)))
 
-	// Guard against unreasonable values
 	if result < 0 || result > 1000 {
 		log.Printf("⚠️  Calculated unreasonable instance count %d, capping at 1000", result)
-		return 1000 // Set a reasonable upper limit
+		return 1000
 	}
 
 	return result
@@ -138,7 +135,6 @@ func (sc *ScalingCalculator) DesiredCount(metrics *buildkite.AgentMetrics, asg *
 			enoughAgentsOnline := availabilityPercentage >= minPercentage
 
 			if !enoughAgentsOnline {
-				// Add one more instance to improve availability
 				desired = max(desired, asg.DesiredCount+1)
 				log.Printf("↳ 📈 [Elastic CI Mode] Adding instance to improve availability: %d -> %d (%.2f%% < %.2f%%)",
 					asg.DesiredCount, desired, availabilityPercentage*100, minPercentage*100)
@@ -146,10 +142,6 @@ func (sc *ScalingCalculator) DesiredCount(metrics *buildkite.AgentMetrics, asg *
 				log.Printf("↳ ✅ [Elastic CI Mode] Not adding instance despite low availability - sufficient percentage of agents online (%.2f%% >= %.2f%%)",
 					availabilityPercentage*100, minPercentage*100)
 			}
-		} else {
-			// Standard mode: Always add one more instance to improve availability
-			desired = max(desired, asg.DesiredCount+1)
-			log.Printf("↳ 📈 Adding instance to improve availability: %d -> %d", asg.DesiredCount, desired)
 		}
 	}
 

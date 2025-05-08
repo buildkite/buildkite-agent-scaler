@@ -161,7 +161,34 @@ func (s *Scaler) Run() (time.Duration, error) {
 
 	// Only add instance buffer if there are agents required (any jobs that need processing)
 	if metrics.ScheduledJobs > 0 || metrics.RunningJobs > 0 || metrics.WaitingJobs > 0 {
-		desired += int64(s.instanceBuffer)
+		// Calculate a proportional buffer based on the number of jobs
+		totalJobs := metrics.ScheduledJobs + metrics.RunningJobs
+		if s.scaling.includeWaiting {
+			totalJobs += metrics.WaitingJobs
+		}
+
+		// Apply a proportional buffer, but ensure we don't add more than the configured buffer
+		// For a single job add just 1 instance buffer, scaling up to the full buffer for larger workloads
+		var proportionalBuffer int64
+
+		if s.scaling.agentsPerInstance <= 0 {
+			log.Printf("⚠️  Invalid agentsPerInstance value %d, defaulting to 1", s.scaling.agentsPerInstance)
+			proportionalBuffer = totalJobs // Default to 1:1 mapping
+		} else {
+			proportionalBuffer = int64(math.Ceil(float64(totalJobs) / float64(s.scaling.agentsPerInstance)))
+		}
+
+		if proportionalBuffer < 0 || proportionalBuffer > 1000 {
+			log.Printf("⚠️  Calculated unreasonable proportional buffer %d, capping at 1000", proportionalBuffer)
+			proportionalBuffer = 1000
+		}
+
+		if proportionalBuffer > int64(s.instanceBuffer) {
+			proportionalBuffer = int64(s.instanceBuffer)
+		}
+
+		log.Printf("↳ 🧮 Adding proportional instance buffer: %d (based on %d total jobs)", proportionalBuffer, totalJobs)
+		desired += proportionalBuffer
 	}
 
 	if desired > asg.MaxSize {

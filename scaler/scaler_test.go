@@ -58,7 +58,7 @@ func TestScalingOutWithoutError(t *testing.T) {
 				InstanceBuffer:    10,
 			},
 			currentDesiredCapacity:  12,
-			expectedDesiredCapacity: 23, // Changed to 23 because we're adding +1 for availability below threshold (12 instances but only 2 agents instead of 12)
+			expectedDesiredCapacity: 22,
 		},
 		// Scale-out with multiple agents per instance
 		{
