@@ -22,7 +22,6 @@ type ScalingCalculator struct {
 }
 
 func (sc *ScalingCalculator) perInstance(count int64) int64 {
-	// Handle division by zero or very small values
 	if sc.agentsPerInstance <= 0 {
 		log.Printf("⚠️  Invalid agentsPerInstance value %d, defaulting to 1", sc.agentsPerInstance)
 		return count // Default to 1:1 mapping
@@ -31,10 +30,9 @@ func (sc *ScalingCalculator) perInstance(count int64) int64 {
 	// Use a safe division to avoid overflow
 	result := int64(math.Ceil(float64(count) / float64(sc.agentsPerInstance)))
 
-	// Guard against unreasonable values
 	if result < 0 || result > 1000 {
 		log.Printf("⚠️  Calculated unreasonable instance count %d, capping at 1000", result)
-		return 1000 // Set a reasonable upper limit
+		return 1000
 	}
 
 	return result
