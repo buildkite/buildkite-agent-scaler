@@ -26,7 +26,7 @@ steps:
     artifact_paths:
       - handler.zip
 
-  - label: ":s3: Pubish to S3 Branch Location"
+  - label: ":s3: Publish to S3 Branch Location"
     key: s3-branch
     depends_on:
       - test
