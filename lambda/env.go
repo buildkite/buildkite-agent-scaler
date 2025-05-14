@@ -69,11 +69,14 @@ func EnvDuration(name string, def time.Duration) time.Duration {
 }
 
 // EnvFloat reads an environment variable, and if it is set, parses it using
-// [strconv.ParseFloat]. If it is not set, it returns 0. If parsing fails, it
-// calls [log.Fatalf].
-func EnvFloat(name string) float64 {
+// [strconv.ParseFloat]. If it is not set, it returns the provided default value (or 0 if no default is provided).
+// If parsing fails, it calls [log.Fatalf].
+func EnvFloat(name string, def ...float64) float64 {
 	v := os.Getenv(name)
 	if v == "" {
+		if len(def) > 0 {
+			return def[0]
+		}
 		return 0
 	}
 	f, err := strconv.ParseFloat(v, 64)
