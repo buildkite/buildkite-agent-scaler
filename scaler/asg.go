@@ -30,7 +30,7 @@ type ASGDriver struct {
 	MaxDescribeScalingActivitiesPages int
 }
 
-func (a *ASGDriver) Describe() (AutoscaleGroupDetails, error) {
+func (a *ASGDriver) Describe(ctx context.Context) (AutoscaleGroupDetails, error) {
 	log.Printf("Collecting AutoScaling details for ASG %q", a.Name)
 
 	svc := autoscaling.NewFromConfig(a.Cfg)
@@ -42,7 +42,7 @@ func (a *ASGDriver) Describe() (AutoscaleGroupDetails, error) {
 
 	t := time.Now()
 
-	result, err := svc.DescribeAutoScalingGroups(context.TODO(), input)
+	result, err := svc.DescribeAutoScalingGroups(ctx, input)
 	if err != nil {
 		return AutoscaleGroupDetails{}, err
 	}
@@ -72,7 +72,7 @@ func (a *ASGDriver) Describe() (AutoscaleGroupDetails, error) {
 	return details, nil
 }
 
-func (a *ASGDriver) SetDesiredCapacity(count int64) error {
+func (a *ASGDriver) SetDesiredCapacity(ctx context.Context, count int64) error {
 	svc := autoscaling.NewFromConfig(a.Cfg)
 	input := &autoscaling.SetDesiredCapacityInput{
 		AutoScalingGroupName: aws.String(a.Name),
@@ -80,7 +80,7 @@ func (a *ASGDriver) SetDesiredCapacity(count int64) error {
 		HonorCooldown:        aws.Bool(false),
 	}
 
-	_, err := svc.SetDesiredCapacity(context.TODO(), input)
+	_, err := svc.SetDesiredCapacity(ctx, input)
 	if err != nil {
 		return err
 	}
@@ -148,10 +148,10 @@ func (a *ASGDriver) GetLastScalingInAndOutActivity(ctx context.Context, findScal
 type dryRunASG struct {
 }
 
-func (a *dryRunASG) Describe() (AutoscaleGroupDetails, error) {
+func (a *dryRunASG) Describe(ctx context.Context) (AutoscaleGroupDetails, error) {
 	return AutoscaleGroupDetails{}, nil
 }
 
-func (a *dryRunASG) SetDesiredCapacity(count int64) error {
+func (a *dryRunASG) SetDesiredCapacity(ctx context.Context, count int64) error {
 	return nil
 }

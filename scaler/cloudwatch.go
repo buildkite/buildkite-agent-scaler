@@ -19,7 +19,8 @@ type cloudWatchMetricsPublisher struct {
 }
 
 // Publish queue metrics to CloudWatch Metrics
-func (cp *cloudWatchMetricsPublisher) Publish(orgSlug, queue string, metrics map[string]int64) error {
+// The context allows for request cancellation and timeouts.
+func (cp *cloudWatchMetricsPublisher) Publish(ctx context.Context, orgSlug, queue string, metrics map[string]int64) error {
 	svc := cloudwatch.NewFromConfig(cp.cfg)
 
 	datum := make([]types.MetricDatum, 0, len(metrics))
@@ -45,7 +46,7 @@ func (cp *cloudWatchMetricsPublisher) Publish(orgSlug, queue string, metrics map
 		})
 	}
 
-	_, err := svc.PutMetricData(context.TODO(), &cloudwatch.PutMetricDataInput{
+	_, err := svc.PutMetricData(ctx, &cloudwatch.PutMetricDataInput{
 		Namespace:  aws.String(cloudWatchMetricsNamespace),
 		MetricData: datum,
 	})
@@ -53,12 +54,11 @@ func (cp *cloudWatchMetricsPublisher) Publish(orgSlug, queue string, metrics map
 	return err
 }
 
-type dryRunMetricsPublisher struct {
-}
+type dryRunMetricsPublisher struct{}
 
-func (p *dryRunMetricsPublisher) Publish(orgSlug, queue string, metrics map[string]int64) error {
+func (p *dryRunMetricsPublisher) Publish(ctx context.Context, orgSlug, queue string, metrics map[string]int64) error {
 	for k, v := range metrics {
-		log.Printf("Publishing metric %s=%d", k, v)
+		log.Printf("[DRY RUN] Would publish metric %s=%d [org=%s,queue=%s]", k, v, orgSlug, queue)
 	}
 	return nil
 }

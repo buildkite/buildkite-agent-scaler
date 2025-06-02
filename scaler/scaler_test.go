@@ -1,6 +1,7 @@
 package scaler
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -268,7 +269,7 @@ func TestScalingOutWithoutError(t *testing.T) {
 				},
 			}
 
-			if _, err := s.Run(); err != nil {
+			if _, err := s.Run(context.Background()); err != nil {
 				t.Fatal(err)
 			}
 
@@ -420,7 +421,7 @@ func TestScalingInWithoutError(t *testing.T) {
 				scaleOnlyAfterAllEvent: tc.params.ScaleOnlyAfterAllEvent,
 			}
 
-			if _, err := s.Run(); err != nil {
+			if _, err := s.Run(context.Background()); err != nil {
 				t.Fatal(err)
 			}
 
@@ -438,7 +439,7 @@ type buildkiteTestDriver struct {
 	err     error
 }
 
-func (d *buildkiteTestDriver) GetAgentMetrics() (buildkite.AgentMetrics, error) {
+func (d *buildkiteTestDriver) GetAgentMetrics(ctx context.Context) (buildkite.AgentMetrics, error) {
 	return d.metrics, d.err
 }
 
@@ -447,15 +448,15 @@ type asgTestDriver struct {
 	desiredCapacity int64
 }
 
-func (d *asgTestDriver) Describe() (AutoscaleGroupDetails, error) {
+func (d *asgTestDriver) Describe(ctx context.Context) (AutoscaleGroupDetails, error) {
 	return AutoscaleGroupDetails{
 		DesiredCount: d.desiredCapacity,
 		MinSize:      0,
 		MaxSize:      100,
-	}, nil
+	}, d.err
 }
 
-func (d *asgTestDriver) SetDesiredCapacity(count int64) error {
+func (d *asgTestDriver) SetDesiredCapacity(ctx context.Context, count int64) error {
 	d.desiredCapacity = count
 	return d.err
 }

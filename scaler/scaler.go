@@ -1,6 +1,7 @@
 package scaler
 
 import (
+	"context"
 	"log"
 	"math"
 	"time"
@@ -33,14 +34,14 @@ type Params struct {
 
 type Scaler struct {
 	autoscaling interface {
-		Describe() (AutoscaleGroupDetails, error)
-		SetDesiredCapacity(count int64) error
+		Describe(ctx context.Context) (AutoscaleGroupDetails, error)
+		SetDesiredCapacity(ctx context.Context, count int64) error
 	}
 	bk interface {
-		GetAgentMetrics() (buildkite.AgentMetrics, error)
+		GetAgentMetrics(ctx context.Context) (buildkite.AgentMetrics, error)
 	}
 	metrics interface {
-		Publish(orgSlug, queue string, metrics map[string]int64) error
+		Publish(ctx context.Context, orgSlug, queue string, metrics map[string]int64) error
 	}
 	scaling                ScalingCalculator
 	scaleInParams          ScaleParams
@@ -88,14 +89,14 @@ func NewScaler(client *buildkite.Client, cfg aws.Config, params Params) (*Scaler
 	return scaler, nil
 }
 
-func (s *Scaler) Run() (time.Duration, error) {
-	metrics, err := s.bk.GetAgentMetrics()
+func (s *Scaler) Run(ctx context.Context) (time.Duration, error) {
+	metrics, err := s.bk.GetAgentMetrics(ctx)
 	if err != nil {
 		return metrics.PollDuration, err
 	}
 
 	if s.metrics != nil {
-		err = s.metrics.Publish(metrics.OrgSlug, metrics.Queue, map[string]int64{
+		err = s.metrics.Publish(ctx, metrics.OrgSlug, metrics.Queue, map[string]int64{
 			"ScheduledJobsCount": metrics.ScheduledJobs,
 			"RunningJobsCount":   metrics.RunningJobs,
 			"WaitingJobsCount":   metrics.WaitingJobs,
@@ -105,7 +106,7 @@ func (s *Scaler) Run() (time.Duration, error) {
 		}
 	}
 
-	asg, err := s.autoscaling.Describe()
+	asg, err := s.autoscaling.Describe(ctx)
 	if err != nil {
 		return metrics.PollDuration, err
 	}
@@ -122,18 +123,18 @@ func (s *Scaler) Run() (time.Duration, error) {
 	}
 
 	if desired > asg.DesiredCount {
-		return metrics.PollDuration, s.scaleOut(desired, asg)
+		return metrics.PollDuration, s.scaleOut(ctx, desired, asg)
 	}
 
 	if asg.DesiredCount > desired {
-		return metrics.PollDuration, s.scaleIn(desired, asg)
+		return metrics.PollDuration, s.scaleIn(ctx, desired, asg)
 	}
 
 	log.Printf("No scaling required, currently %d", asg.DesiredCount)
 	return metrics.PollDuration, nil
 }
 
-func (s *Scaler) scaleIn(desired int64, current AutoscaleGroupDetails) error {
+func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGroupDetails) error {
 	if s.scaleInParams.Disable {
 		return nil
 	}
@@ -191,7 +192,7 @@ func (s *Scaler) scaleIn(desired int64, current AutoscaleGroupDetails) error {
 
 	log.Printf("Scaling IN 📉 to %d instances (currently %d)", desired, current.DesiredCount)
 
-	if err := s.setDesiredCapacity(desired); err != nil {
+	if err := s.setDesiredCapacity(ctx, desired); err != nil {
 		return err
 	}
 
@@ -199,7 +200,7 @@ func (s *Scaler) scaleIn(desired int64, current AutoscaleGroupDetails) error {
 	return nil
 }
 
-func (s *Scaler) scaleOut(desired int64, current AutoscaleGroupDetails) error {
+func (s *Scaler) scaleOut(ctx context.Context, desired int64, current AutoscaleGroupDetails) error {
 	if s.scaleOutParams.Disable {
 		return nil
 	}
@@ -252,7 +253,7 @@ func (s *Scaler) scaleOut(desired int64, current AutoscaleGroupDetails) error {
 
 	log.Printf("Scaling OUT 📈 to %d instances (currently %d)", desired, current.DesiredCount)
 
-	if err := s.setDesiredCapacity(desired); err != nil {
+	if err := s.setDesiredCapacity(ctx, desired); err != nil {
 		return err
 	}
 
@@ -260,10 +261,10 @@ func (s *Scaler) scaleOut(desired int64, current AutoscaleGroupDetails) error {
 	return nil
 }
 
-func (s *Scaler) setDesiredCapacity(desired int64) error {
+func (s *Scaler) setDesiredCapacity(ctx context.Context, desired int64) error {
 	t := time.Now()
 
-	if err := s.autoscaling.SetDesiredCapacity(desired); err != nil {
+	if err := s.autoscaling.SetDesiredCapacity(ctx, desired); err != nil {
 		return err
 	}
 
@@ -284,6 +285,6 @@ type buildkiteDriver struct {
 	queue  string
 }
 
-func (a *buildkiteDriver) GetAgentMetrics() (buildkite.AgentMetrics, error) {
-	return a.client.GetAgentMetrics(a.queue)
+func (b *buildkiteDriver) GetAgentMetrics(ctx context.Context) (buildkite.AgentMetrics, error) {
+	return b.client.GetAgentMetrics(ctx, b.queue)
 }

@@ -36,7 +36,8 @@ func main() {
 	flag.Parse()
 
 	// establish an AWS session to be re-used
-	cfg, err := config.LoadDefaultConfig(context.TODO())
+	ctx := context.Background()
+	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		log.Fatal("unable to load SDK config, ", err)
 	}
@@ -73,7 +74,7 @@ func main() {
 	var interval time.Duration = 10 * time.Second
 
 	for {
-		minPollDuration, err := scaler.Run()
+		minPollDuration, err := scaler.Run(ctx)
 		if err != nil {
 			log.Fatal(err)
 		}

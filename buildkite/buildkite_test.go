@@ -1,6 +1,7 @@
 package buildkite
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,7 +15,7 @@ func TestHappy(t *testing.T) {
 	}))
 	c := NewClient("testtoken", "https://agent.buildkite.com/v3")
 	c.Endpoint = s.URL
-	m, err := c.GetAgentMetrics("default")
+	m, err := c.GetAgentMetrics(context.Background(), "default")
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 		return
@@ -31,7 +32,7 @@ func TestUnauthorizedResponse(t *testing.T) {
 	}))
 	c := NewClient("testtoken", "https://agent.buildkite.com/v3")
 	c.Endpoint = s.URL
-	_, err := c.GetAgentMetrics("default")
+	_, err := c.GetAgentMetrics(context.Background(), "default")
 	if err != nil {
 		t.Log("(expected error)", err)
 	} else {
