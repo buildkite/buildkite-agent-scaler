@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## [v1.9.2](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.9.1...v1.9.2) (2025-06-02)
+
+* chore: Update AWS SDK to v2 [#215](https://github.com/buildkite/buildkite-agent-scaler/pull/215) ([scadu](https://github.com/scadu) [walsm232](https://github.com/walsm232)) 
+* Bump github.com/aws/aws-lambda-go from 1.47.0 to 1.48.0 [#213](https://github.com/buildkite/buildkite-agent-scaler/pull/213) ([dependabot[bot]](https://github.com/apps/dependabot))
+* Update CODEOWNERS [#208](https://github.com/buildkite/buildkite-agent-scaler/pull/208) ([karensawrey](https://github.com/karensawrey))
+* Create CODEOWNERS [#206](https://github.com/buildkite/buildkite-agent-scaler/pull/206) ([karensawrey](https://github.com/karensawrey))
+
 ## [1.9.1](https://github.com/buildkite/buildkite-agent-scaler/tree/1.9.1) (2025-01-20)
 [Full Changelog](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.9.0...1.9.1)
 
