@@ -1,6 +1,7 @@
 package scaler
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -271,7 +272,7 @@ func TestScalingOutWithoutError(t *testing.T) {
 				},
 			}
 
-			if _, err := s.Run(); err != nil {
+			if _, err := s.Run(context.Background()); err != nil {
 				t.Fatal(err)
 			}
 
@@ -425,7 +426,7 @@ func TestScalingInWithoutError(t *testing.T) {
 				elasticCIMode:          false, // Use standard mode for most tests
 			}
 
-			if _, err := s.Run(); err != nil {
+			if _, err := s.Run(context.Background()); err != nil {
 				t.Fatal(err)
 			}
 
@@ -443,7 +444,7 @@ type buildkiteTestDriver struct {
 	err     error
 }
 
-func (d *buildkiteTestDriver) GetAgentMetrics() (buildkite.AgentMetrics, error) {
+func (d *buildkiteTestDriver) GetAgentMetrics(ctx context.Context) (buildkite.AgentMetrics, error) {
 	return d.metrics, d.err
 }
 
@@ -455,7 +456,7 @@ type asgTestDriver struct {
 	danglingInstancesFound int
 }
 
-func (d *asgTestDriver) Describe() (AutoscaleGroupDetails, error) {
+func (d *asgTestDriver) Describe(ctx context.Context) (AutoscaleGroupDetails, error) {
 	d.elasticCIMode = false
 	instanceIDs := make([]string, d.desiredCapacity)
 	for i := int64(0); i < d.desiredCapacity; i++ {
@@ -467,10 +468,10 @@ func (d *asgTestDriver) Describe() (AutoscaleGroupDetails, error) {
 		MinSize:      0,
 		MaxSize:      100,
 		InstanceIDs:  instanceIDs,
-	}, nil
+	}, d.err
 }
 
-func (d *asgTestDriver) SetDesiredCapacity(count int64) error {
+func (d *asgTestDriver) SetDesiredCapacity(ctx context.Context, count int64) error {
 	d.desiredCapacity = count
 	return d.err
 }

@@ -10,12 +10,11 @@ import (
 func RetrieveFromParameterStore(cfg aws.Config, key string) (string, error) {
 	ssmClient := ssm.NewFromConfig(cfg)
 	output, err := ssmClient.GetParameter(context.TODO(), &ssm.GetParameterInput{
-		Name:           &key,
+		Name:           aws.String(key),
 		WithDecryption: aws.Bool(true),
 	})
 	if err != nil {
 		return "", err
 	}
-
 	return *output.Parameter.Value, nil
 }

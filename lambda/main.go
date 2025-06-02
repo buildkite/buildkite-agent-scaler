@@ -97,7 +97,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 	}
 
 	// establish an AWS session to be re-used
-	cfg, err := config.LoadDefaultConfig(context.TODO())
+	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -202,7 +202,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 	}
 
 	for {
-		minPollDuration, err := scaler.Run()
+		minPollDuration, err := scaler.Run(ctx)
 		if err != nil {
 			log.Printf("Scaling error: %v", err)
 		}

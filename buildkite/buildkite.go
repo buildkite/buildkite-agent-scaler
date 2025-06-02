@@ -1,6 +1,7 @@
 package buildkite
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -43,7 +44,7 @@ type AgentMetrics struct {
 	Timestamp     time.Time
 }
 
-func (c *Client) GetAgentMetrics(queue string) (AgentMetrics, error) {
+func (c *Client) GetAgentMetrics(ctx context.Context, queue string) (AgentMetrics, error) {
 	log.Printf("Collecting Buildkite metrics for queue %q", queue)
 
 	var resp struct {
@@ -63,7 +64,7 @@ func (c *Client) GetAgentMetrics(queue string) (AgentMetrics, error) {
 	}
 
 	t := time.Now()
-	pollDuration, err := c.queryMetrics(&resp, queue)
+	pollDuration, err := c.queryMetrics(ctx, &resp, queue)
 	if err != nil {
 		return AgentMetrics{}, err
 	}
@@ -92,7 +93,7 @@ func (c *Client) GetAgentMetrics(queue string) (AgentMetrics, error) {
 	return metrics, nil
 }
 
-func (c *Client) queryMetrics(into interface{}, queue string) (pollDuration time.Duration, err error) {
+func (c *Client) queryMetrics(ctx context.Context, into interface{}, queue string) (pollDuration time.Duration, err error) {
 	endpoint, err := url.Parse(c.Endpoint)
 	if err != nil {
 		return time.Duration(0), err
@@ -101,7 +102,7 @@ func (c *Client) queryMetrics(into interface{}, queue string) (pollDuration time
 	q := url.Values{"name": []string{queue}}
 	endpoint.RawQuery = q.Encode()
 
-	req, err := http.NewRequest(http.MethodGet, endpoint.String(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
 		return time.Duration(0), err
 	}
