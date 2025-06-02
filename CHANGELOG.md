@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
   * New `AVAILABILITY_THRESHOLD` parameter to control minimum agent availability (default 50% — with desired 4 agents per EC2, it'd mean 2 agent instances missing on average) 
   * Graceful scale-in with SIGTERM for Elastic CI Mode, allowing instances to finish current jobs before terminating
 
+## [v1.9.2](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.9.1...v1.9.2) (2025-06-02)
+
+* chore: Update AWS SDK to v2 [#215](https://github.com/buildkite/buildkite-agent-scaler/pull/215) ([scadu](https://github.com/scadu) [walsm232](https://github.com/walsm232)) 
+* Bump github.com/aws/aws-lambda-go from 1.47.0 to 1.48.0 [#213](https://github.com/buildkite/buildkite-agent-scaler/pull/213) ([dependabot[bot]](https://github.com/apps/dependabot))
+* Update CODEOWNERS [#208](https://github.com/buildkite/buildkite-agent-scaler/pull/208) ([karensawrey](https://github.com/karensawrey))
+* Create CODEOWNERS [#206](https://github.com/buildkite/buildkite-agent-scaler/pull/206) ([karensawrey](https://github.com/karensawrey))
+
+## [Unreleased]
+### Added
+- Experimental Elastic CI Mode (disabled by default)
+  * Agent availability monitoring to scale out when below threshold (default 90%)
+  * New `AVAILABILITY_THRESHOLD` parameter to control minimum agent availability (default 50% — with desired 4 agents per EC2, it'd mean 2 agent instances missing on average) 
+  * Graceful scale-in with SIGTERM for Elastic CI Mode, allowing instances to finish current jobs before terminating
+
 ## [1.9.1](https://github.com/buildkite/buildkite-agent-scaler/tree/1.9.1) (2025-01-20)
 [Full Changelog](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.9.0...1.9.1)
 
