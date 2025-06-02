@@ -1,20 +1,20 @@
 package scaler
 
 import (
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/ssm"
+	"context"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
 )
 
-func RetrieveFromParameterStore(sess *session.Session, key string) (string, error) {
-	ssmClient := ssm.New(sess)
-	output, err := ssmClient.GetParameter(&ssm.GetParameterInput{
-		Name:           &key,
+func RetrieveFromParameterStore(cfg aws.Config, key string) (string, error) {
+	ssmClient := ssm.NewFromConfig(cfg)
+	output, err := ssmClient.GetParameter(context.TODO(), &ssm.GetParameterInput{
+		Name:           aws.String(key),
 		WithDecryption: aws.Bool(true),
 	})
 	if err != nil {
 		return "", err
 	}
-
 	return *output.Parameter.Value, nil
 }

@@ -1,11 +1,12 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/buildkite/buildkite-agent-scaler/buildkite"
 	"github.com/buildkite/buildkite-agent-scaler/scaler"
 )
@@ -35,12 +36,14 @@ func main() {
 	flag.Parse()
 
 	// establish an AWS session to be re-used
-	sess := session.Must(session.NewSessionWithOptions(session.Options{
-		SharedConfigState: session.SharedConfigEnable,
-	}))
+	ctx := context.Background()
+	cfg, err := config.LoadDefaultConfig(ctx)
+	if err != nil {
+		log.Fatal("unable to load SDK config, ", err)
+	}
 
 	if *ssmTokenKey != "" {
-		token, err := scaler.RetrieveFromParameterStore(sess, *ssmTokenKey)
+		token, err := scaler.RetrieveFromParameterStore(cfg, *ssmTokenKey)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -49,7 +52,7 @@ func main() {
 
 	client := buildkite.NewClient(*buildkiteAgentToken, *buildkiteAgentEndpoint)
 
-	scaler, err := scaler.NewScaler(client, sess, scaler.Params{
+	scaler, err := scaler.NewScaler(client, cfg, scaler.Params{
 		BuildkiteQueue:           *buildkiteQueue,
 		AutoScalingGroupName:     *asgName,
 		AgentsPerInstance:        *agentsPerInstance,
@@ -71,7 +74,7 @@ func main() {
 	var interval time.Duration = 10 * time.Second
 
 	for {
-		minPollDuration, err := scaler.Run()
+		minPollDuration, err := scaler.Run(ctx)
 		if err != nil {
 			log.Fatal(err)
 		}

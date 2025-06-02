@@ -1,11 +1,12 @@
 package scaler
 
 import (
+	"context"
 	"log"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/cloudwatch"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatch"
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatch/types"
 )
 
 const (
@@ -14,29 +15,30 @@ const (
 
 // cloudWatchMetricsPublisher sends queue metrics to AWS CloudWatch
 type cloudWatchMetricsPublisher struct {
-	sess *session.Session
+	cfg aws.Config
 }
 
 // Publish queue metrics to CloudWatch Metrics
-func (cp *cloudWatchMetricsPublisher) Publish(orgSlug, queue string, metrics map[string]int64) error {
-	svc := cloudwatch.New(cp.sess)
+// The context allows for request cancellation and timeouts.
+func (cp *cloudWatchMetricsPublisher) Publish(ctx context.Context, orgSlug, queue string, metrics map[string]int64) error {
+	svc := cloudwatch.NewFromConfig(cp.cfg)
 
-	datum := []*cloudwatch.MetricDatum{}
+	datum := make([]types.MetricDatum, 0, len(metrics))
 
 	for k, v := range metrics {
 		log.Printf("Publishing metric %s=%d [org=%s,queue=%s]",
 			k, v, orgSlug, queue)
 
-		datum = append(datum, &cloudwatch.MetricDatum{
+		datum = append(datum, types.MetricDatum{
 			MetricName: aws.String(k),
-			Unit:       aws.String("Count"),
+			Unit:       types.StandardUnitCount,
 			Value:      aws.Float64(float64(v)),
-			Dimensions: []*cloudwatch.Dimension{
-				&cloudwatch.Dimension{
+			Dimensions: []types.Dimension{
+				{
 					Name:  aws.String("Org"),
 					Value: aws.String(orgSlug),
 				},
-				&cloudwatch.Dimension{
+				{
 					Name:  aws.String("Queue"),
 					Value: aws.String(queue),
 				},
@@ -44,7 +46,7 @@ func (cp *cloudWatchMetricsPublisher) Publish(orgSlug, queue string, metrics map
 		})
 	}
 
-	_, err := svc.PutMetricData(&cloudwatch.PutMetricDataInput{
+	_, err := svc.PutMetricData(ctx, &cloudwatch.PutMetricDataInput{
 		Namespace:  aws.String(cloudWatchMetricsNamespace),
 		MetricData: datum,
 	})
@@ -52,12 +54,11 @@ func (cp *cloudWatchMetricsPublisher) Publish(orgSlug, queue string, metrics map
 	return err
 }
 
-type dryRunMetricsPublisher struct {
-}
+type dryRunMetricsPublisher struct{}
 
-func (p *dryRunMetricsPublisher) Publish(orgSlug, queue string, metrics map[string]int64) error {
+func (p *dryRunMetricsPublisher) Publish(ctx context.Context, orgSlug, queue string, metrics map[string]int64) error {
 	for k, v := range metrics {
-		log.Printf("Publishing metric %s=%d", k, v)
+		log.Printf("[DRY RUN] Would publish metric %s=%d [org=%s,queue=%s]", k, v, orgSlug, queue)
 	}
 	return nil
 }
