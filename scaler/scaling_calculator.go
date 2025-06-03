@@ -136,7 +136,7 @@ func (sc *ScalingCalculator) DesiredCount(metrics *buildkite.AgentMetrics, asg *
 
 			if !enoughAgentsOnline {
 				currentJobBasedDesired := desired // Capture 'desired' before modification
-				
+
 				availabilityTarget := asg.DesiredCount
 				if asg.DesiredCount == 0 {
 					// If ASG desires 0, but availability is low (e.g. 0 actual agents from 0 desired),
