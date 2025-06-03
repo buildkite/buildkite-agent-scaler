@@ -476,7 +476,7 @@ func (d *asgTestDriver) SetDesiredCapacity(ctx context.Context, count int64) err
 	return d.err
 }
 
-func (d *asgTestDriver) SendSIGTERMToAgents(instanceID string) error {
+func (d *asgTestDriver) SendSIGTERMToAgents(ctx context.Context, instanceID string) error {
 	if d.sigTermsSent == nil {
 		d.sigTermsSent = []string{}
 	}
@@ -484,7 +484,7 @@ func (d *asgTestDriver) SendSIGTERMToAgents(instanceID string) error {
 	return d.err
 }
 
-func (d *asgTestDriver) CleanupDanglingInstances() error {
+func (d *asgTestDriver) CleanupDanglingInstances(ctx context.Context, minimumInstanceUptime time.Duration, maxDanglingInstancesToCheck int) error {
 	d.danglingInstancesFound++
 	return d.err
 }

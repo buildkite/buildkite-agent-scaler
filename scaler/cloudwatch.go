@@ -33,7 +33,7 @@ func (cp *cloudWatchMetricsPublisher) Publish(ctx context.Context, orgSlug, queu
 			MetricName: aws.String(k),
 			Unit:       types.StandardUnitCount,
 			Value:      aws.Float64(float64(v)),
-			Dimensions: []*cloudwatch.Dimension{
+			Dimensions: []types.Dimension{
 				{
 					Name:  aws.String("Org"),
 					Value: aws.String(orgSlug),

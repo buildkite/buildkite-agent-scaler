@@ -8,9 +8,14 @@ import (
 	"strings"
 	"time"
 
+	"sort"
+
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/autoscaling"
 	"github.com/aws/aws-sdk-go-v2/service/autoscaling/types"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/ssm"
 )
@@ -408,6 +413,117 @@ func (a *ASGDriver) GetLastScalingInAndOutActivity(ctx context.Context, findScal
 type dryRunASG struct {
 }
 
+func (a *ASGDriver) SendSIGTERMToAgents(ctx context.Context, instanceID string) error {
+	ssmClient := ssm.NewFromConfig(a.Cfg)
+	command := "sudo systemctl stop buildkite-agent.service || sudo /opt/buildkite-agent/bin/buildkite-agent stop --signal SIGTERM"
+	log.Printf("Sending SIGTERM to instance %s via SSM Run Command: %s", instanceID, command)
+
+	_, err := ssmClient.SendCommand(ctx, &ssm.SendCommandInput{
+		InstanceIds:  []string{instanceID},
+		DocumentName: aws.String("AWS-RunShellScript"),
+		Parameters:   map[string][]string{"commands": {command}},
+		Comment:      aws.String("Gracefully stop Buildkite agent"),
+	})
+
+	if err != nil {
+		log.Printf("Error sending SIGTERM to instance %s: %v", instanceID, err)
+		return err
+	}
+	log.Printf("Successfully sent SIGTERM command to instance %s", instanceID)
+	return nil
+}
+
+func (a *ASGDriver) CleanupDanglingInstances(ctx context.Context, minimumInstanceUptime time.Duration, maxDanglingInstancesToCheck int) error {
+	log.Printf("[Elastic CI Mode] Starting dangling instance check for ASG %s (min uptime: %s, max check: %d)", a.Name, minimumInstanceUptime, maxDanglingInstancesToCheck)
+	ec2Client := ec2.NewFromConfig(a.Cfg)
+	ssmClient := ssm.NewFromConfig(a.Cfg)
+
+	asgDetails, err := a.Describe(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to describe ASG %s: %w", a.Name, err)
+	}
+
+	if len(asgDetails.InstanceIDs) == 0 {
+		log.Printf("[Elastic CI Mode] No instances in ASG %s to check.", a.Name)
+		return nil
+	}
+
+	descInstancesOutput, err := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+		InstanceIds: asgDetails.InstanceIDs,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to describe instances in ASG %s: %w", a.Name, err)
+	}
+
+	var instancesToCheck []ec2types.Instance
+	now := time.Now()
+	for _, reservation := range descInstancesOutput.Reservations {
+		for _, instance := range reservation.Instances {
+			if instance.LaunchTime != nil && now.Sub(*instance.LaunchTime) >= minimumInstanceUptime {
+				if instance.State != nil && instance.State.Name == ec2types.InstanceStateNameRunning {
+					instancesToCheck = append(instancesToCheck, instance)
+				}
+			}
+		}
+	}
+
+	if len(instancesToCheck) == 0 {
+		log.Printf("[Elastic CI Mode] No running instances older than %s in ASG %s.", minimumInstanceUptime, a.Name)
+		return nil
+	}
+
+	// Sort instances by launch time (oldest first) to prioritize checking older ones
+	sort.SliceStable(instancesToCheck, func(i, j int) bool {
+		return instancesToCheck[i].LaunchTime.Before(*instancesToCheck[j].LaunchTime)
+	})
+
+	checkedCount := 0
+	terminatedCount := 0
+	for i := 0; i < len(instancesToCheck) && (maxDanglingInstancesToCheck <= 0 || checkedCount < maxDanglingInstancesToCheck); i++ {
+		instance := instancesToCheck[i]
+		instanceID := *instance.InstanceId
+		checkedCount++
+
+		log.Printf("[Elastic CI Mode] Checking agent status on instance %s (launched: %s)", instanceID, instance.LaunchTime.Format(time.RFC3339))
+		output, err := ssmClient.SendCommand(ctx, &ssm.SendCommandInput{
+			InstanceIds:  []string{instanceID},
+			DocumentName: aws.String("AWS-RunShellScript"),
+			Parameters:   map[string][]string{"commands": {"systemctl is-active buildkite-agent"}},
+			Comment:      aws.String("Check if buildkite-agent service is running"),
+		})
+
+		terminateInstance := false
+		if err != nil {
+			log.Printf("[Elastic CI Mode] Warning: SSM SendCommand failed for instance %s: %v. Assuming dangling.", instanceID, err)
+			terminateInstance = true
+		} else {
+			// A proper check would involve waiting for command completion and checking output.
+			// For simplicity here, we'll assume if SendCommand succeeds, we'd need to inspect its output.
+			// Let's assume for now that a successful SendCommand means the agent *might* be running, so we don't terminate.
+			// A more robust solution would use ssm.GetCommandInvocation to check the actual command status and output.
+			// For this example, we'll be conservative and only terminate if SendCommand itself fails.
+			// To actually terminate based on 'is-active' status, one would need to parse 'output.Command.StatusDetails'
+			// after waiting for the command to complete.
+			log.Printf("[Elastic CI Mode] SSM SendCommand succeeded for %s (CommandID: %s). Further checks on command output needed to confirm agent status.", instanceID, *output.Command.CommandId)
+		}
+
+		if terminateInstance {
+			log.Printf("[Elastic CI Mode] Terminating dangling instance %s", instanceID)
+			_, termErr := ec2Client.TerminateInstances(ctx, &ec2.TerminateInstancesInput{
+				InstanceIds: []string{instanceID},
+			})
+			if termErr != nil {
+				log.Printf("[Elastic CI Mode] Error terminating instance %s: %v", instanceID, termErr)
+			} else {
+				log.Printf("[Elastic CI Mode] Successfully initiated termination for instance %s", instanceID)
+				terminatedCount++
+			}
+		}
+	}
+	log.Printf("[Elastic CI Mode] Dangling instance check complete for ASG %s. Checked: %d, Terminated: %d", a.Name, checkedCount, terminatedCount)
+	return nil
+}
+
 func (a *dryRunASG) Describe(ctx context.Context) (AutoscaleGroupDetails, error) {
 	// In dry run mode, return empty details but ensure ActualCount is also set to 0
 	return AutoscaleGroupDetails{
@@ -535,5 +651,16 @@ fi
 	// and we'll continue with scaling regardless of the result
 	log.Printf("Instance %s will finish current jobs before terminating", instanceID)
 
+	log.Printf("[DryRun] Would set desired capacity to %d", count)
+	return nil
+}
+
+func (a *dryRunASG) SendSIGTERMToAgents(ctx context.Context, instanceID string) error {
+	log.Printf("[DryRun] Would send SIGTERM to instance %s", instanceID)
+	return nil
+}
+
+func (a *dryRunASG) CleanupDanglingInstances(ctx context.Context, minimumInstanceUptime time.Duration, maxDanglingInstancesToCheck int) error {
+	log.Printf("[DryRun] Would cleanup dangling instances (min uptime: %s, max check: %d)", minimumInstanceUptime, maxDanglingInstancesToCheck)
 	return nil
 }

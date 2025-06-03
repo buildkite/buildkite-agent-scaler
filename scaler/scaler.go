@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/aws/aws-sdk-go/service/ssm"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/buildkite/buildkite-agent-scaler/buildkite"
 )
 
@@ -45,8 +45,8 @@ type Scaler struct {
 	autoscaling interface {
 		Describe(ctx context.Context) (AutoscaleGroupDetails, error)
 		SetDesiredCapacity(ctx context.Context, count int64) error
-		SendSIGTERMToAgents(instanceID string) error
-		CleanupDanglingInstances() error
+		SendSIGTERMToAgents(ctx context.Context, instanceID string) error
+		CleanupDanglingInstances(ctx context.Context, minimumInstanceUptime time.Duration, maxDanglingInstancesToCheck int) error
 	}
 	bk interface {
 		GetAgentMetrics(ctx context.Context) (buildkite.AgentMetrics, error)
@@ -54,13 +54,16 @@ type Scaler struct {
 	metrics interface {
 		Publish(ctx context.Context, orgSlug, queue string, metrics map[string]int64) error
 	}
-	scaling                ScalingCalculator
-	scaleInParams          ScaleParams
-	scaleOutParams         ScaleParams
-	instanceBuffer         int
-	scaleOnlyAfterAllEvent bool
-	asgActivityCooldown    time.Duration
-	elasticCIMode          bool // Special mode for Elastic CI Stack
+	scaling                     ScalingCalculator
+	scaleInParams               ScaleParams
+	scaleOutParams              ScaleParams
+	instanceBuffer              int
+	scaleOnlyAfterAllEvent      bool
+	asgActivityCooldown         time.Duration
+	elasticCIMode               bool // Special mode for Elastic CI Stack
+	cfg                         aws.Config
+	minimumInstanceUptime       time.Duration
+	maxDanglingInstancesToCheck int
 }
 
 func NewScaler(client *buildkite.Client, cfg aws.Config, params Params) (*Scaler, error) {
@@ -76,6 +79,10 @@ func NewScaler(client *buildkite.Client, cfg aws.Config, params Params) (*Scaler
 		asgActivityCooldown:    params.ASGActivityCooldown,
 		elasticCIMode:          params.ElasticCIMode,
 	}
+
+	scaler.cfg = cfg
+	scaler.minimumInstanceUptime = params.MinimumInstanceUptime
+	scaler.maxDanglingInstancesToCheck = params.MaxDanglingInstancesToCheck
 
 	scaler.scaling = ScalingCalculator{
 		includeWaiting:        params.IncludeWaiting,
@@ -121,7 +128,7 @@ func (s *Scaler) Run(ctx context.Context) (time.Duration, error) {
 	// In Elastic CI mode, check for any dangling instances (where buildkite-agent is not running)
 	// This runs first, before getting metrics or scaling
 	if driver, ok := s.autoscaling.(*ASGDriver); ok && s.elasticCIMode {
-		if err := driver.CleanupDanglingInstances(); err != nil {
+		if err := driver.CleanupDanglingInstances(ctx, s.minimumInstanceUptime, s.maxDanglingInstancesToCheck); err != nil {
 			log.Printf("[Elastic CI Mode] Warning: Failed to cleanup dangling instances: %v", err)
 			// Continue with normal scaling operations even if dangling instance cleanup fails
 		}
@@ -335,7 +342,7 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 	instancesToTerminate := current.DesiredCount - desired
 
 	// In Elastic CI Mode, use graceful termination if we have instance IDs
-	if driver, ok := s.autoscaling.(*ASGDriver); ok && driver.ElasticCIMode && len(current.InstanceIDs) > 0 && instancesToTerminate > 0 {
+	if _, ok := s.autoscaling.(*ASGDriver); ok && s.elasticCIMode && len(current.InstanceIDs) > 0 && instancesToTerminate > 0 {
 		log.Printf("[Elastic CI Mode] Using graceful termination for %d instances", instancesToTerminate)
 
 		// Determine instances to terminate by sorting by launch time (oldest first)
@@ -350,14 +357,11 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 				LaunchTime time.Time
 			}
 
-			ec2Svc := ec2.New(driver.Sess)
-
-			// Convert to AWS string pointers for API call - using aws.StringSlice helper
-			instanceIDPtrs := aws.StringSlice(current.InstanceIDs)
+			ec2Svc := ec2.NewFromConfig(s.cfg)
 
 			instances := make([]instanceInfo, 0, len(current.InstanceIDs))
-			describeResult, err := ec2Svc.DescribeInstances(&ec2.DescribeInstancesInput{
-				InstanceIds: instanceIDPtrs,
+			describeResult, err := ec2Svc.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+				InstanceIds: current.InstanceIDs,
 			})
 
 			if err != nil {
@@ -408,7 +412,7 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 
 		sigTermErrors := 0
 		for _, instanceID := range instancesForTermination {
-			if err := driver.SendSIGTERMToAgents(instanceID); err != nil {
+			if err := s.autoscaling.SendSIGTERMToAgents(ctx, instanceID); err != nil {
 				log.Printf("⚠️  Failed to send SIGTERM to instance %s: %v", instanceID, err)
 				sigTermErrors++
 			} else {
@@ -429,15 +433,15 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 			log.Printf("[Elastic CI Mode] Single-instance ASG detected - checking if instance %s is a dangling instance", instanceID)
 
 			// Only consider direct termination for dangling instances
-			ssmSvc := ssm.New(driver.Sess)
-			ec2Svc := ec2.New(driver.Sess)
+			ssmClient := ssm.NewFromConfig(s.cfg)
+			ec2Client := ec2.NewFromConfig(s.cfg)
 
 			// Try to check if buildkite-agent is running via SSM
-			_, err := ssmSvc.SendCommand(&ssm.SendCommandInput{
-				InstanceIds:  []*string{aws.String(instanceID)},
+			_, err := ssmClient.SendCommand(ctx, &ssm.SendCommandInput{
+				InstanceIds:  []string{instanceID},
 				DocumentName: aws.String("AWS-RunShellScript"),
-				Parameters: map[string][]*string{
-					"commands": {aws.String("systemctl is-active buildkite-agent")},
+				Parameters: map[string][]string{
+					"commands": {"systemctl is-active buildkite-agent"},
 				},
 				Comment: aws.String("Check if buildkite-agent service is running"),
 			})
@@ -447,7 +451,7 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 				log.Printf("[Elastic CI Mode] Warning: Cannot check agent status, assuming dangling instance: %v", err)
 				log.Printf("[Elastic CI Mode] Directly terminating probable dangling instance")
 
-				if termErr := directlyTerminateInstance(ec2Svc, instanceID); termErr != nil {
+				if termErr := directlyTerminateInstance(ctx, ec2Client, instanceID); termErr != nil {
 					log.Printf("[Elastic CI Mode] Error: Failed to terminate: %v", termErr)
 				}
 			} else {
@@ -547,11 +551,10 @@ func (s *Scaler) LastScaleIn() time.Time {
 
 // directlyTerminateInstance terminates an EC2 instance directly via EC2 API
 // This is a helper function for dangling instance termination
-func directlyTerminateInstance(ec2Svc *ec2.EC2, instanceID string) error {
-	_, err := ec2Svc.TerminateInstances(&ec2.TerminateInstancesInput{
-		InstanceIds: []*string{aws.String(instanceID)},
+func directlyTerminateInstance(ctx context.Context, ec2Client *ec2.Client, instanceID string) error {
+	_, err := ec2Client.TerminateInstances(ctx, &ec2.TerminateInstancesInput{
+		InstanceIds: []string{instanceID},
 	})
-
 	if err != nil {
 		return err
 	}

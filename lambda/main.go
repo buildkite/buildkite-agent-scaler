@@ -118,7 +118,6 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 			Name:                              asgName,
 			Cfg:                               cfg,
 			MaxDescribeScalingActivitiesPages: maxDescribeScalingActivitiesPages,
-			MaxDanglingInstancesToCheck:       maxDanglingInstancesToCheck,
 		}
 
 		cctx, cancel := context.WithTimeout(ctx, asgActivityTimeoutDuration)
