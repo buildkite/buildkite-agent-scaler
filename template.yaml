@@ -219,7 +219,7 @@ Resources:
       Role: !If [ CreateRole, !GetAtt ExecutionRole.Arn, !Ref AutoscalingLambdaExecutionRole ]
       PermissionsBoundary: !If [ SetRolePermissionsBoundaryARN, !Ref RolePermissionsBoundaryARN, !Ref "AWS::NoValue" ]
       Timeout: 120
-      Handler: bootstrap
+      Handler: bootstrap-amd64
       Runtime: provided.al2
       Architectures:
         - x86_64
