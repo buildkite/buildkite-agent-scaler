@@ -18,13 +18,6 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 * Update CODEOWNERS [#208](https://github.com/buildkite/buildkite-agent-scaler/pull/208) ([karensawrey](https://github.com/karensawrey))
 * Create CODEOWNERS [#206](https://github.com/buildkite/buildkite-agent-scaler/pull/206) ([karensawrey](https://github.com/karensawrey))
 
-## [Unreleased]
-### Added
-- Experimental Elastic CI Mode (disabled by default)
-  * Agent availability monitoring to scale out when below threshold (default 90%)
-  * New `AVAILABILITY_THRESHOLD` parameter to control minimum agent availability (default 50% — with desired 4 agents per EC2, it'd mean 2 agent instances missing on average) 
-  * Graceful scale-in with SIGTERM for Elastic CI Mode, allowing instances to finish current jobs before terminating
-
 ## [1.9.1](https://github.com/buildkite/buildkite-agent-scaler/tree/1.9.1) (2025-01-20)
 [Full Changelog](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.9.0...1.9.1)
 

@@ -106,6 +106,7 @@ func NewScaler(client *buildkite.Client, cfg aws.Config, params Params) (*Scaler
 		ElasticCIMode:               params.ElasticCIMode,
 		MinimumInstanceUptime:       params.MinimumInstanceUptime,
 		MaxDanglingInstancesToCheck: params.MaxDanglingInstancesToCheck,
+		Name: params.AutoScalingGroupName,
 	}
 
 	if params.PublishCloudWatchMetrics {
@@ -216,6 +217,12 @@ func (s *Scaler) Run(ctx context.Context) (time.Duration, error) {
 		log.Printf("Scaling decision: need %d instances, have %d actual running instances (desired set to %d)",
 			desired, instanceCount, asg.DesiredCount)
 		return metrics.PollDuration, s.scaleOut(ctx, desired, asg)
+	if desired > asg.DesiredCount {
+		return metrics.PollDuration, s.scaleOut(ctx, desired, asg)
+	}
+
+	if asg.DesiredCount > desired {
+		return metrics.PollDuration, s.scaleIn(ctx, desired, asg)
 	}
 
 	if instanceCount > desired {
@@ -239,6 +246,7 @@ func (s *Scaler) Run(ctx context.Context) (time.Duration, error) {
 func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGroupDetails) error {
 	// In ElasticCIMode, we ignore DISABLE_SCALE_IN since we have safer scaling mechanisms
 	if s.scaleInParams.Disable && !s.elasticCIMode {
+	if s.scaleInParams.Disable {
 		return nil
 	}
 
@@ -463,6 +471,8 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 		if err := s.setDesiredCapacity(ctx, desired); err != nil {
 			return err
 		}
+	if err := s.setDesiredCapacity(ctx, desired); err != nil {
+		return err
 	}
 
 	s.scaleInParams.LastEvent = time.Now()
