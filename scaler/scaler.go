@@ -461,6 +461,12 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 				len(instancesForTermination))
 		}
 
+		log.Printf("[Elastic CI Mode] Updating ASG desired capacity to %d after sending SIGTERMs.", desired)
+		if err := s.setDesiredCapacity(ctx, desired); err != nil {
+			log.Printf("CRITICAL: [Elastic CI Mode] Failed to set desired capacity to %d after sending SIGTERMs: %v. ASG might replace terminated instances.", desired, err)
+
+		}
+
 		if current.DesiredCount <= 1 && len(current.InstanceIDs) == 1 {
 			instanceID := current.InstanceIDs[0]
 			log.Printf("[Elastic CI Mode] Single-instance ASG detected - checking if instance %s is a dangling instance", instanceID)
