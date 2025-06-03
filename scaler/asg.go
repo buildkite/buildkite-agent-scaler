@@ -433,7 +433,7 @@ func (a *ASGDriver) CleanupDanglingInstances(ctx context.Context, minimumInstanc
 		terminatedInCall, errInCall := a.checkAndTerminate(ctx, instancesForSSMCheck, ssmClient, ec2Client)
 		totalActuallyTerminated += terminatedInCall
 		// Only store the first error encountered during the process.
-		if errInCall != nil && firstErrorEncountered == nil {
+		if errInCall != nil {
 			firstErrorEncountered = errInCall
 			// Log the error but continue, as other instances might have been processed or other calls might succeed.
 			log.Printf("[Elastic CI Mode] Error during checkAndTerminate call: %v", errInCall)
@@ -464,10 +464,5 @@ func (a *dryRunASG) SendSIGTERMToAgents(ctx context.Context, instanceID string) 
 
 func (a *dryRunASG) CleanupDanglingInstances(ctx context.Context, minimumInstanceUptime time.Duration, maxDanglingInstancesToCheck int) error {
 	log.Printf("[DryRun] Would cleanup dangling instances (min uptime: %s, max check: %d)", minimumInstanceUptime, maxDanglingInstancesToCheck)
-func (a *dryRunASG) Describe(ctx context.Context) (AutoscaleGroupDetails, error) {
-	return AutoscaleGroupDetails{}, nil
-}
-
-func (a *dryRunASG) SetDesiredCapacity(ctx context.Context, count int64) error {
 	return nil
 }

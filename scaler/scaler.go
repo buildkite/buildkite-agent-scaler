@@ -106,7 +106,6 @@ func NewScaler(client *buildkite.Client, cfg aws.Config, params Params) (*Scaler
 		ElasticCIMode:               params.ElasticCIMode,
 		MinimumInstanceUptime:       params.MinimumInstanceUptime,
 		MaxDanglingInstancesToCheck: params.MaxDanglingInstancesToCheck,
-		Name: params.AutoScalingGroupName,
 	}
 
 	if params.PublishCloudWatchMetrics {
@@ -116,6 +115,14 @@ func NewScaler(client *buildkite.Client, cfg aws.Config, params Params) (*Scaler
 	}
 
 	return scaler, nil
+}
+
+func (s *Scaler) LastScaleIn() time.Time {
+	return s.scaleInParams.LastEvent
+}
+
+func (s *Scaler) LastScaleOut() time.Time {
+	return s.scaleOutParams.LastEvent
 }
 
 func (s *Scaler) Run(ctx context.Context) (time.Duration, error) {
@@ -214,11 +221,30 @@ func (s *Scaler) Run(ctx context.Context) (time.Duration, error) {
 	}
 
 	if desired > instanceCount {
-		log.Printf("Scaling decision: need %d instances, have %d actual running instances (desired set to %d)",
-			desired, instanceCount, asg.DesiredCount)
-		return metrics.PollDuration, s.scaleOut(ctx, desired, asg)
-	if desired > asg.DesiredCount {
-		return metrics.PollDuration, s.scaleOut(ctx, desired, asg)
+		log.Printf("Scaling decision: calculated desired %d instances. ASG current desired: %d, ASG actual running: %d (approx %d agents), Buildkite scheduled: %d, running: %d, waiting: %d",
+			desired, asg.DesiredCount, instanceCount, instanceCount*int64(s.scaling.agentsPerInstance), metrics.ScheduledJobs, metrics.RunningJobs, metrics.WaitingJobs)
+
+		if desired > asg.DesiredCount {
+			log.Printf(" Action: Scale out from %d to %d", asg.DesiredCount, desired)
+			return metrics.PollDuration, s.scaleOut(ctx, desired, asg)
+		} else if desired < asg.DesiredCount {
+			log.Printf(" Action: Scale in from %d to %d", asg.DesiredCount, desired)
+			return metrics.PollDuration, s.scaleIn(ctx, desired, asg)
+		} else {
+			log.Printf(" Action: No change needed. Desired capacity %d matches ASG desired %d.", desired, asg.DesiredCount)
+		}
+
+		// The following block handles a scenario where desired == asg.DesiredCount, but instanceCount might be different
+		// (e.g. instances still launching or terminating).
+		// If instanceCount > desired (and desired == asg.DesiredCount), it implies instances might be terminating slowly or stuck.
+		// If instanceCount < desired (and desired == asg.DesiredCount), it implies instances might be launching slowly.
+		// In these cases, no direct scaling action is taken here as the ASG is already set to the correct desired count.
+		if instanceCount > desired && asg.DesiredCount == desired {
+			log.Printf("INFO: Instance count (%d) > desired (%d), but ASG desired count (%d) already matches. ASG may be converging.", instanceCount, desired, asg.DesiredCount)
+		} else if instanceCount < desired && asg.DesiredCount == desired {
+			log.Printf("INFO: Instance count (%d) < desired (%d), but ASG desired count (%d) already matches. ASG may be converging.", instanceCount, desired, asg.DesiredCount)
+		}
+		return metrics.PollDuration, nil
 	}
 
 	if asg.DesiredCount > desired {
@@ -244,9 +270,8 @@ func (s *Scaler) Run(ctx context.Context) (time.Duration, error) {
 }
 
 func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGroupDetails) error {
-	// In ElasticCIMode, we ignore DISABLE_SCALE_IN since we have safer scaling mechanisms
+	// In ElasticCIMode, DISABLE_SCALE_IN is ignored (handled by s.elasticCIMode check below)
 	if s.scaleInParams.Disable && !s.elasticCIMode {
-	if s.scaleInParams.Disable {
 		return nil
 	}
 
@@ -466,17 +491,16 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 				log.Printf("[Elastic CI Mode] Instance appears responsive, not terminating directly")
 			}
 		}
+		s.scaleInParams.LastEvent = time.Now()
+		return nil
 	} else {
 		log.Printf("Using standard scale-in (Elastic CI Mode disabled or no instances to terminate)")
 		if err := s.setDesiredCapacity(ctx, desired); err != nil {
 			return err
 		}
-	if err := s.setDesiredCapacity(ctx, desired); err != nil {
-		return err
+		s.scaleInParams.LastEvent = time.Now()
+		return nil
 	}
-
-	s.scaleInParams.LastEvent = time.Now()
-	return nil
 }
 
 func (s *Scaler) scaleOut(ctx context.Context, desired int64, current AutoscaleGroupDetails) error {
@@ -549,14 +573,6 @@ func (s *Scaler) setDesiredCapacity(ctx context.Context, desired int64) error {
 
 	log.Printf("↳ Set desired to %d (took %v)", desired, time.Since(t))
 	return nil
-}
-
-func (s *Scaler) LastScaleOut() time.Time {
-	return s.scaleOutParams.LastEvent
-}
-
-func (s *Scaler) LastScaleIn() time.Time {
-	return s.scaleInParams.LastEvent
 }
 
 // directlyTerminateInstance terminates an EC2 instance directly via EC2 API
