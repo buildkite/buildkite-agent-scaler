@@ -135,9 +135,25 @@ func (sc *ScalingCalculator) DesiredCount(metrics *buildkite.AgentMetrics, asg *
 			enoughAgentsOnline := availabilityPercentage >= minPercentage
 
 			if !enoughAgentsOnline {
-				desired = max(desired, asg.DesiredCount+1)
-				log.Printf("↳ 📈 [Elastic CI Mode] Adding instance to improve availability: %d -> %d (%.2f%% < %.2f%%)",
-					asg.DesiredCount, desired, availabilityPercentage*100, minPercentage*100)
+				currentJobBasedDesired := desired // Capture 'desired' before modification
+				
+				availabilityTarget := asg.DesiredCount
+				if asg.DesiredCount == 0 {
+					// If ASG desires 0, but availability is low (e.g. 0 actual agents from 0 desired),
+					// we ensure at least 1 instance is targeted to recover.
+					availabilityTarget = 1
+				}
+				// If asg.DesiredCount > 0, availabilityTarget remains asg.DesiredCount.
+				// This means if jobs need fewer, we still aim for what ASG already wants,
+				// but we don't add an *extra* +1 on top of asg.DesiredCount.
+
+				if availabilityTarget > currentJobBasedDesired {
+					desired = availabilityTarget
+					log.Printf("↳ 📈 [Elastic CI Mode] Boosting desired instances for low availability: %d -> %d. (ASG Desired: %d, Job-based need: %d, Availability: %.2f%% < Min Required: %.2f%%)",
+						currentJobBasedDesired, desired, asg.DesiredCount, currentJobBasedDesired, availabilityPercentage*100, minPercentage*100)
+				}
+				// If availabilityTarget <= currentJobBasedDesired, 'desired' (based on jobs) is already sufficient
+				// or higher than what this availability rule would set, so no change or log from this specific rule.
 			} else {
 				log.Printf("↳ ✅ [Elastic CI Mode] Not adding instance despite low availability - sufficient percentage of agents online (%.2f%% >= %.2f%%)",
 					availabilityPercentage*100, minPercentage*100)
