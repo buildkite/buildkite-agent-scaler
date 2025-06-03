@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	activitySucessfulStatusCode             = "Successful"
+	activitySucessfulStatusCode           = "Successful"
 	userRequestForChangingDesiredCapacity = "a user request explicitly set group desired capacity changing the desired capacity"
 	scalingOutKey                         = "increasing the capacity"
 	shrinkingKey                          = "shrinking the capacity"
