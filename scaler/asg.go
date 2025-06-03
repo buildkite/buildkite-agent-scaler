@@ -8,21 +8,20 @@ import (
 	"strings"
 	"time"
 
-	"sort"
-
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/autoscaling"
 	"github.com/aws/aws-sdk-go-v2/service/autoscaling/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
-	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	ec2Types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
-	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/aws/aws-sdk-go/service/ssm"
+	ssmTypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 )
 
 const (
-	activitySucessfulStatusCode           = "Successful"
+	activitySucessfulStatusCode             = "Successful"
 	userRequestForChangingDesiredCapacity = "a user request explicitly set group desired capacity changing the desired capacity"
+	scalingOutKey                         = "increasing the capacity"
+	shrinkingKey                          = "shrinking the capacity"
 )
 
 type AutoscaleGroupDetails struct {
@@ -45,23 +44,23 @@ type ASGDriver struct {
 
 // waitForSSMReady blocks until the SSM agent on instanceID reports PingStatus="Online",
 // or until timeout elapses.
-func (a *ASGDriver) waitForSSMReady(instanceID string, timeout time.Duration) error {
-	ssmSvc := ssm.New(a.Sess)
+func (a *ASGDriver) waitForSSMReady(ctx context.Context, instanceID string, timeout time.Duration) error {
+	ssmSvc := ssm.NewFromConfig(a.Cfg)
 	deadline := time.Now().Add(timeout)
 
 	for time.Now().Before(deadline) {
-		resp, err := ssmSvc.DescribeInstanceInformation(&ssm.DescribeInstanceInformationInput{
-			Filters: []*ssm.InstanceInformationStringFilter{
+		resp, err := ssmSvc.DescribeInstanceInformation(ctx, &ssm.DescribeInstanceInformationInput{
+			Filters: []ssmTypes.InstanceInformationStringFilter{
 				{
 					Key:    aws.String("InstanceIds"),
-					Values: []*string{aws.String(instanceID)},
+					Values: []string{instanceID},
 				},
 			},
 		})
 		if err != nil {
 			log.Printf("[SSM] DescribeInstanceInformation failed for %s: %v", instanceID, err)
 		} else if len(resp.InstanceInformationList) > 0 &&
-			aws.StringValue(resp.InstanceInformationList[0].PingStatus) == "Online" {
+			resp.InstanceInformationList[0].PingStatus == ssmTypes.PingStatusOnline {
 			return nil
 		}
 
@@ -71,110 +70,15 @@ func (a *ASGDriver) waitForSSMReady(instanceID string, timeout time.Duration) er
 	return fmt.Errorf("timed out waiting for SSM agent to become ready on %s", instanceID)
 }
 
-// CleanupDanglingInstances checks for instances where buildkite-agent service is not running
-// and terminates them. This is only enabled in ElasticCIMode.
-// It will check up to MaxDanglingInstancesToCheck oldest instances for dangling instances (to limit API calls)
-// and only considers instances with uptime >= MinimumInstanceUptime.
-// Note: MaxDanglingInstancesToCheck is only used for dangling instance scanning, not for normal scale-in operations.
-func (a *ASGDriver) CleanupDanglingInstances() error {
-	if !a.ElasticCIMode {
-		return nil // Only perform dangling instance cleanup in Elastic CI Mode
-	}
-
-	// Use default value if not set
-	maxToCheck := a.MaxDanglingInstancesToCheck
-	if maxToCheck <= 0 {
-		maxToCheck = 5
-	}
-
-	log.Printf("[Elastic CI Mode] Checking for dangling instances in ASG %s", a.Name)
-
-	asgDetails, err := a.Describe()
-	if err != nil {
-		return fmt.Errorf("failed to describe ASG for dangling instance cleanup: %v", err)
-	}
-
-	if len(asgDetails.InstanceIDs) == 0 {
-		return nil
-	}
-
-	ssmSvc := ssm.New(a.Sess)
-	ec2Svc := ec2.New(a.Sess)
-
-	type instanceInfo struct {
-		ID         string
-		LaunchTime time.Time
-	}
-	instances := make([]instanceInfo, 0, len(asgDetails.InstanceIDs))
-	describeResult, err := ec2Svc.DescribeInstances(&ec2.DescribeInstancesInput{
-		InstanceIds: aws.StringSlice(asgDetails.InstanceIDs),
-	})
-
-	if err != nil {
-		log.Printf("[Elastic CI Mode] Warning: Could not get instance launch times: %v", err)
-		// Fallback to raw IDs if needed
-		instancesToCheck := asgDetails.InstanceIDs
-		if len(instancesToCheck) > maxToCheck {
-			instancesToCheck = instancesToCheck[:maxToCheck]
-		}
-		return a.checkAndTerminate(instancesToCheck, ssmSvc, ec2Svc, asgDetails)
-	}
-
-	for _, reservation := range describeResult.Reservations {
-		for _, inst := range reservation.Instances {
-			if inst.InstanceId != nil && inst.LaunchTime != nil {
-				instances = append(instances, instanceInfo{ID: *inst.InstanceId, LaunchTime: *inst.LaunchTime})
-			}
-		}
-	}
-
-	cutoff := time.Now().Add(-a.MinimumInstanceUptime)
-	eligible := make([]instanceInfo, 0, len(instances))
-	skipped := make([]string, 0)
-	for _, inst := range instances {
-		if inst.LaunchTime.Before(cutoff) {
-			eligible = append(eligible, inst)
-		} else {
-			skipped = append(skipped, inst.ID)
-		}
-	}
-
-	if len(skipped) > 0 {
-		log.Printf("[Elastic CI Mode] Skipping %d instances with uptime < %s: %v", len(skipped), a.MinimumInstanceUptime, skipped)
-	}
-
-	if len(eligible) == 0 {
-		return nil
-	}
-
-	// Sort by launch time (oldest first)
-	sort.Slice(eligible, func(i, j int) bool {
-		return eligible[i].LaunchTime.Before(eligible[j].LaunchTime)
-	})
-
-	limit := maxToCheck
-	if len(eligible) < limit {
-		limit = len(eligible)
-	}
-	instancesToCheck := make([]string, limit)
-	for i := 0; i < limit; i++ {
-		instancesToCheck[i] = eligible[i].ID
-	}
-
-	log.Printf("[Elastic CI Mode] Checking up to %d oldest eligible instances: %v", limit, instancesToCheck)
-
-	return a.checkAndTerminate(instancesToCheck, ssmSvc, ec2Svc, asgDetails)
-}
-
 // checkAndTerminate runs the existing SSM check + terminate logic on a slice of instance IDs.
 // The number of instances to check is already limited by the caller.
 func (a *ASGDriver) checkAndTerminate(
+	ctx context.Context,
 	instances []string,
-	ssmSvc *ssm.SSM,
-	ec2Svc *ec2.EC2,
-	asgDetails AutoscaleGroupDetails,
-) error {
-	terminated := 0
+	ssmSvc *ssm.Client,
+	ec2Svc *ec2.Client,
+) (terminatedCount int, firstError error) {
+	// terminatedCount is a named return value, initialized to 0 by default.
 
 	for _, instanceID := range instances {
 
@@ -215,73 +119,102 @@ esac
 `
 
 		checkInput := &ssm.SendCommandInput{
-			InstanceIds:  []*string{aws.String(instanceID)},
+			InstanceIds:  []string{instanceID},
 			DocumentName: aws.String("AWS-RunShellScript"),
-			Parameters: map[string][]*string{
-				"commands": {aws.String(checkCommand)},
+			Parameters: map[string][]string{
+				"commands": {checkCommand},
 			},
 			Comment: aws.String("Check if buildkite-agent service is running"),
 		}
 
-		if err := a.waitForSSMReady(instanceID, 2*time.Minute); err != nil {
-			log.Printf("[Elastic CI Mode] SSM agent never came online for %s: %v; skipping", instanceID, err)
-			continue
+		if err := a.waitForSSMReady(ctx, instanceID, 2*time.Minute); err != nil {
+			log.Printf("[Elastic CI Mode] SSM agent never came online for %s: %v; skipping check for this instance", instanceID, err)
+			if firstError == nil {
+				firstError = fmt.Errorf("SSM agent not ready for %s: %w", instanceID, err)
+			}
+			continue // to the next instance in the 'instances' slice
 		}
 
-		checkOutput, err := ssmSvc.SendCommand(checkInput)
+		checkOutput, err := ssmSvc.SendCommand(ctx, checkInput)
 		if err != nil {
 			log.Printf("[Elastic CI Mode] Warning: Could not send check command to instance %s: %v", instanceID, err)
-			continue
+			if firstError == nil {
+				firstError = fmt.Errorf("SendCommand failed for %s: %w", instanceID, err)
+			}
+			continue // to the next instance
 		}
 
-		time.Sleep(3 * time.Second)
+		time.Sleep(3 * time.Second) // Give SSM time to run and report
 
-		checkResult, err := ssmSvc.GetCommandInvocation(&ssm.GetCommandInvocationInput{
+		checkResultInput := &ssm.GetCommandInvocationInput{
 			CommandId:  checkOutput.Command.CommandId,
 			InstanceId: aws.String(instanceID),
-		})
-
-		if err != nil {
-			log.Printf("[Elastic CI Mode] Warning: Could not get check result for instance %s: %v", instanceID, err)
-			continue
 		}
 
-		// If command failed or agent service isn't running
-		if checkResult.Status != nil && (*checkResult.Status == "Failed" ||
-			(*checkResult.Status == "Success" && strings.Contains(*checkResult.StandardOutputContent, "NOT_RUNNING"))) {
+		var checkCmdResult *ssm.GetCommandInvocationOutput
+		// Retry GetCommandInvocation a few times as it might not be immediately available
+		for i := 0; i < 3; i++ {
+			checkCmdResult, err = ssmSvc.GetCommandInvocation(ctx, checkResultInput)
+			if err == nil && checkCmdResult.Status != ssmTypes.CommandInvocationStatusPending && checkCmdResult.Status != ssmTypes.CommandInvocationStatusInProgress {
+				break
+			}
+			if err != nil {
+				log.Printf("[Elastic CI Mode] Retrying GetCommandInvocation for %s (attempt %d): %v", instanceID, i+1, err)
+			}
+			time.Sleep(2 * time.Second)
+		}
 
-			// Skip if it's already been marked for termination or is activating
-			if strings.Contains(*checkResult.StandardOutputContent, "MARKER_EXISTS") ||
-				strings.Contains(*checkResult.StandardOutputContent, "ACTIVATING") {
-				log.Printf("[Elastic CI Mode] ℹ️ Instance %s has buildkite-agent in transition state, not a dangling instance", instanceID)
-				if checkResult.StandardOutputContent != nil {
-					log.Printf("[Elastic CI Mode] Service status details: %s", *checkResult.StandardOutputContent)
+		if err != nil {
+			log.Printf("[Elastic CI Mode] Warning: Could not get check result for instance %s after retries: %v", instanceID, err)
+			if firstError == nil {
+				firstError = fmt.Errorf("GetCommandInvocation failed for %s: %w", instanceID, err)
+			}
+			continue // to the next instance
+		}
+
+		// If command failed or agent service isn't running (based on script's exit code or output)
+		if checkCmdResult.Status == ssmTypes.CommandInvocationStatusFailed ||
+			(checkCmdResult.Status == ssmTypes.CommandInvocationStatusSuccess && checkCmdResult.StandardOutputContent != nil && strings.Contains(*checkCmdResult.StandardOutputContent, "NOT_RUNNING")) {
+
+			// Skip if it's already been marked for termination or is activating (based on script's output)
+			if checkCmdResult.StandardOutputContent != nil &&
+				(strings.Contains(*checkCmdResult.StandardOutputContent, "MARKER_EXISTS") || strings.Contains(*checkCmdResult.StandardOutputContent, "ACTIVATING")) {
+				log.Printf("[Elastic CI Mode] ℹ️ Instance %s has buildkite-agent in transition state (marker exists or activating), not a dangling instance", instanceID)
+				if checkCmdResult.StandardOutputContent != nil {
+					log.Printf("[Elastic CI Mode] Service status details for %s: %s", instanceID, *checkCmdResult.StandardOutputContent)
 				}
-				continue
+				continue // to the next instance
 			}
 
-			log.Printf("[Elastic CI Mode] 🧟 Found dangling instance %s - buildkite-agent service is not running", instanceID)
-			if checkResult.StandardOutputContent != nil {
-				log.Printf("[Elastic CI Mode] Service status: %s", *checkResult.StandardOutputContent)
+			log.Printf("[Elastic CI Mode] 🧟 Found dangling instance %s - buildkite-agent service is not running or check command failed", instanceID)
+			if checkCmdResult.StandardOutputContent != nil {
+				log.Printf("[Elastic CI Mode] Service status for %s: %s", instanceID, *checkCmdResult.StandardOutputContent)
 			}
 
-			_, err = ec2Svc.TerminateInstances(&ec2.TerminateInstancesInput{
-				InstanceIds: []*string{aws.String(instanceID)},
+			_, termErr := ec2Svc.TerminateInstances(ctx, &ec2.TerminateInstancesInput{
+				InstanceIds: []string{instanceID},
 			})
 
-			if err != nil {
-				log.Printf("[Elastic CI Mode] Error: Failed to terminate dangling instance %s: %v", instanceID, err)
+			if termErr != nil {
+				log.Printf("[Elastic CI Mode] Error: Failed to terminate dangling instance %s: %v", instanceID, termErr)
+				if firstError == nil {
+					firstError = fmt.Errorf("TerminateInstances failed for %s: %w", instanceID, termErr)
+				}
 			} else {
-				log.Printf("[Elastic CI Mode] Successfully terminated dangling instance %s via EC2 API", instanceID)
-				terminated++
+				log.Printf("[Elastic CI Mode] Successfully initiated termination for dangling instance %s via EC2 API", instanceID)
+				terminatedCount++
 			}
+		} else if checkCmdResult.Status != ssmTypes.CommandInvocationStatusSuccess {
+			log.Printf("[Elastic CI Mode] Agent status check command for %s did not succeed (status: %s). Output: %s", instanceID, checkCmdResult.Status, aws.ToString(checkCmdResult.StandardOutputContent))
+		} else {
+			log.Printf("[Elastic CI Mode] Agent on instance %s appears to be running normally. Status: %s. Output: %s", instanceID, checkCmdResult.Status, aws.ToString(checkCmdResult.StandardOutputContent))
 		}
 	}
 
-	return nil
+	return terminatedCount, firstError
 }
 
-func (a *ASGDriver) Describe() (AutoscaleGroupDetails, error) {
+func (a *ASGDriver) Describe(ctx context.Context) (AutoscaleGroupDetails, error) {
 	log.Printf("Collecting AutoScaling details for ASG %q", a.Name)
 
 	svc := autoscaling.NewFromConfig(a.Cfg)
@@ -359,7 +292,7 @@ func (a *ASGDriver) GetAutoscalingActivities(ctx context.Context, nextToken *str
 		AutoScalingGroupName: aws.String(a.Name),
 		NextToken:            nextToken,
 	}
-	return svc.DescribeScalingActivities(context.TODO(), input)
+	return svc.DescribeScalingActivities(ctx, input)
 }
 
 func (a *ASGDriver) GetLastScalingInAndOutActivity(ctx context.Context, findScaleOut, findScaleIn bool) (*types.Activity, *types.Activity, error) {
@@ -418,6 +351,12 @@ func (a *ASGDriver) SendSIGTERMToAgents(ctx context.Context, instanceID string) 
 	command := "sudo systemctl stop buildkite-agent.service || sudo /opt/buildkite-agent/bin/buildkite-agent stop --signal SIGTERM"
 	log.Printf("Sending SIGTERM to instance %s via SSM Run Command: %s", instanceID, command)
 
+	// Wait for SSM agent to be ready before sending command
+	if err := a.waitForSSMReady(ctx, instanceID, 30*time.Second); err != nil {
+		log.Printf("SSM agent not ready on instance %s, cannot send SIGTERM: %v", instanceID, err)
+		return err
+	}
+
 	_, err := ssmClient.SendCommand(ctx, &ssm.SendCommandInput{
 		InstanceIds:  []string{instanceID},
 		DocumentName: aws.String("AWS-RunShellScript"),
@@ -455,73 +394,56 @@ func (a *ASGDriver) CleanupDanglingInstances(ctx context.Context, minimumInstanc
 		return fmt.Errorf("failed to describe instances in ASG %s: %w", a.Name, err)
 	}
 
-	var instancesToCheck []ec2types.Instance
+	var instancesToConsiderChecking []ec2Types.Instance
 	now := time.Now()
 	for _, reservation := range descInstancesOutput.Reservations {
 		for _, instance := range reservation.Instances {
 			if instance.LaunchTime != nil && now.Sub(*instance.LaunchTime) >= minimumInstanceUptime {
-				if instance.State != nil && instance.State.Name == ec2types.InstanceStateNameRunning {
-					instancesToCheck = append(instancesToCheck, instance)
+				if instance.State != nil && instance.State.Name == ec2Types.InstanceStateNameRunning {
+					instancesToConsiderChecking = append(instancesToConsiderChecking, instance)
 				}
 			}
 		}
 	}
 
-	if len(instancesToCheck) == 0 {
-		log.Printf("[Elastic CI Mode] No running instances older than %s in ASG %s.", minimumInstanceUptime, a.Name)
+	if len(instancesToConsiderChecking) == 0 {
+		log.Printf("[Elastic CI Mode] No running instances older than %s in ASG %s to consider for dangling check.", minimumInstanceUptime, a.Name)
 		return nil
 	}
 
 	// Sort instances by launch time (oldest first) to prioritize checking older ones
-	sort.SliceStable(instancesToCheck, func(i, j int) bool {
-		return instancesToCheck[i].LaunchTime.Before(*instancesToCheck[j].LaunchTime)
+	sort.SliceStable(instancesToConsiderChecking, func(i, j int) bool {
+		return instancesToConsiderChecking[i].LaunchTime.Before(*instancesToConsiderChecking[j].LaunchTime)
 	})
 
 	checkedCount := 0
-	terminatedCount := 0
-	for i := 0; i < len(instancesToCheck) && (maxDanglingInstancesToCheck <= 0 || checkedCount < maxDanglingInstancesToCheck); i++ {
-		instance := instancesToCheck[i]
+	totalActuallyTerminated := 0
+	var firstErrorEncountered error
+
+	instancesForSSMCheck := make([]string, 0)
+	for i := 0; i < len(instancesToConsiderChecking) && (maxDanglingInstancesToCheck <= 0 || checkedCount < maxDanglingInstancesToCheck); i++ {
+		instance := instancesToConsiderChecking[i]
 		instanceID := *instance.InstanceId
+		instancesForSSMCheck = append(instancesForSSMCheck, instanceID)
 		checkedCount++
+	}
 
-		log.Printf("[Elastic CI Mode] Checking agent status on instance %s (launched: %s)", instanceID, instance.LaunchTime.Format(time.RFC3339))
-		output, err := ssmClient.SendCommand(ctx, &ssm.SendCommandInput{
-			InstanceIds:  []string{instanceID},
-			DocumentName: aws.String("AWS-RunShellScript"),
-			Parameters:   map[string][]string{"commands": {"systemctl is-active buildkite-agent"}},
-			Comment:      aws.String("Check if buildkite-agent service is running"),
-		})
-
-		terminateInstance := false
-		if err != nil {
-			log.Printf("[Elastic CI Mode] Warning: SSM SendCommand failed for instance %s: %v. Assuming dangling.", instanceID, err)
-			terminateInstance = true
-		} else {
-			// A proper check would involve waiting for command completion and checking output.
-			// For simplicity here, we'll assume if SendCommand succeeds, we'd need to inspect its output.
-			// Let's assume for now that a successful SendCommand means the agent *might* be running, so we don't terminate.
-			// A more robust solution would use ssm.GetCommandInvocation to check the actual command status and output.
-			// For this example, we'll be conservative and only terminate if SendCommand itself fails.
-			// To actually terminate based on 'is-active' status, one would need to parse 'output.Command.StatusDetails'
-			// after waiting for the command to complete.
-			log.Printf("[Elastic CI Mode] SSM SendCommand succeeded for %s (CommandID: %s). Further checks on command output needed to confirm agent status.", instanceID, *output.Command.CommandId)
-		}
-
-		if terminateInstance {
-			log.Printf("[Elastic CI Mode] Terminating dangling instance %s", instanceID)
-			_, termErr := ec2Client.TerminateInstances(ctx, &ec2.TerminateInstancesInput{
-				InstanceIds: []string{instanceID},
-			})
-			if termErr != nil {
-				log.Printf("[Elastic CI Mode] Error terminating instance %s: %v", instanceID, termErr)
-			} else {
-				log.Printf("[Elastic CI Mode] Successfully initiated termination for instance %s", instanceID)
-				terminatedCount++
-			}
+	if len(instancesForSSMCheck) > 0 {
+		log.Printf("[Elastic CI Mode] Performing detailed SSM check for %d candidate instance(s): %v", len(instancesForSSMCheck), instancesForSSMCheck)
+		terminatedInCall, errInCall := a.checkAndTerminate(ctx, instancesForSSMCheck, ssmClient, ec2Client)
+		totalActuallyTerminated += terminatedInCall
+		// Only store the first error encountered during the process.
+		if errInCall != nil && firstErrorEncountered == nil {
+			firstErrorEncountered = errInCall
+			// Log the error but continue, as other instances might have been processed or other calls might succeed.
+			log.Printf("[Elastic CI Mode] Error during checkAndTerminate call: %v", errInCall)
 		}
 	}
-	log.Printf("[Elastic CI Mode] Dangling instance check complete for ASG %s. Checked: %d, Terminated: %d", a.Name, checkedCount, terminatedCount)
-	return nil
+
+	log.Printf("[Elastic CI Mode] Dangling instance check complete for ASG %s. Considered: %d, Actually Sent for SSM Check: %d, Terminated this run: %d",
+		a.Name, len(instancesToConsiderChecking), checkedCount, totalActuallyTerminated)
+
+	return firstErrorEncountered
 }
 
 func (a *dryRunASG) Describe(ctx context.Context) (AutoscaleGroupDetails, error) {
@@ -531,127 +453,7 @@ func (a *dryRunASG) Describe(ctx context.Context) (AutoscaleGroupDetails, error)
 	}, nil
 }
 
-func (a *dryRunASG) SetDesiredCapacity(count int64) error {
-	return nil
-}
-
-func (a *dryRunASG) SendSIGTERMToAgents(instanceID string) error {
-	log.Printf("DRY RUN: Would send SIGTERM to buildkite agents on instance %s", instanceID)
-	return nil
-}
-
-func (a *dryRunASG) CleanupDanglingInstances() error {
-	log.Printf("DRY RUN: Would check for and cleanup dangling instances")
-	return nil
-}
-
-func (a *ASGDriver) SendSIGTERMToAgents(instanceID string) error {
-	log.Printf("[Elastic CI Mode] Sending graceful termination signal to instance %s", instanceID)
-
-	// Check if the instance is in a proper state for receiving commands
-	ec2Svc := ec2.New(a.Sess)
-	instanceStatus, err := ec2Svc.DescribeInstanceStatus(&ec2.DescribeInstanceStatusInput{
-		InstanceIds: []*string{aws.String(instanceID)},
-	})
-	if err != nil {
-		log.Printf("Warning: Could not check instance status: %v", err)
-	} else if len(instanceStatus.InstanceStatuses) > 0 {
-		status := *instanceStatus.InstanceStatuses[0].InstanceState.Name
-		if status != "running" {
-			log.Printf("Instance %s is in %s state, skipping graceful termination", instanceID, status)
-			return nil // Just skip graceful termination for non-running instances
-		}
-	}
-
-	ssmSvc := ssm.New(a.Sess)
-
-	// First check if this instance already has a termination marker
-	// This makes SIGTERM idempotent, so even if we're called multiple times
-	// across different Lambda invocations, we only send one SIGTERM
-	checkMarkerCommand := `
-#!/bin/bash
-if [ -f /tmp/buildkite-agent-termination-marker ]; then
-  echo "MARKER_EXISTS"
-  # Echo the contents/timestamp for debugging
-  cat /tmp/buildkite-agent-termination-marker
-  exit 0
-else
-  echo "NO_MARKER"
-  exit 1
-fi
-`
-
-	checkMarkerInput := &ssm.SendCommandInput{
-		InstanceIds:  []*string{aws.String(instanceID)},
-		DocumentName: aws.String("AWS-RunShellScript"),
-		Parameters: map[string][]*string{
-			"commands": {aws.String(checkMarkerCommand)},
-		},
-		Comment: aws.String("Check if instance already has termination marker"),
-	}
-
-	checkOutput, err := ssmSvc.SendCommand(checkMarkerInput)
-	if err != nil {
-		log.Printf("Warning: Could not check termination marker: %v", err)
-	} else {
-		time.Sleep(2 * time.Second)
-
-		checkResult, err := ssmSvc.GetCommandInvocation(&ssm.GetCommandInvocationInput{
-			CommandId:  checkOutput.Command.CommandId,
-			InstanceId: aws.String(instanceID),
-		})
-
-		if err == nil && checkResult.Status != nil && *checkResult.Status == "Success" &&
-			checkResult.StandardOutputContent != nil && strings.Contains(*checkResult.StandardOutputContent, "MARKER_EXISTS") {
-			log.Printf("[Elastic CI Mode] ⚠️ Instance %s already received SIGTERM (marker exists), not sending again", instanceID)
-			log.Printf("[Elastic CI Mode] Marker details: %s", *checkResult.StandardOutputContent)
-			return nil
-		}
-	}
-
-	command := `
-#!/bin/bash
-set -euo pipefail
-
-echo "Starting graceful termination for Elastic CI Stack at $(date)"
-
-# Create a marker file to prevent multiple SIGTERMs
-echo "Termination requested at $(date)" > /tmp/buildkite-agent-termination-marker
-
-# Use the stop-agent-gracefully script that comes with Elastic CI Stack
-if [ -f /usr/local/bin/stop-agent-gracefully ]; then
-  echo "Using stop-agent-gracefully script"
-  /usr/local/bin/stop-agent-gracefully "autoscaling:EC2_INSTANCE_TERMINATING"
-  exit $?
-else
-  echo "WARNING: stop-agent-gracefully script not found - this doesn't appear to be an Elastic CI Stack instance"
-  exit 1
-fi
-`
-
-	input := &ssm.SendCommandInput{
-		InstanceIds:  []*string{aws.String(instanceID)},
-		DocumentName: aws.String("AWS-RunShellScript"),
-		Parameters: map[string][]*string{
-			"commands": {aws.String(command)},
-		},
-		Comment: aws.String("Elastic CI Stack: Graceful termination of buildkite-agent"),
-	}
-
-	output, err := ssmSvc.SendCommand(input)
-	if err != nil {
-		log.Printf("Warning: Failed to send graceful termination command: %v", err)
-		return nil
-	}
-
-	commandID := *output.Command.CommandId
-	log.Printf("Started graceful termination for instance %s (CommandID: %s)", instanceID, commandID)
-
-	// Don't wait for completion - the script will handle graceful shutdown
-	// and we'll continue with scaling regardless of the result
-	log.Printf("Instance %s will finish current jobs before terminating", instanceID)
-
-	log.Printf("[DryRun] Would set desired capacity to %d", count)
+func (a *dryRunASG) SetDesiredCapacity(ctx context.Context, count int64) error {
 	return nil
 }
 
