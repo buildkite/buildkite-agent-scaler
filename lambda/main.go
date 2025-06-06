@@ -56,7 +56,17 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 	}
 
 	asgActivityTimeoutDuration := EnvDuration("ASG_ACTIVITY_TIMEOUT", 10*time.Second)
-	scaleInCooldownPeriod := EnvDuration("SCALE_IN_COOLDOWN_PERIOD", 0)
+	// Only set default scale in cooldown period to 1 hour when elasticCIMode is true
+	elasticCIMode := EnvBool("ELASTIC_CI_MODE") // Special mode for Elastic CI Stack
+
+	var defaultScaleInCooldown time.Duration
+	if elasticCIMode {
+		defaultScaleInCooldown = 1 * time.Hour
+	} else {
+		defaultScaleInCooldown = 0
+	}
+	scaleInCooldownPeriod := EnvDuration("SCALE_IN_COOLDOWN_PERIOD", defaultScaleInCooldown)
+
 	scaleInFactor := math.Abs(EnvFloat("SCALE_IN_FACTOR"))
 	scaleOutCooldownPeriod := EnvDuration("SCALE_OUT_COOLDOWN_PERIOD", 0)
 	scaleOutFactor := math.Abs(EnvFloat("SCALE_OUT_FACTOR"))
@@ -64,6 +74,12 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 	includeWaiting := EnvBool("INCLUDE_WAITING")
 	instanceBuffer := EnvInt("INSTANCE_BUFFER", 0)
 	maxDescribeScalingActivitiesPages := EnvInt("MAX_DESCRIBE_SCALING_ACTIVITIES_PAGES", -1)
+	// Below settings only applicable when elasticCIMode is enabled!
+	availabilityThreshold := EnvFloat("AVAILABILITY_THRESHOLD")   // Default to 90% in scaling calculator
+	minAgentsPercentage := EnvFloat("MIN_AGENTS_PERCENTAGE", 0.5) // Default to 50% in scaling calculator
+	minimumInstanceUptime := EnvDuration("DANGLING_CHECK_MINIMUM_INSTANCE_UPTIME", 1*time.Hour)
+	maxDanglingInstancesToCheck := EnvInt("MAX_DANGLING_INSTANCES_TO_CHECK", 5) // Maximum number of instances to check for dangling instances (only used for dangling instance scanning, not for normal scale-in)
+	// Above settings only applicable when elasticCIMode is enabled!
 
 	publishCloudWatchMetrics := EnvBool("CLOUDWATCH_METRICS")
 	if publishCloudWatchMetrics {
@@ -151,6 +167,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 	}
 
 	client := buildkite.NewClient(token, buildkiteAgentEndpoint)
+
 	params := scaler.Params{
 		BuildkiteQueue:       buildkiteQueue,
 		AutoScalingGroupName: asgName,
@@ -168,9 +185,14 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 			LastEvent:      lastScaleOut,
 			Disable:        disableScaleOut,
 		},
-		InstanceBuffer:           instanceBuffer,
-		ScaleOnlyAfterAllEvent:   scaleOnlyAfterAllEvent,
-		PublishCloudWatchMetrics: publishCloudWatchMetrics,
+		InstanceBuffer:              instanceBuffer,
+		ScaleOnlyAfterAllEvent:      scaleOnlyAfterAllEvent,
+		PublishCloudWatchMetrics:    publishCloudWatchMetrics,
+		AvailabilityThreshold:       availabilityThreshold,
+		MinAgentsPercentage:         minAgentsPercentage,
+		ElasticCIMode:               elasticCIMode,
+		MinimumInstanceUptime:       minimumInstanceUptime,
+		MaxDanglingInstancesToCheck: maxDanglingInstancesToCheck,
 	}
 
 	scaler, err := scaler.NewScaler(client, cfg, params)

@@ -10,7 +10,7 @@ In practice, we've seen 300% faster initial scale-ups with this lambda vs native
 ## Why?
 
 The [Elastic CI Stack][] depends on being able to scale up quickly from zero instances in response
-to scheduled Buildkite jobs. Amazon's AutoScaling primatives have a number of limitations that we
+to scheduled Buildkite jobs. Amazon's AutoScaling primitives have a number of limitations that we
 wanted more granular control over:
 
 * The median time for a scaling event to be triggered was 2 minutes, due to needing two samples with
@@ -24,6 +24,8 @@ The lambda (or cli version) polls the Buildkite Metrics API every 10 seconds, an
 results sets the `DesiredCount` to exactly what is needed. This allows much faster scale up.
 
 ## Gracefully scaling in
+:construction: For [Elastic CI Stack][], there's now available a dedicated and experimental mode configured with `ELASTIC_CI_MODE` variable. You can read more about it [in here](./docs/elastic_ci_mode.md). :construction:
+___
 
 Whilst the lambda does support scaling in via setting `DesiredCount`, Amazon ASGs appear to not send
 [Lifecycle Hooks][] before terminating instances, so jobs in progress are interrupted.

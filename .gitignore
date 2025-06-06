@@ -1,3 +1,4 @@
 /lambda/handler
 /*.zip
 /packaged.yml
+buildkite-agent-scaler

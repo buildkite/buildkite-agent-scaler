@@ -41,6 +41,7 @@ type AgentMetrics struct {
 	IdleAgents    int64
 	BusyAgents    int64
 	TotalAgents   int64
+	Timestamp     time.Time
 }
 
 func (c *Client) GetAgentMetrics(ctx context.Context, queue string) (AgentMetrics, error) {
@@ -74,6 +75,7 @@ func (c *Client) GetAgentMetrics(ctx context.Context, queue string) (AgentMetric
 	metrics.OrgSlug = resp.Organization.Slug
 	metrics.Queue = queue
 	metrics.PollDuration = pollDuration
+	metrics.Timestamp = time.Now() // Record when these metrics were collected
 
 	metrics.IdleAgents = resp.Agents.Idle
 	metrics.BusyAgents = resp.Agents.Busy
