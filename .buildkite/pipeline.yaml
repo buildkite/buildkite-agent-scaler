@@ -7,7 +7,7 @@ steps:
     command: .buildkite/steps/test-go-fmt.sh
     plugins:
       - docker#v5.8.0:
-          image: golang:1.22
+          image: golang:1.24
           workdir: /go/src/github.com/buildkite/buildkite-agent-scaler
 
   - name: ":golang: Run Tests"
@@ -15,7 +15,7 @@ steps:
     command: .buildkite/steps/tests.sh
     plugins:
       - docker#v5.8.0:
-          image: golang:1.22
+          image: golang:1.24
           workdir: /go/src/github.com/buildkite/buildkite-agent-scaler
 
   - name: ":lambda: Build Lambda"
