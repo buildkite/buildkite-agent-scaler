@@ -30,7 +30,7 @@ bootstrap: lambda/main.go
 	  --volume $(PWD):/app \
 	  --workdir /app \
 	  --rm \
-	  golang:1.22 \
+	  golang:1.23 \
 	  go build \
 	    -ldflags="$(LD_FLAGS)" \
 	    -buildvcs="$(BUILDVSC_FLAG)" \
