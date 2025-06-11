@@ -251,15 +251,27 @@ Resources:
                     - ssm:SendCommand
                     - ssm:GetCommandInvocation
                   Resource: '*'
+                - Effect: Allow
+                  Action:
+                    - ssm:SendCommand
+                    - ssm:GetCommandInvocation
+                  Resource: !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/*"
                   Condition:
-                    StringEquals:
-                      "ec2:ResourceTag/aws:autoscaling:groupName": !Ref AgentAutoScaleGroup
+                    StringLike:
+                      "ec2:ResourceTag/aws:autoscaling:groupName": !Sub "${AWS::StackName}-AgentAutoScaleGroup-*"
                 - Effect: Allow
                   Action:
                     - ssm:DescribeInstanceInformation
                     - ec2:DescribeInstanceStatus
                     - ec2:DescribeInstances
                   Resource: '*'
+                - Effect: Allow
+                  Action:
+                    - ec2:TerminateInstances
+                  Resource: !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/*"
+                  Condition:
+                    StringLike:
+                      "ec2:ResourceTag/aws:autoscaling:groupName": !Sub "${AWS::StackName}-AgentAutoScaleGroup-*"
           - !Ref 'AWS::NoValue'
 
   AutoscalingFunction:
