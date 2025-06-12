@@ -250,15 +250,17 @@ Resources:
                   Action:
                     - ssm:SendCommand
                     - ssm:GetCommandInvocation
-                  Resource: '*'
+                  Resource:
+                    - !Sub "arn:aws:ssm:${AWS::Region}::document/AWS-RunShellScript"
                 - Effect: Allow
                   Action:
                     - ssm:SendCommand
                     - ssm:GetCommandInvocation
                   Resource: !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/*"
                   Condition:
-                    StringLike:
-                      "ec2:ResourceTag/aws:autoscaling:groupName": !Sub "${AWS::StackName}-AgentAutoScaleGroup-*"
+                    StringEquals:
+                      "ssm:resourceTag/Role": "buildkite-agent"
+                      "ssm:resourceTag/aws:autoscaling:groupName": !Ref AgentAutoScaleGroup
                 - Effect: Allow
                   Action:
                     - ssm:DescribeInstanceInformation
@@ -270,8 +272,9 @@ Resources:
                     - ec2:TerminateInstances
                   Resource: !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/*"
                   Condition:
-                    StringLike:
-                      "ec2:ResourceTag/aws:autoscaling:groupName": !Sub "${AWS::StackName}-AgentAutoScaleGroup-*"
+                    StringEquals:
+                      "ec2:ResourceTag/Role": "buildkite-agent"
+                      "ec2:ResourceTag/aws:autoscaling:groupName": !Ref AgentAutoScaleGroup
           - !Ref 'AWS::NoValue'
 
   AutoscalingFunction:
