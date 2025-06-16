@@ -23,17 +23,10 @@ handler.zip: bootstrap
 	zip -9 -v -j $@ "$<"
 
 bootstrap: lambda/main.go
-	docker run \
-	  --env GOCACHE=/go/cache \
-	  --env CGO_ENABLED \
-	  --user $(USER) \
-	  --volume $(PWD):/app \
-	  --workdir /app \
-	  --rm \
-	  golang:1.24 \
-	  go build \
+	./bin/mise install
+	./bin/mise exec -- go build \
 	    -ldflags="$(LD_FLAGS)" \
-	    -buildvcs="$(BUILDVSC_FLAG)" \
+	    -buildvcs="$(BUILDVCS_FLAG)" \
 	    -tags lambda.norpc \
 	    -o bootstrap \
 	    ./lambda
