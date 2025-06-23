@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## [v1.9.5](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.9.4...v1.9.5) (2025-06-23)
+* fix: scope down ElasticCIModeSSMAndEC2 policy [#221](https://github.com/buildkite/buildkite-agent-scaler/pull/221) ([scadu](https://github.com/scadu))
+
 ## [v1.9.4](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.9.3...v1.9.4) (2025-06-11)
 * fix: correct permissions to handle instances in ElasticCIMode [#219](https://github.com/buildkite/buildkite-agent-scaler/pull/219) ([scadu](https://github.com/scadu))
 * fix: bump Go to 1.24 to mitigate CVE-2025-22871 [#218](https://github.com/buildkite/buildkite-agent-scaler/pull/218) ([scadu](https://github.com/scadu))
