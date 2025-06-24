@@ -1,7 +1,7 @@
 package version
 
 // Version the library version number
-const Version = "1.9.4"
+const Version = "1.9.5"
 
 // The build number
 var Build string
