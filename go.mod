@@ -7,7 +7,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.36.5
 	github.com/aws/aws-sdk-go-v2/config v1.29.9
 	github.com/aws/aws-sdk-go-v2/service/autoscaling v1.52.1
-	github.com/aws/aws-sdk-go-v2/service/cloudwatch v1.44.1
+	github.com/aws/aws-sdk-go-v2/service/cloudwatch v1.45.3
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.229.0
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.60.0
 )
