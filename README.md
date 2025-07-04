@@ -43,7 +43,7 @@ See the [forum post](https://forum.buildkite.community/t/experimental-lambda-bas
 
 ## Publishing Cloudwatch Metrics
 
-The scaler collects it's own metrics and doesn't require [buildkite-agent-metrics][]. It supports
+The scaler collects its own metrics and doesn't require [buildkite-agent-metrics][]. It supports
 optionally publishing the metrics it collects back to Cloudwatch, although it only supports a subset
 of the metrics that the [buildkite-agent-metrics][] binary collects:
 
@@ -81,10 +81,15 @@ aws lambda create-function \
   --handler bootstrap
 ```
 
-## Running locally for development
+## Development
+This project uses [mise](https://mise.jdx.dev/) to manage development tooling ensuring all the tooling needed is installed with one step, and in expected versions.
+To install mise, execute [./bin/mise](./bin/mise) bootstrap script or follow [mise documentation](https://mise.jdx.dev/installing-mise.html). 
+Run `mise install` to install all the required tooling defined in [mise.toml](./mise.toml).
+
+### Running agent-scaler locally
 
 ```
-$ aws-vault exec my-profile -- go run . \
+$ mise exec go -- go run . \
   --asg-name elastic-runners-AgentAutoScaleGroup-XXXXX
   --agent-token "$BUILDKITE_AGENT_TOKEN"
 ```
