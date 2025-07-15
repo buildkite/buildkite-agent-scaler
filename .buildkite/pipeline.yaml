@@ -1,28 +1,35 @@
 agents:
   queue: elastic-runners
 
+# YAML anchor for mise setup
+x-mise-setup: &mise-setup |
+  if [[ ! -f ./bin/mise ]]; then
+    mkdir -p ./bin
+    curl -fsSL https://mise.jdx.dev/mise-latest-linux-x64 > ./bin/mise
+    chmod +x ./bin/mise
+  fi
+  ./bin/mise install
+
 steps:
   - name: ":go: Check go fmt"
     key: go-fmt
-    command: .buildkite/steps/test-go-fmt.sh
-    plugins:
-      - docker#v5.8.0:
-          image: golang:1.24
-          workdir: /go/src/github.com/buildkite/buildkite-agent-scaler
+    commands:
+      - *mise-setup
+      - .buildkite/steps/test-go-fmt.sh
 
   - name: ":golang: Run Tests"
     key: test
-    command: .buildkite/steps/tests.sh
-    plugins:
-      - docker#v5.8.0:
-          image: golang:1.24
-          workdir: /go/src/github.com/buildkite/buildkite-agent-scaler
+    commands:
+      - *mise-setup
+      - .buildkite/steps/tests.sh
 
   - name: ":lambda: Build Lambda"
     key: build-lambda
     depends_on:
       - go-fmt
-    command: .buildkite/steps/build-lambda.sh
+    commands:
+      - *mise-setup
+      - .buildkite/steps/build-lambda.sh
     artifact_paths:
       - handler.zip
 
