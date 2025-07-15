@@ -45,8 +45,12 @@ steps:
     env:
       BUILDKITE_AGENT_GIT_FETCH_FLAGS: -v --prune --tags
     plugins:
-      - aws-assume-role-with-web-identity:
+      - aws-assume-role-with-web-identity#v1.4.0:
           role-arn: arn:aws:iam::445615400570:role/pipeline-buildkite-buildkite-agent-scaler
+          session-tags:
+            - organization_slug
+            - organization_id
+            - pipeline_slug
       - aws-ssm#v1.0.0:
           parameters:
             GITHUB_RELEASE_ACCESS_TOKEN: /pipelines/buildkite/buildkite-agent-scaler/GITHUB_RELEASE_ACCESS_TOKEN
