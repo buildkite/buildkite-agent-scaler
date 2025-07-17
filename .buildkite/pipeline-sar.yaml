@@ -29,8 +29,12 @@ steps:
       - test
       - build
     plugins:
-      - aws-assume-role-with-web-identity#v1.1.0:
+      - aws-assume-role-with-web-identity#v1.4.0:
           role-arn: arn:aws:iam::172840064832:role/pipeline-buildkite-aws-stack-buildkite-agent-scaler-publish
+          session-tags:
+            - organization_slug
+            - organization_id
+            - pipeline_slug
 
   - block: ":package::arrow_right::rocket: Draft :github: Release Approved?"
     key: release
@@ -43,5 +47,9 @@ steps:
     depends_on:
       - release
     plugins:
-      - aws-assume-role-with-web-identity#v1.1.0:
+      - aws-assume-role-with-web-identity#v1.4.0:
           role-arn: arn:aws:iam::172840064832:role/pipeline-buildkite-aws-stack-buildkite-agent-scaler-publish
+          session-tags:
+            - organization_slug
+            - organization_id
+            - pipeline_slug
