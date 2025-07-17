@@ -40,8 +40,12 @@ steps:
       - build-lambda
     command: .buildkite/steps/upload-to-s3.sh
     plugins:
-      - aws-assume-role-with-web-identity:
+      - aws-assume-role-with-web-identity#v1.4.0:
           role-arn: arn:aws:iam::172840064832:role/pipeline-buildkite-buildkite-agent-scaler
+          session-tags:
+            - organization_slug
+            - organization_id
+            - pipeline_slug
 
   - if: build.tag =~ /^.+\$/ || build.env("RELEASE_DRY_RUN") == "true"
     label: ":github: Draft GitHub Release"
@@ -81,5 +85,9 @@ steps:
       - block-s3-release
     command: .buildkite/steps/upload-to-s3.sh release
     plugins:
-      - aws-assume-role-with-web-identity:
+      - aws-assume-role-with-web-identity#v1.4.0:
           role-arn: arn:aws:iam::172840064832:role/pipeline-buildkite-buildkite-agent-scaler
+          session-tags:
+            - organization_slug
+            - organization_id
+            - pipeline_slug
