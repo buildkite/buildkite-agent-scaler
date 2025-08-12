@@ -39,7 +39,7 @@ Parameters:
     Default: ''
 
   EventSchedulePeriod:
-    Description: How often the Event Schedule is triggered. Should be an expression with units, e.g. "30 seconds", "1 minute", "5 minutes".
+    Description: How often the Event Schedule is triggered. Should be an expression with units, e.g. "1 minute", "5 minutes".
     Type: String
     Default: "1 minute"
 
