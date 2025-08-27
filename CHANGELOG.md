@@ -4,8 +4,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## [v1.9.6](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.9.5...v1.9.6) (2025-08-27)
+* Bump github.com/aws/aws-lambda-go from 1.48.0 to 1.49.0 by @dependabot[bot] in https://github.com/buildkite/buildkite-agent-scaler/pull/229 ([dependabot[bot]](https://github.com/apps/dependabot))
+* Bump github.com/aws/aws-sdk-go-v2/service/ssm from 1.57.2 to 1.60.0 by @dependabot[bot] in https://github.com/buildkite/buildkite-agent-scaler/pull/225 ([dependabot[bot]](https://github.com/apps/dependabot))
+* Bump github.com/aws/aws-sdk-go-v2/service/ec2 from 1.224.0 to 1.228.0 by @dependabot[bot] in https://github.com/buildkite/buildkite-agent-scaler/pull/226 ([dependabot[bot]](https://github.com/apps/dependabot))
+* Bump github.com/aws/aws-sdk-go-v2/service/cloudwatch from 1.44.1 to 1.45.3 by @dependabot[bot] in https://github.com/buildkite/buildkite-agent-scaler/pull/227 ([dependabot[bot]](https://github.com/apps/dependabot))
+* Bump github.com/aws/aws-sdk-go-v2/service/autoscaling from 1.52.1 to 1.54.0 by @dependabot[bot] in https://github.com/buildkite/buildkite-agent-scaler/pull/228 ([dependabot[bot]](https://github.com/apps/dependabot))
+* feat: update tooling to use mise [#222](https://github.com/buildkite/buildkite-agent-scaler/pull/222) ([scadu](https://github.com/scadu))
+* Update to use OIDC session tokens on AWS role assumption in buildkite-dev [#230](https://github.com/buildkite/buildkite-agent-scaler/pull/230) ([duckalini](https://github.com/duckalini))
+* Update to use OIDC session tokens on AWS role assumption [#231](https://github.com/buildkite/buildkite-agent-scaler/pull/231) ([duckalini](https://github.com/duckalini))
+* Bump github.com/aws/aws-sdk-go-v2/service/autoscaling from 1.54.0 to 1.55.1 [#236](https://github.com/buildkite/buildkite-agent-scaler/pull/236) ([dependabot[bot]](https://github.com/apps/dependabot))
+* Bump github.com/aws/aws-sdk-go-v2/service/ec2 from 1.229.0 to 1.239.0 [#232](https://github.com/buildkite/buildkite-agent-scaler/pull/232) ([dependabot[bot]](https://github.com/apps/dependabot))
+* Bump github.com/aws/aws-sdk-go-v2/service/ssm from 1.60.0 to 1.61.1 [#233](https://github.com/buildkite/buildkite-agent-scaler/pull/233) ([dependabot[bot]](https://github.com/apps/dependabot))
+* Bump github.com/aws/aws-sdk-go-v2/config from 1.29.9 to 1.30.2 [#234](https://github.com/buildkite/buildkite-agent-scaler/pull/234) ([dependabot[bot]](https://github.com/apps/dependabot))
+* fix: event schedule examples [#237](https://github.com/buildkite/buildkite-agent-scaler/pull/237) ([mcncl](https://github.com/mcncl))
+* Update Go version to 1.25 [#238](https://github.com/buildkite/buildkite-agent-scaler/pull/238) ([JoeColeman95](https://github.com/JoeColeman95))
+
 ## [v1.9.5](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.9.4...v1.9.5) (2025-06-23)
-* fix: scope down ElasticCIModeSSMAndEC2 policy [#221](https://github.com/buildkite/buildkite-agent-scaler/pull/221) ([scadu](https://github.com/scadu))
+* fix: scope down ElasticCIModeSSMAndEC2 policy [#221](https://github.com/buildkite/buildkite-agent-scaler/pull/221)
 
 ## [v1.9.4](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.9.3...v1.9.4) (2025-06-11)
 * fix: correct permissions to handle instances in ElasticCIMode [#219](https://github.com/buildkite/buildkite-agent-scaler/pull/219) ([scadu](https://github.com/scadu))
@@ -16,7 +32,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ## [v1.9.2](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.9.1...v1.9.2) (2025-06-02)
 
-* chore: Update AWS SDK to v2 [#215](https://github.com/buildkite/buildkite-agent-scaler/pull/215) ([scadu](https://github.com/scadu) [walsm232](https://github.com/walsm232)) 
+* chore: Update AWS SDK to v2 [#215](https://github.com/buildkite/buildkite-agent-scaler/pull/215) ([scadu](https://github.com/scadu) [walsm232](https://github.com/walsm232))
 * Bump github.com/aws/aws-lambda-go from 1.47.0 to 1.48.0 [#213](https://github.com/buildkite/buildkite-agent-scaler/pull/213) ([dependabot[bot]](https://github.com/apps/dependabot))
 * Update CODEOWNERS [#208](https://github.com/buildkite/buildkite-agent-scaler/pull/208) ([karensawrey](https://github.com/karensawrey))
 * Create CODEOWNERS [#206](https://github.com/buildkite/buildkite-agent-scaler/pull/206) ([karensawrey](https://github.com/karensawrey))
