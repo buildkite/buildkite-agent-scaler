@@ -37,6 +37,7 @@ func main() {
 		elasticCIMode               = flag.Bool("elastic-ci-mode", false, "Whether to enable Elastic CI mode with additional safety checks")
 		minimumInstanceUptime       = flag.Duration("minimum-instance-uptime", 1*time.Hour, "Minimum instance uptime before being eligible for dangling instance check")
 		maxDanglingInstancesToCheck = flag.Int("max-dangling-instances-to-check", 5, "Maximum number of instances to check for dangling instances (only used for dangling instance scanning, not for normal scale-in)")
+		interval = flag.Duration("interval", 10*time.Second, "Interval to check for scaling")
 	)
 	flag.Parse()
 
@@ -85,7 +86,6 @@ func main() {
 		log.Printf("Running as a dry-run, no changes will be made")
 	}
 
-	var interval = 10 * time.Second
 
 	for {
 		minPollDuration, err := scaler.Run(ctx)
@@ -93,13 +93,13 @@ func main() {
 			log.Fatal(err)
 		}
 
-		if interval < minPollDuration {
-			interval = minPollDuration
+		if *interval < minPollDuration {
+			*interval = minPollDuration
 			log.Printf("Increasing poll interval to %v based on rate limit", interval)
 		}
 
-		log.Printf("Waiting for %v", interval)
+		log.Printf("Waiting for %v", *interval)
 		log.Println("")
-		time.Sleep(interval)
+		time.Sleep(*interval)
 	}
 }
