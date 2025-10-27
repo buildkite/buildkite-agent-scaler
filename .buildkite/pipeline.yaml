@@ -32,6 +32,7 @@ steps:
       - .buildkite/steps/build-lambda.sh
     artifact_paths:
       - handler.zip
+      - handler-arm64.zip
 
   - label: ":s3: Publish to S3 Branch Location"
     key: s3-branch
