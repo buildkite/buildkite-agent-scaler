@@ -138,6 +138,14 @@ Parameters:
       - "false"
     Default: "false"
 
+  Architecture:
+    Description: "Lambda function architecture (x86_64 or arm64)"
+    Type: String
+    AllowedValues:
+      - "x86_64"
+      - "arm64"
+    Default: "x86_64"
+
 Conditions:
   CreateRole:
     !Equals [ !Ref AutoscalingLambdaExecutionRole, '' ]
@@ -287,7 +295,7 @@ Resources:
       Handler: bootstrap
       Runtime: provided.al2
       Architectures:
-        - x86_64
+        - !Ref Architecture
       MemorySize: 128
       VpcConfig:
         SecurityGroupIds: !If [ SetSecurityGroups, !Split [',', !Join [',', !Ref SecurityGroupIds]], !Ref "AWS::NoValue" ]
