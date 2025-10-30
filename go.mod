@@ -1,6 +1,6 @@
 module github.com/buildkite/buildkite-agent-scaler
 
-go 1.25
+go 1.25.1
 
 require (
 	github.com/aws/aws-lambda-go v1.49.0
