@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## [v1.9.7](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.9.6...v1.9.7) (2025-10-30)
+
+* Update Go Version to 1.25.1 [#247](https://github.com/buildkite/buildkite-agent-scaler/pull/247) ([lizrabuya](https://github.com/lizrabuya))
+* chore(deps): bump github.com/aws/aws-sdk-go-v2/service/autoscaling from 1.55.1 to 1.59.3 [#240](https://github.com/buildkite/buildkite-agent-scaler/pull/240) ([dependabot[bot]](https://github.com/apps/dependabot))
+* chore(deps): bump github.com/aws/aws-sdk-go-v2/config from 1.30.2 to 1.31.12 [#242](https://github.com/buildkite/buildkite-agent-scaler/pull/242) ([dependabot[bot]](https://github.com/apps/dependabot))
+* chore(deps): bump github.com/aws/aws-sdk-go-v2 from 1.37.1 to 1.39.2 [#244](https://github.com/buildkite/buildkite-agent-scaler/pull/244) ([dependabot[bot]](https://github.com/apps/dependabot))
+
 ## [v1.9.6](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.9.5...v1.9.6) (2025-08-27)
 * Bump github.com/aws/aws-lambda-go from 1.48.0 to 1.49.0 by @dependabot[bot] in https://github.com/buildkite/buildkite-agent-scaler/pull/229 ([dependabot[bot]](https://github.com/apps/dependabot))
 * Bump github.com/aws/aws-sdk-go-v2/service/ssm from 1.57.2 to 1.60.0 by @dependabot[bot] in https://github.com/buildkite/buildkite-agent-scaler/pull/225 ([dependabot[bot]](https://github.com/apps/dependabot))
