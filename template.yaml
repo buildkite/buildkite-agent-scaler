@@ -65,7 +65,7 @@ Parameters:
     Default: "0"
 
   AvailabilityThreshold:
-    Description: Threshold percentage for agent availability (0.0-1.0), e.g., 0.9 for 90%
+    Description: Threshold percentage for agent availability (0.0-1.0), e.g., 0.9 for 90%. Use -1 to disable.
     Type: Number
     Default: 0.9
 
