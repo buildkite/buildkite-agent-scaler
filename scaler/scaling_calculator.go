@@ -91,13 +91,6 @@ func (sc *ScalingCalculator) DesiredCount(metrics *buildkite.AgentMetrics, asg *
 		log.Printf("↳ 🧮 Agent availability: %.2f%% (%d/%d)", availabilityPercentage*100, actualAgents, expectedAgents)
 	}
 
-	// If we're below the availability threshold, we need to add more instances
-	// Default to 0.90 (90%) if not set
-	threshold := sc.availabilityThreshold
-	if threshold == 0 {
-		threshold = 0.9
-	}
-
 	// Calculate agents required for workload
 	agentsRequired := metrics.ScheduledJobs
 
@@ -116,9 +109,15 @@ func (sc *ScalingCalculator) DesiredCount(metrics *buildkite.AgentMetrics, asg *
 		desired = sc.perInstance(agentsRequired)
 	}
 
-	// If we're below the availability threshold, have instances running,
-	// AND we have jobs requiring agents, add one more instance to improve availability
-	if availabilityPercentage < threshold && asg.DesiredCount > 0 && agentsRequired > 0 {
+	// Check availability threshold if we have jobs requiring agents
+	// Default to 0.90 (90%) if not set; use value > 1.0 to disable
+	threshold := sc.availabilityThreshold
+	if threshold == 0 {
+		threshold = 0.9
+	}
+
+	isAvailabilityCheckEnabled := threshold > 0 && threshold <= 1.0
+	if isAvailabilityCheckEnabled && agentsRequired > 0 && availabilityPercentage < threshold {
 		missingAgents := expectedAgents - actualAgents
 		log.Printf("↳ 🚨 Availability below threshold (%.2f%% < %.2f%%), missing %d agents",
 			availabilityPercentage*100, threshold*100, missingAgents)
@@ -137,26 +136,38 @@ func (sc *ScalingCalculator) DesiredCount(metrics *buildkite.AgentMetrics, asg *
 			if !enoughAgentsOnline {
 				currentJobBasedDesired := desired // Capture 'desired' before modification
 
-				availabilityTarget := asg.DesiredCount
+				// When availability is critically low, add an extra instance to help recover
+				// This handles cases where existing instances are healthy but agents aren't connecting
+				availabilityTarget := asg.DesiredCount + 1
 				if asg.DesiredCount == 0 {
 					// If ASG desires 0, but availability is low (e.g. 0 actual agents from 0 desired),
 					// we ensure at least 1 instance is targeted to recover.
 					availabilityTarget = 1
 				}
-				// If asg.DesiredCount > 0, availabilityTarget remains asg.DesiredCount.
-				// This means if jobs need fewer, we still aim for what ASG already wants,
-				// but we don't add an *extra* +1 on top of asg.DesiredCount.
 
 				if availabilityTarget > currentJobBasedDesired {
+					instancesAdded := availabilityTarget - currentJobBasedDesired
 					desired = availabilityTarget
-					log.Printf("↳ 📈 [Elastic CI Mode] Boosting desired instances for low availability: %d -> %d. (ASG Desired: %d, Job-based need: %d, Availability: %.2f%% < Min Required: %.2f%%)",
-						currentJobBasedDesired, desired, asg.DesiredCount, currentJobBasedDesired, availabilityPercentage*100, minPercentage*100)
+					log.Printf("↳ 📈 [Elastic CI Mode] Boosting desired instances for low availability: %d -> %d (+%d instances). Reason: %d agents online vs %d expected from %d instances (%.2f%% < %.2f%% required). ASG Desired: %d, Job-based need: %d",
+						currentJobBasedDesired, desired, instancesAdded, actualAgents, expectedAgents, asg.DesiredCount, availabilityPercentage*100, minPercentage*100, asg.DesiredCount, currentJobBasedDesired)
 				}
 				// If availabilityTarget <= currentJobBasedDesired, 'desired' (based on jobs) is already sufficient
 				// or higher than what this availability rule would set, so no change or log from this specific rule.
 			} else {
 				log.Printf("↳ ✅ [Elastic CI Mode] Not adding instance despite low availability - sufficient percentage of agents online (%.2f%% >= %.2f%%)",
 					availabilityPercentage*100, minPercentage*100)
+			}
+		} else {
+			// Non-Elastic CI Mode: Add an extra instance when availability is low
+			// This handles cases where existing instances are healthy but agents aren't connecting
+			currentJobBasedDesired := desired
+			availabilityTarget := asg.DesiredCount + 1
+
+			if availabilityTarget > currentJobBasedDesired {
+				instancesAdded := availabilityTarget - currentJobBasedDesired
+				desired = availabilityTarget
+				log.Printf("↳ 📈 Boosting desired instances for low availability: %d -> %d (+%d instances). Reason: %d agents online vs %d expected from %d instances (%.2f%% < %.2f%% threshold). ASG Desired: %d, Job-based need: %d",
+					currentJobBasedDesired, desired, instancesAdded, actualAgents, expectedAgents, asg.DesiredCount, availabilityPercentage*100, threshold*100, asg.DesiredCount, currentJobBasedDesired)
 			}
 		}
 	}

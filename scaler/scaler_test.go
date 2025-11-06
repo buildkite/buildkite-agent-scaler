@@ -268,7 +268,7 @@ func TestScalingOutWithoutError(t *testing.T) {
 				scaling: ScalingCalculator{
 					includeWaiting:        tc.params.IncludeWaiting,
 					agentsPerInstance:     tc.params.AgentsPerInstance,
-					availabilityThreshold: 0.0, // Disable availability threshold for tests
+					availabilityThreshold: 2.0, // Disable availability threshold for tests (> 1.0 disables it)
 				},
 			}
 
@@ -417,7 +417,7 @@ func TestScalingInWithoutError(t *testing.T) {
 				scaling: ScalingCalculator{
 					includeWaiting:        tc.params.IncludeWaiting,
 					agentsPerInstance:     tc.params.AgentsPerInstance,
-					availabilityThreshold: 0.0, // Disable availability threshold for tests
+					availabilityThreshold: 2.0, // Disable availability threshold for tests (> 1.0 disables it)
 				},
 				scaleInParams:          tc.params.ScaleInParams,
 				scaleOutParams:         tc.params.ScaleOutParams,
