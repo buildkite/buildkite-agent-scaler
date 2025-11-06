@@ -1,7 +1,8 @@
 #!/bin/bash
 set -eu
 
-make handler.zip
+# Build both architectures
+make build
 
 if [[ -z "${BUILDKITE_TAG:-}" ]]; then
   VERSION=$(git describe --tags)

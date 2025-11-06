@@ -21,6 +21,7 @@ steps:
       - .buildkite/steps/build-lambda.sh
     artifact_paths:
       - handler.zip
+      - handler-arm64.zip
 
   - label: ":lambda::arrow_right::package: Create SAR Package"
     key: package

@@ -38,7 +38,7 @@ notes=$(sed -n "/^## \[${escaped_tag}\]/,/^## \[${escaped_last_tag}\]/p" CHANGEL
 echo "$notes"
 
 echo --- :lambda: Downloading lambda from artifacts
-buildkite-agent artifact download handler.zip .
+buildkite-agent artifact download "handler*.zip" .
 
 echo "--- 🚀 Releasing $version"
 if [[ "${GITHUB_RELEASE_ACCESS_TOKEN:-}" == "" ]]; then
@@ -51,4 +51,5 @@ GITHUB_TOKEN="$GITHUB_RELEASE_ACCESS_TOKEN" release_dry_run gh release create \
   --title "$tag" \
   --notes "$notes" \
   "$tag" \
-  handler.zip
+  handler.zip \
+  handler-arm64.zip
