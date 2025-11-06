@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## [v1.9.8](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.9.7...v1.9.8) (2025-11-06)
+
+### Changed
+
+- Build and publish arm64 binary by @scadu in <https://github.com/buildkite/buildkite-agent-scaler/pull/254>
+
+### Dependencies
+
+- chore(deps): bump github.com/aws/aws-sdk-go-v2/service/cloudwatch from 1.51.1 to 1.52.0 by @dependabot[bot] in <https://github.com/buildkite/buildkite-agent-scaler/pull/253>
+- chore(deps): bump github.com/aws/aws-lambda-go from 1.49.0 to 1.50.0 by @dependabot[bot] in <https://github.com/buildkite/buildkite-agent-scaler/pull/252>
+- chore(deps): bump github.com/aws/aws-sdk-go-v2/service/ssm from 1.61.1 to 1.66.3 by @dependabot[bot] in <https://github.com/buildkite/buildkite-agent-scaler/pull/249>
+- chore(deps): bump github.com/aws/aws-sdk-go-v2/service/autoscaling from 1.59.3 to 1.60.2 by @dependabot[bot] in <https://github.com/buildkite/buildkite-agent-scaler/pull/250>
+- chore(deps): bump github.com/aws/aws-sdk-go-v2/service/ec2 from 1.254.1 to 1.260.0 by @dependabot[bot] in <https://github.com/buildkite/buildkite-agent-scaler/pull/251>
+
 ## [v1.9.7](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.9.6...v1.9.7) (2025-10-30)
 
 * Update Go Version to 1.25.1 [#247](https://github.com/buildkite/buildkite-agent-scaler/pull/247) ([lizrabuya](https://github.com/lizrabuya))
