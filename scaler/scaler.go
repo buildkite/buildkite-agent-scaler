@@ -201,7 +201,9 @@ func (s *Scaler) Run(ctx context.Context) (time.Duration, error) {
 			proportionalBuffer = int64(s.instanceBuffer)
 		}
 
-		log.Printf("↳ 🧮 Adding proportional instance buffer: %d (based on %d total jobs)", proportionalBuffer, totalJobs)
+		if proportionalBuffer > 0 {
+			log.Printf("↳ 🧮 Adding proportional instance buffer: %d (based on %d total jobs)", proportionalBuffer, totalJobs)
+		}
 		desired += proportionalBuffer
 	}
 
