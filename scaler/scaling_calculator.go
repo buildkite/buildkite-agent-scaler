@@ -1,7 +1,6 @@
 package scaler
 
 import (
-	"fmt"
 	"log"
 	"math"
 	"time"
@@ -12,8 +11,7 @@ import (
 type ScalingCalculator struct {
 	includeWaiting        bool
 	agentsPerInstance     int
-	availabilityThreshold float64 // Availability threshold, e.g. 0.9 for 90%
-	minAgentsPercentage   float64 // Minimum acceptable percentage of expected agents, e.g. 0.5 for 50%
+	availabilityThreshold float64 // Availability threshold, e.g. 0.5 for 50%
 	elasticCIMode         bool    // Special mode for Elastic CI Stack with additional safety checks
 
 	// Metrics cache to prevent inconsistent calculations
@@ -85,11 +83,11 @@ func (sc *ScalingCalculator) DesiredCount(metrics *buildkite.AgentMetrics, asg *
 	}
 	expectedAgents := int64(sc.agentsPerInstance) * instanceCount
 
-	// Calculate availability percentage
-	var availabilityPercentage = 1.0
+	// Calculate current availability percentage
+	var currentAvailability = 1.0
 	if expectedAgents > 0 {
-		availabilityPercentage = float64(actualAgents) / float64(expectedAgents)
-		log.Printf("↳ 🧮 Agent availability: %.2f%% (%d/%d)", availabilityPercentage*100, actualAgents, expectedAgents)
+		currentAvailability = float64(actualAgents) / float64(expectedAgents)
+		log.Printf("↳ 🧮 Agent availability: %.2f%% (%d/%d)", currentAvailability*100, actualAgents, expectedAgents)
 	}
 
 	// Calculate agents required for workload
@@ -110,37 +108,25 @@ func (sc *ScalingCalculator) DesiredCount(metrics *buildkite.AgentMetrics, asg *
 		desired = sc.perInstance(agentsRequired)
 	}
 
-	// Check availability threshold if we have jobs requiring agents
-	// Default to 0.90 (90%) if not set; use negative value (e.g. -1) to disable
-	threshold := sc.availabilityThreshold
-	if threshold == 0 {
-		threshold = 0.9
-	}
+	// Availability-based scaling for all modes
+	// This handles cases where instances are healthy but agents aren't connecting
+	if agentsRequired > 0 && sc.availabilityThreshold > 0 {
+		if currentAvailability < sc.availabilityThreshold {
+			missingAgents := expectedAgents - actualAgents
 
-	// Skip availability check if explicitly disabled (negative value)
-	if threshold > 0 && agentsRequired > 0 && availabilityPercentage < threshold {
-		missingAgents := expectedAgents - actualAgents
-		log.Printf("↳ 🚨 Availability below threshold (%.2f%% < %.2f%%), missing %d agents",
-			availabilityPercentage*100, threshold*100, missingAgents)
-
-		// Elastic CI Mode has an additional gate: only act if below minimum percentage
-		// Default to 0.5 (50%) for Elastic CI Mode, 0.0 (always act) for non-Elastic CI Mode
-		minPercentage := 0.0
-		if sc.elasticCIMode {
-			minPercentage = sc.minAgentsPercentage
-			if minPercentage <= 0 {
-				minPercentage = 0.5
+			modePrefix := ""
+			if sc.elasticCIMode {
+				modePrefix = "[Elastic CI Mode] "
 			}
-		}
 
-		shouldBoost := availabilityPercentage < minPercentage
-		if shouldBoost {
+			log.Printf("↳ 🚨 %sAvailability below threshold (%.2f%% < %.2f%%), missing %d agents",
+				modePrefix, currentAvailability*100, sc.availabilityThreshold*100, missingAgents)
+
 			// Only boost if ASG has converged (actual == desired), otherwise let ASG finish scaling
 			if asg.ActualCount == asg.DesiredCount {
 				currentJobBasedDesired := desired
 
 				// Add an extra instance to help recover from low availability
-				// This handles cases where instances are healthy but agents aren't connecting
 				availabilityTarget := asg.DesiredCount + 1
 				if asg.DesiredCount == 0 {
 					availabilityTarget = 1
@@ -150,25 +136,12 @@ func (sc *ScalingCalculator) DesiredCount(metrics *buildkite.AgentMetrics, asg *
 					instancesAdded := availabilityTarget - currentJobBasedDesired
 					desired = availabilityTarget
 
-					modePrefix := ""
-					thresholdDesc := fmt.Sprintf("%.2f%% threshold", threshold*100)
-					if sc.elasticCIMode {
-						modePrefix = "[Elastic CI Mode] "
-						thresholdDesc = fmt.Sprintf("%.2f%% required", minPercentage*100)
-					}
-					log.Printf("↳ 📈 %sBoosting desired instances for low availability: %d -> %d (+%d instances). Reason: %d agents online vs %d expected from %d instances (%.2f%% < %s). ASG Desired: %d, Job-based need: %d",
-						modePrefix, currentJobBasedDesired, desired, instancesAdded, actualAgents, expectedAgents, asg.DesiredCount, availabilityPercentage*100, thresholdDesc, asg.DesiredCount, currentJobBasedDesired)
+					log.Printf("↳ 📈 %sBoosting desired instances for low availability: %d -> %d (+%d instances). Reason: %d agents online vs %d expected from %d instances (%.2f%% < %.2f%% threshold). ASG Desired: %d, Job-based need: %d",
+						modePrefix, currentJobBasedDesired, desired, instancesAdded, actualAgents, expectedAgents, asg.DesiredCount, currentAvailability*100, sc.availabilityThreshold*100, asg.DesiredCount, currentJobBasedDesired)
 				}
 			} else {
-				modePrefix := ""
-				if sc.elasticCIMode {
-					modePrefix = "[Elastic CI Mode] "
-				}
 				log.Printf("↳ ⏳ %sNot boosting for low availability - ASG is still converging (%d actual vs %d desired)", modePrefix, asg.ActualCount, asg.DesiredCount)
 			}
-		} else if sc.elasticCIMode {
-			log.Printf("↳ ✅ [Elastic CI Mode] Not adding instance despite low availability - sufficient percentage of agents online (%.2f%% >= %.2f%%)",
-				availabilityPercentage*100, minPercentage*100)
 		}
 	}
 

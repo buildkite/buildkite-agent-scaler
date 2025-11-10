@@ -91,9 +91,14 @@ Job dispatch delays, other issues related to job processing.
 ```
 
 ## Configuration Parameters
+
+### Availability Monitoring (applies to all modes)
+- `AVAILABILITY_THRESHOLD`: Minimum agent availability percentage before triggering scale-out (default 50%, i.e. with 4 agents per instance, we scale out when fewer than 2 agents are online). Set to `0` to disable availability-based scaling.
+
+### Elastic CI Mode Specific
+**Note:** The following settings apply **only when `ELASTIC_CI_MODE=true`**
+
 - `ELASTIC_CI_MODE`: Enable enhanced safety features, only for [Elastic CI Stack](https://github.com/buildkite/elastic-ci-stack-for-aws)! (boolean)
-- `AVAILABILITY_THRESHOLD`: Minimum agent availability percentage (default 90%)
-- `MIN_AGENTS_PERCENTAGE`: Minimum acceptable percentage of expected agents — ratio of desired agents number to actual (default 50%, i.e. we tolerate 2 agent instances running on a single EC2 out of desired 4)
 - `DANGLING_CHECK_MINIMUM_INSTANCE_UPTIME`: Minimum instance uptime before checking for dangling instances (default 1h)
 - `MAX_DANGLING_INSTANCES_TO_CHECK`: Maximum number of instances to scan for dangling detection (default 5)
-- `SCALE_IN_COOLDOWN_PERIOD`: Time to wait between scale-in operations (default 1h)
+- `SCALE_IN_COOLDOWN_PERIOD`: Time to wait between scale-in operations (default 1h for Elastic CI Mode, 0 otherwise)

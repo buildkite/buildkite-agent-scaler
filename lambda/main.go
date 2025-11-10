@@ -74,12 +74,10 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 	includeWaiting := EnvBool("INCLUDE_WAITING")
 	instanceBuffer := EnvInt("INSTANCE_BUFFER", 0)
 	maxDescribeScalingActivitiesPages := EnvInt("MAX_DESCRIBE_SCALING_ACTIVITIES_PAGES", -1)
-	// Below settings only applicable when elasticCIMode is enabled!
-	availabilityThreshold := EnvFloat("AVAILABILITY_THRESHOLD")   // Default to 90% in scaling calculator
-	minAgentsPercentage := EnvFloat("MIN_AGENTS_PERCENTAGE", 0.5) // Default to 50% in scaling calculator
+	availabilityThreshold := EnvFloat("AVAILABILITY_THRESHOLD", 0.5) // Default to 50%
+	// Below settings only applicable when elasticCIMode is enabled
 	minimumInstanceUptime := EnvDuration("DANGLING_CHECK_MINIMUM_INSTANCE_UPTIME", 1*time.Hour)
 	maxDanglingInstancesToCheck := EnvInt("MAX_DANGLING_INSTANCES_TO_CHECK", 5) // Maximum number of instances to check for dangling instances (only used for dangling instance scanning, not for normal scale-in)
-	// Above settings only applicable when elasticCIMode is enabled!
 
 	publishCloudWatchMetrics := EnvBool("CLOUDWATCH_METRICS")
 	if publishCloudWatchMetrics {
@@ -189,7 +187,6 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		ScaleOnlyAfterAllEvent:      scaleOnlyAfterAllEvent,
 		PublishCloudWatchMetrics:    publishCloudWatchMetrics,
 		AvailabilityThreshold:       availabilityThreshold,
-		MinAgentsPercentage:         minAgentsPercentage,
 		ElasticCIMode:               elasticCIMode,
 		MinimumInstanceUptime:       minimumInstanceUptime,
 		MaxDanglingInstancesToCheck: maxDanglingInstancesToCheck,
