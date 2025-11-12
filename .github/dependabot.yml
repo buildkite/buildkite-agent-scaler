@@ -4,3 +4,7 @@ updates:
   directory: /
   schedule:
     interval: weekly
+  groups:
+    aws:
+      patterns:
+        - github.com/aws/*
