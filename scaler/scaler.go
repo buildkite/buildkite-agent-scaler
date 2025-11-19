@@ -33,8 +33,7 @@ type Params struct {
 	ScaleOutParams              ScaleParams
 	InstanceBuffer              int
 	ScaleOnlyAfterAllEvent      bool
-	AvailabilityThreshold       float64       // Threshold for agent availability
-	MinAgentsPercentage         float64       // Minimum acceptable percentage of expected agents
+	AvailabilityThreshold       float64       // Threshold for agent availability (default 50%, all modes)
 	ASGActivityCooldown         time.Duration // How long to wait after an ASG activity before scaling again
 	ElasticCIMode               bool          // Special mode for Elastic CI Stack with additional safety checks
 	MinimumInstanceUptime       time.Duration // How long instance should be online before being eligible for dangling instance check
@@ -88,7 +87,6 @@ func NewScaler(client *buildkite.Client, cfg aws.Config, params Params) (*Scaler
 		includeWaiting:        params.IncludeWaiting,
 		agentsPerInstance:     params.AgentsPerInstance,
 		availabilityThreshold: params.AvailabilityThreshold,
-		minAgentsPercentage:   params.MinAgentsPercentage,
 		elasticCIMode:         params.ElasticCIMode,
 	}
 
@@ -201,7 +199,9 @@ func (s *Scaler) Run(ctx context.Context) (time.Duration, error) {
 			proportionalBuffer = int64(s.instanceBuffer)
 		}
 
-		log.Printf("↳ 🧮 Adding proportional instance buffer: %d (based on %d total jobs)", proportionalBuffer, totalJobs)
+		if proportionalBuffer > 0 {
+			log.Printf("↳ 🧮 Adding proportional instance buffer: %d (based on %d total jobs)", proportionalBuffer, totalJobs)
+		}
 		desired += proportionalBuffer
 	}
 

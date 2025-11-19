@@ -268,7 +268,7 @@ func TestScalingOutWithoutError(t *testing.T) {
 				scaling: ScalingCalculator{
 					includeWaiting:        tc.params.IncludeWaiting,
 					agentsPerInstance:     tc.params.AgentsPerInstance,
-					availabilityThreshold: 0.0, // Disable availability threshold for tests
+					availabilityThreshold: 0, // Disable availability threshold for tests
 				},
 			}
 
@@ -417,7 +417,7 @@ func TestScalingInWithoutError(t *testing.T) {
 				scaling: ScalingCalculator{
 					includeWaiting:        tc.params.IncludeWaiting,
 					agentsPerInstance:     tc.params.AgentsPerInstance,
-					availabilityThreshold: 0.0, // Disable availability threshold for tests
+					availabilityThreshold: 0, // Disable availability threshold for tests
 				},
 				scaleInParams:          tc.params.ScaleInParams,
 				scaleOutParams:         tc.params.ScaleOutParams,
@@ -451,6 +451,7 @@ func (d *buildkiteTestDriver) GetAgentMetrics(ctx context.Context) (buildkite.Ag
 type asgTestDriver struct {
 	err                    error
 	desiredCapacity        int64
+	actualCapacity         int64 // If 0, will default to desiredCapacity
 	sigTermsSent           []string
 	elasticCIMode          bool
 	danglingInstancesFound int
@@ -463,8 +464,14 @@ func (d *asgTestDriver) Describe(ctx context.Context) (AutoscaleGroupDetails, er
 		instanceIDs[i] = fmt.Sprintf("i-%012d", i)
 	}
 
+	actualCount := d.actualCapacity
+	if actualCount == 0 {
+		actualCount = d.desiredCapacity
+	}
+
 	return AutoscaleGroupDetails{
 		DesiredCount: d.desiredCapacity,
+		ActualCount:  actualCount,
 		MinSize:      0,
 		MaxSize:      100,
 		InstanceIDs:  instanceIDs,
@@ -487,4 +494,151 @@ func (d *asgTestDriver) SendSIGTERMToAgents(ctx context.Context, instanceID stri
 func (d *asgTestDriver) CleanupDanglingInstances(ctx context.Context, minimumInstanceUptime time.Duration, maxDanglingInstancesToCheck int) error {
 	d.danglingInstancesFound++
 	return d.err
+}
+
+func TestAvailabilityBasedScaling(t *testing.T) {
+	testCases := []struct {
+		name                    string
+		metrics                 buildkite.AgentMetrics
+		asgDesired              int64
+		asgActual               int64
+		agentsPerInstance       int
+		availabilityThreshold   float64
+		expectedDesiredCapacity int64
+	}{
+		// With 2 instances @ 4 agents each = 8 expected, but only 3 online (37.5%).
+		// Should scale from 2 to 3 instances when ASG has converged.
+		{
+			name: "Low availability triggers scale-out when ASG converged",
+			metrics: buildkite.AgentMetrics{
+				ScheduledJobs: 5,
+				RunningJobs:   2,
+				TotalAgents:   3,
+			},
+			asgDesired:              2,
+			asgActual:               2,
+			agentsPerInstance:       4,
+			availabilityThreshold:   0.5,
+			expectedDesiredCapacity: 3,
+		},
+		// ASG not converged (actual 1 != desired 2), should wait for convergence
+		// before applying availability-based scaling.
+		{
+			name: "Low availability does not trigger when ASG still converging",
+			metrics: buildkite.AgentMetrics{
+				ScheduledJobs: 5,
+				RunningJobs:   2,
+				TotalAgents:   3,
+			},
+			asgDesired:              2,
+			asgActual:               1,
+			agentsPerInstance:       4,
+			availabilityThreshold:   0.5,
+			expectedDesiredCapacity: 2,
+		},
+		// 7 out of 8 expected agents (87.5% availability) is above 50% threshold.
+		// No scale-out needed.
+		{
+			name: "Good availability does not trigger scale-out",
+			metrics: buildkite.AgentMetrics{
+				ScheduledJobs: 5,
+				RunningJobs:   2,
+				TotalAgents:   7,
+			},
+			asgDesired:              2,
+			asgActual:               2,
+			agentsPerInstance:       4,
+			availabilityThreshold:   0.5,
+			expectedDesiredCapacity: 2,
+		},
+		// Threshold set to 0 disables availability-based scaling.
+		// No scale-out despite only 2 out of 8 agents online (25%).
+		{
+			name: "Availability threshold disabled (0) does not trigger",
+			metrics: buildkite.AgentMetrics{
+				ScheduledJobs: 5,
+				RunningJobs:   2,
+				TotalAgents:   2,
+			},
+			asgDesired:              2,
+			asgActual:               2,
+			agentsPerInstance:       4,
+			availabilityThreshold:   0,
+			expectedDesiredCapacity: 2,
+		},
+		// With 0 instances, job-based scaling takes over.
+		// Need 2 instances for 5 jobs (at 4 agents per instance).
+		{
+			name: "Low availability from zero instances scales to 1",
+			metrics: buildkite.AgentMetrics{
+				ScheduledJobs: 5,
+				RunningJobs:   0,
+				TotalAgents:   0,
+			},
+			asgDesired:              0,
+			asgActual:               0,
+			agentsPerInstance:       4,
+			availabilityThreshold:   0.5,
+			expectedDesiredCapacity: 2,
+		},
+		// Only 2 out of 12 expected agents online (16.7% availability).
+		// Availability-based boost from 3 to 4 overrides lower job-based need (1).
+		{
+			name: "Availability boost when job-based need is lower",
+			metrics: buildkite.AgentMetrics{
+				ScheduledJobs: 2,
+				RunningJobs:   0,
+				TotalAgents:   2,
+			},
+			asgDesired:              3,
+			asgActual:               3,
+			agentsPerInstance:       4,
+			availabilityThreshold:   0.5,
+			expectedDesiredCapacity: 4,
+		},
+		// Need 5 instances for 20 jobs. Job-based scaling (5) dominates
+		// over availability boost (3), despite low availability (25%).
+		{
+			name: "No boost when job-based need is higher",
+			metrics: buildkite.AgentMetrics{
+				ScheduledJobs: 20,
+				RunningJobs:   0,
+				TotalAgents:   2,
+			},
+			asgDesired:              2,
+			asgActual:               2,
+			agentsPerInstance:       4,
+			availabilityThreshold:   0.5,
+			expectedDesiredCapacity: 5,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			asg := &asgTestDriver{
+				desiredCapacity: tc.asgDesired,
+				actualCapacity:  tc.asgActual,
+			}
+
+			s := Scaler{
+				autoscaling: asg,
+				bk:          &buildkiteTestDriver{metrics: tc.metrics},
+				scaling: ScalingCalculator{
+					includeWaiting:        false,
+					agentsPerInstance:     tc.agentsPerInstance,
+					availabilityThreshold: tc.availabilityThreshold,
+				},
+			}
+
+			_, err := s.Run(context.Background())
+			if err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+
+			if asg.desiredCapacity != tc.expectedDesiredCapacity {
+				t.Errorf("Expected desired capacity: %d, got: %d",
+					tc.expectedDesiredCapacity, asg.desiredCapacity)
+			}
+		})
+	}
 }

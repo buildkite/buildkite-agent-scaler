@@ -23,7 +23,28 @@ wanted more granular control over:
 The lambda (or cli version) polls the Buildkite Metrics API every 10 seconds, and based on the
 results sets the `DesiredCount` to exactly what is needed. This allows much faster scale up.
 
+## Configuration
+
+### Availability-based scaling
+
+The scaler monitors agent availability to handle situations where EC2 instances are healthy but Buildkite agents aren't connecting. This can happen due to network issues, agent configuration problems, or instance startup delays.
+
+**`AVAILABILITY_THRESHOLD`** (default: `0.5`)
+
+When jobs are queued, the scaler checks if the percentage of connected agents meets this threshold. For example, with 4 agents per instance and 2 instances running (8 expected agents), if only 3 agents are online, that's 37.5% availability.
+
+When availability drops below the threshold and the ASG has converged (actual instances match desired), the scaler adds one instance to help recover availability.
+
+Set `AVAILABILITY_THRESHOLD=0` to disable availability-based scaling. The scaler will then scale based only on job count.
+
+**Threshold tuning:**
+
+* **Lower threshold (e.g., 0.3)**: Tolerates slower agent connection times, reduces instance churn
+* **Higher threshold (e.g., 0.8)**: Aggressive scaling to maintain high availability when agents are expected to connect quickly
+* **Disabled (0)**: Job-based scaling only, suitable when agents connect reliably
+
 ## Gracefully scaling in
+
 :construction: For [Elastic CI Stack][], there's now available a dedicated and experimental mode configured with `ELASTIC_CI_MODE` variable. You can read more about it [in here](./docs/elastic_ci_mode.md). :construction:
 ___
 
@@ -55,17 +76,17 @@ of the metrics that the [buildkite-agent-metrics][] binary collects:
 An AWS Lambda bundle is created and published as part of the build process. The lambda will require
 the following IAM permissions:
 
-- `cloudwatch:PutMetricData`
-- `autoscaling:DescribeAutoScalingGroups`
-- `autoscaling:DescribeScalingActivities`
-- `autoscaling:SetDesiredCapacity`
+* `cloudwatch:PutMetricData`
+* `autoscaling:DescribeAutoScalingGroups`
+* `autoscaling:DescribeScalingActivities`
+* `autoscaling:SetDesiredCapacity`
 
 Its handler is `bootstrap`, it uses a `provided.al2` runtime and requires the following env vars:
 
-- `BUILDKITE_AGENT_TOKEN` or `BUILDKITE_AGENT_TOKEN_SSM_KEY`
-- `BUILDKITE_QUEUE`
-- `AGENTS_PER_INSTANCE`
-- `ASG_NAME`
+* `BUILDKITE_AGENT_TOKEN` or `BUILDKITE_AGENT_TOKEN_SSM_KEY`
+* `BUILDKITE_QUEUE`
+* `AGENTS_PER_INSTANCE`
+* `ASG_NAME`
 
 If `BUILDKITE_AGENT_TOKEN_SSM_KEY` is set, the token will be read from
 [AWS Systems Manager Parameter Store GetParameter](https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_GetParameter.html)
@@ -82,8 +103,9 @@ aws lambda create-function \
 ```
 
 ## Development
+
 This project uses [mise](https://mise.jdx.dev/) to manage development tooling ensuring all the tooling needed is installed with one step, and in expected versions.
-To install mise, execute [./bin/mise](./bin/mise) bootstrap script or follow [mise documentation](https://mise.jdx.dev/installing-mise.html). 
+To install mise, execute [./bin/mise](./bin/mise) bootstrap script or follow [mise documentation](https://mise.jdx.dev/installing-mise.html).
 Run `mise install` to install all the required tooling defined in [mise.toml](./mise.toml).
 
 ### Running agent-scaler locally
@@ -102,7 +124,6 @@ the cluster being targeted by the scaler.
 The scaler is set up automatically by the [Elastic CI Stack][]'s CloudFormation templates, which
 reference the agent token and a queue name. A Lambda function running the scaler is then generated
 using these references (e.g., `BUILDKITE_AGENT_TOKEN_SSM_KEY` and `BUILDKITE_QUEUE`).
-
 
 ## Copyright
 
