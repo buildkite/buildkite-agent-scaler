@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## [v1.9.9](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.9.8...v1.9.9) (2025-11-19)
+
+### Changed
+* Fix availability-based scaling and simplify threshold logic by @scadu in https://github.com/buildkite/buildkite-agent-scaler/pull/257
+
+### Dependencies
+* chore(deps): bump github.com/aws/aws-sdk-go-v2/config from 1.31.12 to 1.31.19 by @dependabot[bot] in https://github.com/buildkite/buildkite-agent-scaler/pull/259
+* chore(deps): bump github.com/aws/aws-sdk-go-v2/service/ec2 from 1.261.0 to 1.266.0 by @dependabot[bot] in https://github.com/buildkite/buildkite-agent-scaler/pull/260
+* chore(deps): bump github.com/aws/aws-sdk-go-v2/service/ssm from 1.66.3 to 1.67.1 by @dependabot[bot] in https://github.com/buildkite/buildkite-agent-scaler/pull/262
+* chore(deps): bump github.com/aws/aws-sdk-go-v2/service/cloudwatch from 1.52.0 to 1.52.2 by @dependabot[bot] in https://github.com/buildkite/buildkite-agent-scaler/pull/261
+* chore(deps): bump github.com/aws/aws-sdk-go-v2/service/autoscaling from 1.60.2 to 1.60.4 by @dependabot[bot] in https://github.com/buildkite/buildkite-agent-scaler/pull/264
+* chore(deps): bump the aws group with 5 updates by @dependabot[bot] in https://github.com/buildkite/buildkite-agent-scaler/pull/266
+
+### Internal
+* Dependabot weekly, add agent-stewards to CODEOWNERS by @DrJosh9000 in https://github.com/buildkite/buildkite-agent-scaler/pull/258
+* Group AWS library updates together by @DrJosh9000 in https://github.com/buildkite/buildkite-agent-scaler/pull/265
+
 ## [v1.9.8](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.9.7...v1.9.8) (2025-11-06)
 
 ### Changed
