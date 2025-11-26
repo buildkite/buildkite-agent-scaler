@@ -75,6 +75,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 	instanceBuffer := EnvInt("INSTANCE_BUFFER", 0)
 	maxDescribeScalingActivitiesPages := EnvInt("MAX_DESCRIBE_SCALING_ACTIVITIES_PAGES", -1)
 	availabilityThreshold := EnvFloat("AVAILABILITY_THRESHOLD", 0.5) // Default to 50%
+	maxInstanceCap := EnvInt("MAX_INSTANCE_CAP", 0)                  // 0 means no cap
 	// Below settings only applicable when elasticCIMode is enabled
 	minimumInstanceUptime := EnvDuration("DANGLING_CHECK_MINIMUM_INSTANCE_UPTIME", 1*time.Hour)
 	maxDanglingInstancesToCheck := EnvInt("MAX_DANGLING_INSTANCES_TO_CHECK", 5) // Maximum number of instances to check for dangling instances (only used for dangling instance scanning, not for normal scale-in)
@@ -190,6 +191,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		ElasticCIMode:               elasticCIMode,
 		MinimumInstanceUptime:       minimumInstanceUptime,
 		MaxDanglingInstancesToCheck: maxDanglingInstancesToCheck,
+		MaxInstanceCap:              maxInstanceCap,
 	}
 
 	scaler, err := scaler.NewScaler(client, cfg, params)
