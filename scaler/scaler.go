@@ -38,6 +38,7 @@ type Params struct {
 	ElasticCIMode               bool          // Special mode for Elastic CI Stack with additional safety checks
 	MinimumInstanceUptime       time.Duration // How long instance should be online before being eligible for dangling instance check
 	MaxDanglingInstancesToCheck int           // Maximum number of instances to check for dangling instances (only used for dangling instance scanning, not for normal scale-in)
+	MaxInstanceCap              int           // Maximum instance count cap (0 means no cap)
 }
 
 type Scaler struct {
@@ -88,6 +89,7 @@ func NewScaler(client *buildkite.Client, cfg aws.Config, params Params) (*Scaler
 		agentsPerInstance:     params.AgentsPerInstance,
 		availabilityThreshold: params.AvailabilityThreshold,
 		elasticCIMode:         params.ElasticCIMode,
+		maxInstanceCap:        params.MaxInstanceCap,
 	}
 
 	if params.DryRun {
@@ -190,9 +192,14 @@ func (s *Scaler) Run(ctx context.Context) (time.Duration, error) {
 			proportionalBuffer = int64(math.Ceil(float64(totalJobs) / float64(s.scaling.agentsPerInstance)))
 		}
 
-		if proportionalBuffer < 0 || proportionalBuffer > 1000 {
-			log.Printf("⚠️  Calculated unreasonable proportional buffer %d, capping at 1000", proportionalBuffer)
-			proportionalBuffer = 1000
+		if proportionalBuffer < 0 {
+			log.Printf("⚠️  Calculated negative proportional buffer %d, capping at 0", proportionalBuffer)
+			proportionalBuffer = 0
+		}
+
+		if s.scaling.maxInstanceCap > 0 && proportionalBuffer > int64(s.scaling.maxInstanceCap) {
+			log.Printf("⚠️  Calculated proportional buffer %d exceeds max cap, capping at %d", proportionalBuffer, s.scaling.maxInstanceCap)
+			proportionalBuffer = int64(s.scaling.maxInstanceCap)
 		}
 
 		if proportionalBuffer > int64(s.instanceBuffer) {
