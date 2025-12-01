@@ -13,6 +13,7 @@ type ScalingCalculator struct {
 	agentsPerInstance     int
 	availabilityThreshold float64 // Availability threshold, e.g. 0.5 for 50%
 	elasticCIMode         bool    // Special mode for Elastic CI Stack with additional safety checks
+	maxInstanceCap        int     // Maximum instance count cap (0 means no cap)
 
 	// Metrics cache to prevent inconsistent calculations
 	lastMetricsTimestamp time.Time
@@ -28,9 +29,14 @@ func (sc *ScalingCalculator) perInstance(count int64) int64 {
 
 	result := int64(math.Ceil(float64(count) / float64(sc.agentsPerInstance)))
 
-	if result < 0 || result > 1000 {
-		log.Printf("⚠️  Calculated unreasonable instance count %d, capping at 1000", result)
-		return 1000
+	if result < 0 {
+		log.Printf("⚠️  Calculated negative instance count %d, capping at 0", result)
+		return 0
+	}
+
+	if sc.maxInstanceCap > 0 && result > int64(sc.maxInstanceCap) {
+		log.Printf("⚠️  Calculated instance count %d exceeds max cap, capping at %d", result, sc.maxInstanceCap)
+		return int64(sc.maxInstanceCap)
 	}
 
 	return result
