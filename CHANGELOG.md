@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## [v1.10.0](https://github.com/buildkite/buildkite-agent-scaler/tree/v1.10.0) (2025-12-01)
+
+[Full Changelog](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.9.9...v1.10.0)
+
+### Changed
+
+- SUP-5647: Make instance cap configurable via MAX_INSTANCE_CAP [#270](https://github.com/buildkite/buildkite-agent-scaler/pull/270) (@Mykematt)
+- chore(deps): bump the aws group with 6 updates [#268](https://github.com/buildkite/buildkite-agent-scaler/pull/268) (@dependabot[bot])
+
 ## [v1.9.9](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.9.8...v1.9.9) (2025-11-19)
 
 ### Changed
