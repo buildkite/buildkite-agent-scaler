@@ -105,6 +105,11 @@ Parameters:
     Description: The ARN of the policy used to set the permissions boundary for the role.
     Default: ""
 
+  ManagedPolicyARNs:
+    Type: CommaDelimitedList
+    Description: Optional - Comma separated list of managed IAM policy ARNs to attach to the Lambda execution role.
+    Default: ""
+
   LogRetentionDays:
     Type: Number
     Description: The number of days to retain the Cloudwatch Logs of the lambda.
@@ -138,8 +143,9 @@ Parameters:
       - "false"
     Default: "false"
 
-
 Conditions:
+  HasManagedPolicyARNs:
+    !Not [ !Equals [ !Join [ "", !Ref ManagedPolicyARNs ], "" ] ]
   CreateRole:
     !Equals [ !Ref AutoscalingLambdaExecutionRole, '' ]
   UseKmsKeyForParameterStore:
@@ -202,8 +208,15 @@ Resources:
             - lambda.amazonaws.com
           Action:
           - sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      ManagedPolicyArns: !If
+        - HasManagedPolicyARNs
+        - !Split
+          - ','
+          - !Join
+            - ','
+            - - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+              - !Join [ ',', !Ref ManagedPolicyARNs ]
+        - - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
       Policies:
         - PolicyName: AutoScalingGroups
           PolicyDocument:
