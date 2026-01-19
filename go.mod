@@ -3,12 +3,12 @@ module github.com/buildkite/buildkite-agent-scaler
 go 1.25.1
 
 require (
-	github.com/aws/aws-lambda-go v1.51.2
+	github.com/aws/aws-lambda-go v1.52.0
 	github.com/aws/aws-sdk-go-v2 v1.41.1
 	github.com/aws/aws-sdk-go-v2/config v1.32.7
 	github.com/aws/aws-sdk-go-v2/service/autoscaling v1.62.5
 	github.com/aws/aws-sdk-go-v2/service/cloudwatch v1.53.1
-	github.com/aws/aws-sdk-go-v2/service/ec2 v1.279.1
+	github.com/aws/aws-sdk-go-v2/service/ec2 v1.279.2
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.67.8
 )
 
