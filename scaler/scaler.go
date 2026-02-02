@@ -5,6 +5,7 @@ import (
 	"log"
 	"math"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -482,12 +483,28 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 			ssmClient := ssm.NewFromConfig(s.cfg)
 			ec2Client := ec2.NewFromConfig(s.cfg)
 
+			// Detect platform for this instance
+			descResp, descErr := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+				InstanceIds: []string{instanceID},
+			})
+
+			documentName := "AWS-RunShellScript"
+			checkCommand := "systemctl is-active buildkite-agent"
+			if descErr == nil && len(descResp.Reservations) > 0 && len(descResp.Reservations[0].Instances) > 0 {
+				instance := descResp.Reservations[0].Instances[0]
+				if strings.EqualFold(string(instance.Platform), "windows") {
+					documentName = "AWS-RunPowerShellScript"
+					checkCommand = "nssm status buildkite-agent"
+					log.Printf("[Elastic CI Mode] Detected Windows platform for instance %s", instanceID)
+				}
+			}
+
 			// Try to check if buildkite-agent is running via SSM
 			_, err := ssmClient.SendCommand(ctx, &ssm.SendCommandInput{
 				InstanceIds:  []string{instanceID},
-				DocumentName: aws.String("AWS-RunShellScript"),
+				DocumentName: aws.String(documentName),
 				Parameters: map[string][]string{
-					"commands": {"systemctl is-active buildkite-agent"},
+					"commands": {checkCommand},
 				},
 				Comment: aws.String("Check if buildkite-agent service is running"),
 			})
