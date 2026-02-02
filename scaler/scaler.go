@@ -115,6 +115,13 @@ func NewScaler(client *buildkite.Client, cfg aws.Config, params Params) (*Scaler
 		}
 	}
 
+	if params.ElasticCIMode {
+		log.Printf("🛡️ [Elastic CI Mode] Running with enhanced safety features (stale metrics detection, dangling instance protection)")
+		if params.ScaleInParams.Disable {
+			log.Printf("ℹ️ [Elastic CI Mode] DISABLE_SCALE_IN=true is set but will be ignored to allow proper bidirectional scaling")
+		}
+	}
+
 	return scaler, nil
 }
 
@@ -127,12 +134,6 @@ func (s *Scaler) LastScaleOut() time.Time {
 }
 
 func (s *Scaler) Run(ctx context.Context) (time.Duration, error) {
-	if s.elasticCIMode {
-		log.Printf("🛡️ [Elastic CI Mode] Running scaler with enhanced safety features (stale metrics detection, dangling instance protection)")
-		if s.scaleInParams.Disable {
-			log.Printf("ℹ️ [Elastic CI Mode] DISABLE_SCALE_IN=true is set but will be ignored in ElasticCIMode to allow proper bidirectional scaling")
-		}
-	}
 
 	// In Elastic CI mode, check for any dangling instances (where buildkite-agent is not running)
 	// This runs first, before getting metrics or scaling

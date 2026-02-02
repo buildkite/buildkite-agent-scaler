@@ -230,8 +230,6 @@ func (a *ASGDriver) checkAndMarkUnhealthy(
 			}
 		} else if checkCmdResult.Status != ssmTypes.CommandInvocationStatusSuccess {
 			log.Printf("[Elastic CI Mode] Agent status check command for %s did not succeed (status: %s). Output: %s", instanceID, checkCmdResult.Status, aws.ToString(checkCmdResult.StandardOutputContent))
-		} else {
-			log.Printf("[Elastic CI Mode] Agent on instance %s appears to be running normally. Status: %s. Output: %s", instanceID, checkCmdResult.Status, aws.ToString(checkCmdResult.StandardOutputContent))
 		}
 	}
 
@@ -406,7 +404,6 @@ func (a *ASGDriver) SendSIGTERMToAgents(ctx context.Context, instanceID string) 
 // Marking instances unhealthy (via autoscaling:SetInstanceHealth) causes the ASG to terminate
 // and replace them according to its configured policies.
 func (a *ASGDriver) CleanupDanglingInstances(ctx context.Context, minimumInstanceUptime time.Duration, maxDanglingInstancesToCheck int) error {
-	log.Printf("[Elastic CI Mode] Starting dangling instance check for ASG %s (min uptime: %s, max check: %d)", a.Name, minimumInstanceUptime, maxDanglingInstancesToCheck)
 	ec2Client := ec2.NewFromConfig(a.Cfg)
 	ssmClient := ssm.NewFromConfig(a.Cfg)
 	asgClient := autoscaling.NewFromConfig(a.Cfg)
@@ -417,7 +414,6 @@ func (a *ASGDriver) CleanupDanglingInstances(ctx context.Context, minimumInstanc
 	}
 
 	if len(asgDetails.InstanceIDs) == 0 {
-		log.Printf("[Elastic CI Mode] No instances in ASG %s to check.", a.Name)
 		return nil
 	}
 
@@ -441,13 +437,11 @@ func (a *ASGDriver) CleanupDanglingInstances(ctx context.Context, minimumInstanc
 	}
 
 	if len(instancesToConsiderChecking) == 0 {
-		log.Printf("[Elastic CI Mode] No running instances older than %s in ASG %s to consider for dangling check.", minimumInstanceUptime, a.Name)
 		return nil
 	}
 
 	// Detect platform from instances (each ASG is single-platform)
 	platform := a.getASGPlatform(ctx, instancesToConsiderChecking)
-	log.Printf("[Elastic CI Mode] Detected platform: %s", platform)
 
 	// Sort instances by launch time (oldest first) to prioritize checking older ones
 	sort.SliceStable(instancesToConsiderChecking, func(i, j int) bool {
@@ -467,17 +461,18 @@ func (a *ASGDriver) CleanupDanglingInstances(ctx context.Context, minimumInstanc
 	}
 
 	if len(instancesForSSMCheck) > 0 {
-		log.Printf("[Elastic CI Mode] Performing detailed SSM check for %d candidate instance(s): %v", len(instancesForSSMCheck), instancesForSSMCheck)
+		log.Printf("[Elastic CI Mode] Checking %d %s instance(s) for dangling agents: %v", len(instancesForSSMCheck), platform, instancesForSSMCheck)
 		markedInCall, errInCall := a.checkAndMarkUnhealthy(ctx, instancesForSSMCheck, ssmClient, asgClient, platform)
 		totalMarkedUnhealthy += markedInCall
 		if errInCall != nil {
 			firstErrorEncountered = errInCall
-			log.Printf("[Elastic CI Mode] Error during checkAndMarkUnhealthy call: %v", errInCall)
 		}
 	}
 
-	log.Printf("[Elastic CI Mode] Dangling instance check complete for ASG %s. Considered: %d, Actually Sent for SSM Check: %d, Marked as Unhealthy this run: %d",
-		a.Name, len(instancesToConsiderChecking), checkedCount, totalMarkedUnhealthy)
+	// Only log summary when we actually marked instances unhealthy
+	if totalMarkedUnhealthy > 0 {
+		log.Printf("[Elastic CI Mode] Dangling instance check: marked %d instance(s) as unhealthy", totalMarkedUnhealthy)
+	}
 
 	return firstErrorEncountered
 }
