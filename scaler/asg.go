@@ -355,7 +355,7 @@ func (a *ASGDriver) SendSIGTERMToAgents(ctx context.Context, instanceID string) 
 		return err
 	}
 
-	// With consecutive Lambda invocations the same instance selected for scale-in, 
+	// With consecutive Lambda invocations the same instance selected for scale-in,
 	// only during the first invocation will actually signal the agent to finish current jobs and stop.
 	command := `#!/bin/bash
 if [ -f /tmp/buildkite-agent-termination-marker ]; then
