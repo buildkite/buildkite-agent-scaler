@@ -348,14 +348,24 @@ type dryRunASG struct {
 
 func (a *ASGDriver) SendSIGTERMToAgents(ctx context.Context, instanceID string) error {
 	ssmClient := ssm.NewFromConfig(a.Cfg)
-	command := "sudo systemctl stop buildkite-agent.service || sudo /opt/buildkite-agent/bin/buildkite-agent stop --signal SIGTERM"
-	log.Printf("Sending SIGTERM to instance %s via SSM Run Command: %s", instanceID, command)
 
 	// Wait for SSM agent to be ready before sending command
 	if err := a.waitForSSMReady(ctx, instanceID, 30*time.Second); err != nil {
 		log.Printf("SSM agent not ready on instance %s, cannot send SIGTERM: %v", instanceID, err)
 		return err
 	}
+
+	// With consecutive Lambda invocations the same instance selected for scale-in,
+	// only during the first invocation will actually signal the agent to finish current jobs and stop.
+	command := `#!/bin/bash
+if [ -f /tmp/buildkite-agent-termination-marker ]; then
+  echo "Already marked for termination, skipping"
+  exit 0
+fi
+echo "Termination requested at $(date)" > /tmp/buildkite-agent-termination-marker
+sudo systemctl stop buildkite-agent.service || sudo /opt/buildkite-agent/bin/buildkite-agent stop --signal SIGTERM
+`
+	log.Printf("[Elastic CI Mode] Sending SIGTERM to instance %s", instanceID)
 
 	_, err := ssmClient.SendCommand(ctx, &ssm.SendCommandInput{
 		InstanceIds:  []string{instanceID},
@@ -365,10 +375,10 @@ func (a *ASGDriver) SendSIGTERMToAgents(ctx context.Context, instanceID string) 
 	})
 
 	if err != nil {
-		log.Printf("Error sending SIGTERM to instance %s: %v", instanceID, err)
+		log.Printf("[Elastic CI Mode] Error sending SIGTERM to instance %s: %v", instanceID, err)
 		return err
 	}
-	log.Printf("Successfully sent SIGTERM command to instance %s", instanceID)
+	log.Printf("[Elastic CI Mode] Successfully sent SIGTERM command to instance %s", instanceID)
 	return nil
 }
 
