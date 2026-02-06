@@ -458,16 +458,18 @@ func (a *ASGDriver) CleanupDanglingInstances(ctx context.Context, minimumInstanc
 		return instancesToConsiderChecking[i].LaunchTime.Before(*instancesToConsiderChecking[j].LaunchTime)
 	})
 
-	checkedCount := 0
 	totalMarkedUnhealthy := 0
 	var firstErrorEncountered error
 
-	instancesForSSMCheck := make([]string, 0)
-	for i := 0; i < len(instancesToConsiderChecking) && (maxDanglingInstancesToCheck <= 0 || checkedCount < maxDanglingInstancesToCheck); i++ {
-		instance := instancesToConsiderChecking[i]
-		instanceID := *instance.InstanceId
-		instancesForSSMCheck = append(instancesForSSMCheck, instanceID)
-		checkedCount++
+	// Limit the number of instances to check if maxDanglingInstancesToCheck is set
+	instancesToCheck := instancesToConsiderChecking
+	if maxDanglingInstancesToCheck > 0 && len(instancesToCheck) > maxDanglingInstancesToCheck {
+		instancesToCheck = instancesToCheck[:maxDanglingInstancesToCheck]
+	}
+
+	instancesForSSMCheck := make([]string, 0, len(instancesToCheck))
+	for _, instance := range instancesToCheck {
+		instancesForSSMCheck = append(instancesForSSMCheck, *instance.InstanceId)
 	}
 
 	if len(instancesForSSMCheck) > 0 {
