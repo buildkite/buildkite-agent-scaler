@@ -2,6 +2,7 @@ package scaler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -16,6 +17,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmTypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 )
+
+// ErrWindowsGracefulScaleInNotSupported is returned when attempting graceful scale-in on Windows instances.
+// Windows instances don't support SIGTERM-based graceful shutdown; they rely on lifecycle hooks instead.
+var ErrWindowsGracefulScaleInNotSupported = errors.New("graceful scale-in not supported on Windows")
 
 const (
 	activitySucessfulStatusCode           = "Successful"
@@ -369,7 +374,19 @@ type dryRunASG struct {
 }
 
 func (a *ASGDriver) SendSIGTERMToAgents(ctx context.Context, instanceID string) error {
+	ec2Client := ec2.NewFromConfig(a.Cfg)
 	ssmClient := ssm.NewFromConfig(a.Cfg)
+
+	// Detect platform - graceful SIGTERM is only supported on Linux
+	descResp, err := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+		InstanceIds: []string{instanceID},
+	})
+	if err == nil && len(descResp.Reservations) > 0 && len(descResp.Reservations[0].Instances) > 0 {
+		instance := descResp.Reservations[0].Instances[0]
+		if strings.EqualFold(string(instance.Platform), "windows") {
+			return ErrWindowsGracefulScaleInNotSupported
+		}
+	}
 
 	// Wait for SSM agent to be ready before sending command
 	if err := a.waitForSSMReady(ctx, instanceID, 30*time.Second); err != nil {
@@ -389,7 +406,7 @@ sudo systemctl stop buildkite-agent.service || sudo /opt/buildkite-agent/bin/bui
 `
 	log.Printf("[Elastic CI Mode] Sending SIGTERM to instance %s", instanceID)
 
-	_, err := ssmClient.SendCommand(ctx, &ssm.SendCommandInput{
+	_, err = ssmClient.SendCommand(ctx, &ssm.SendCommandInput{
 		InstanceIds:  []string{instanceID},
 		DocumentName: aws.String("AWS-RunShellScript"),
 		Parameters:   map[string][]string{"commands": {command}},

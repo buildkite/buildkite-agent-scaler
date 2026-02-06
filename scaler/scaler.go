@@ -2,6 +2,7 @@ package scaler
 
 import (
 	"context"
+	"errors"
 	"log"
 	"math"
 	"sort"
@@ -450,27 +451,38 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 			}
 		}
 
-		log.Printf("Sending SIGTERM to %d instances: %v", len(instancesForTermination), instancesForTermination)
+		log.Printf("[Elastic CI Mode] Attempting graceful termination for %d instance(s): %v", len(instancesForTermination), instancesForTermination)
 
 		sigTermErrors := 0
+		sigTermSkipped := 0
+		sigTermSuccess := 0
 		for _, instanceID := range instancesForTermination {
 			if err := s.autoscaling.SendSIGTERMToAgents(ctx, instanceID); err != nil {
-				log.Printf("⚠️  Failed to send SIGTERM to instance %s: %v", instanceID, err)
-				sigTermErrors++
+				if errors.Is(err, ErrWindowsGracefulScaleInNotSupported) {
+					sigTermSkipped++
+				} else {
+					log.Printf("⚠️  Failed to send SIGTERM to instance %s: %v", instanceID, err)
+					sigTermErrors++
+				}
 			} else {
 				log.Printf("✅ Successfully sent SIGTERM to instance %s", instanceID)
+				sigTermSuccess++
 			}
 		}
 
 		if sigTermErrors > 0 {
 			log.Printf("⚠️  Failed to send SIGTERM to %d/%d instances",
 				sigTermErrors, len(instancesForTermination))
-		} else {
-			log.Printf("✅ Successfully sent SIGTERM to all %d instances",
-				len(instancesForTermination))
+		}
+		if sigTermSkipped > 0 {
+			log.Printf("ℹ️  Skipped %d Windows instance(s) - graceful scale-in not supported, will be terminated directly by ASG",
+				sigTermSkipped)
+		}
+		if sigTermSuccess > 0 {
+			log.Printf("✅ Successfully sent SIGTERM to %d instance(s)", sigTermSuccess)
 		}
 
-		log.Printf("[Elastic CI Mode] Updating ASG desired capacity to %d after sending SIGTERMs.", desired)
+		log.Printf("[Elastic CI Mode] Updating ASG desired capacity to %d", desired)
 		if err := s.setDesiredCapacity(ctx, desired); err != nil {
 			log.Printf("CRITICAL: [Elastic CI Mode] Failed to set desired capacity to %d after sending SIGTERMs: %v. ASG might replace terminated instances.", desired, err)
 
