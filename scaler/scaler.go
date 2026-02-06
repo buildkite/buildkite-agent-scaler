@@ -491,7 +491,9 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 
 			documentName := "AWS-RunShellScript"
 			checkCommand := "systemctl is-active buildkite-agent"
-			if descErr == nil && len(descResp.Reservations) > 0 && len(descResp.Reservations[0].Instances) > 0 {
+			if descErr != nil {
+				log.Printf("[Elastic CI Mode] Warning: Failed to detect platform for %s, defaulting to Linux: %v", instanceID, descErr)
+			} else if len(descResp.Reservations) > 0 && len(descResp.Reservations[0].Instances) > 0 {
 				instance := descResp.Reservations[0].Instances[0]
 				if strings.EqualFold(string(instance.Platform), "windows") {
 					documentName = "AWS-RunPowerShellScript"
