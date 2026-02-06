@@ -108,7 +108,7 @@ fi
 ACTIVE_STATE=$(systemctl show buildkite-agent -p ActiveState | cut -d= -f2)
 case "$ACTIVE_STATE" in
   "active"|"activating") echo "RUNNING" ;;
-  *) echo "NOT_RUNNING" ;;
+  *) echo "NOT_RUNNING: $ACTIVE_STATE" ;;
 esac
 `
 }
