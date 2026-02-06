@@ -228,6 +228,7 @@ Resources:
                   # *
                   - autoscaling:SetDesiredCapacity
                   - autoscaling:DescribeScalingActivities
+                  - autoscaling:SetInstanceHealth
                   # # arn:aws:autoscaling:$region:$account:autoScalingGroup:$uuid:autoScalingGroupName/$name
                 Resource: '*'
         - PolicyName: WriteCloudwatchMetrics
@@ -264,6 +265,7 @@ Resources:
                   Action: ssm:SendCommand
                   Resource:
                     - !Sub "arn:aws:ssm:${AWS::Region}::document/AWS-RunShellScript"
+                    - !Sub "arn:aws:ssm:${AWS::Region}::document/AWS-RunPowerShellScript"
                 - Effect: Allow
                   Action: ssm:SendCommand
                   Resource: !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/*"
