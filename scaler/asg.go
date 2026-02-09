@@ -203,10 +203,10 @@ func (a *ASGDriver) checkAndMarkUnhealthy(
 		if checkCmdResult.Status == ssmTypes.CommandInvocationStatusFailed ||
 			(checkCmdResult.Status == ssmTypes.CommandInvocationStatusSuccess && checkCmdResult.StandardOutputContent != nil && strings.Contains(*checkCmdResult.StandardOutputContent, "NOT_RUNNING")) {
 
-			// Skip if it's already been marked for termination or is activating (based on script's output)
+			// Skip if it's already been marked for termination (based on script's output)
 			if checkCmdResult.StandardOutputContent != nil &&
-				(strings.Contains(*checkCmdResult.StandardOutputContent, "MARKER_EXISTS") || strings.Contains(*checkCmdResult.StandardOutputContent, "ACTIVATING")) {
-				log.Printf("[Elastic CI Mode] ℹ️ Instance %s has buildkite-agent in transition state (marker exists or activating), not a dangling instance", instanceID)
+				strings.Contains(*checkCmdResult.StandardOutputContent, "MARKER_EXISTS") {
+				log.Printf("[Elastic CI Mode] ℹ️ Instance %s is already marked for termination, skipping", instanceID)
 				if checkCmdResult.StandardOutputContent != nil {
 					log.Printf("[Elastic CI Mode] Service status details for %s: %s", instanceID, *checkCmdResult.StandardOutputContent)
 				}
