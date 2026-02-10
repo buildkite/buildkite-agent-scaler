@@ -2,6 +2,7 @@ package scaler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -16,6 +17,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmTypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 )
+
+// ErrWindowsGracefulScaleInNotSupported is returned when attempting graceful scale-in on Windows instances.
+// Windows instances don't support SIGTERM-based graceful shutdown; they rely on lifecycle hooks instead.
+var ErrWindowsGracefulScaleInNotSupported = errors.New("graceful scale-in not supported on Windows")
 
 const (
 	activitySucessfulStatusCode           = "Successful"
@@ -70,57 +75,79 @@ func (a *ASGDriver) waitForSSMReady(ctx context.Context, instanceID string, time
 	return fmt.Errorf("timed out waiting for SSM agent to become ready on %s", instanceID)
 }
 
-// checkAndTerminate runs the existing SSM check + terminate logic on a slice of instance IDs.
-// The number of instances to check is already limited by the caller.
-func (a *ASGDriver) checkAndTerminate(
-	ctx context.Context,
-	instances []string,
-	ssmSvc *ssm.Client,
-	ec2Svc *ec2.Client,
-) (terminatedCount int, firstError error) {
-	// terminatedCount is a named return value, initialized to 0 by default.
+// getASGPlatform detects whether the ASG contains Linux or Windows instances.
+// Since each ASG is single-platform, we only need to check one instance.
+func (a *ASGDriver) getASGPlatform(ctx context.Context, instances []ec2Types.Instance) string {
+	for _, instance := range instances {
+		// The Platform field is only set for Windows instances.
+		// Use case-insensitive comparison because the EC2 API returns "windows" (lowercase)
+		// but ec2Types.PlatformValuesWindows is "Windows" (capitalized).
+		if strings.EqualFold(string(instance.Platform), "windows") {
+			return "windows"
+		}
+	}
+	return "linux"
+}
 
-	for _, instanceID := range instances {
+// getCheckCommand returns the appropriate check command for the platform
+func (a *ASGDriver) getCheckCommand(platform string) string {
+	if platform == "windows" {
+		return `
+$AgentStatus = nssm status buildkite-agent 2>&1
+if ($AgentStatus -match "SERVICE_RUNNING") {
+    Write-Output "RUNNING"
+} else {
+    Write-Output "NOT_RUNNING"
+}
+`
+	}
 
-		checkCommand := `
-#!/bin/bash
-# Check if buildkite-agent service is running or has been marked for termination
-# Note: Even after SIGTERM, the service status may still show as "active" and "running"
-# until jobs complete, so we primarily rely on the termination marker file.
-
+	// Default to Linux
+	return `#!/bin/bash
+# Linux check command
 if [ -f /tmp/buildkite-agent-termination-marker ]; then
   echo "MARKER_EXISTS: Instance is already marked for termination"
-  cat /tmp/buildkite-agent-termination-marker
   exit 0
 fi
 
 ACTIVE_STATE=$(systemctl show buildkite-agent -p ActiveState | cut -d= -f2)
-SUB_STATE=$(systemctl show buildkite-agent -p SubState | cut -d= -f2)
-
-echo "Service status: ActiveState=$ACTIVE_STATE SubState=$SUB_STATE"
-
 case "$ACTIVE_STATE" in
-  "active")
-    echo "RUNNING: Service is active ($SUB_STATE)"
-    exit 0
-    ;;
-  "activating")
-    echo "ACTIVATING: Service is starting"
-    exit 0
-    ;;
-  *)
-    # Service is not running
-    echo "Detailed service information:"
-    systemctl status buildkite-agent --no-pager || true
-    echo "NOT_RUNNING: Service is $ACTIVE_STATE/$SUB_STATE"
-    exit 1
-    ;;
+  "active"|"activating") echo "RUNNING" ;;
+  *) echo "NOT_RUNNING: $ACTIVE_STATE" ;;
 esac
 `
+}
 
+// checkAndMarkUnhealthy uses SSM to check if buildkite-agent is running on each instance.
+// Instances where the agent service is not running are marked unhealthy via the ASG API,
+// which will cause the ASG to terminate and replace them.
+//
+// This is safe to use without graceful shutdown because:
+// - We only mark unhealthy if the agent service is NOT running
+// - If the agent service is not running, there cannot be any jobs in progress
+// - This is different from normal scale-in which uses SIGTERM for graceful shutdown
+//
+// This function is specifically for "zombie" instances where the EC2 instance is running
+// but the buildkite-agent process has died (e.g., due to crashes, OOM, or other failures).
+func (a *ASGDriver) checkAndMarkUnhealthy(
+	ctx context.Context,
+	instances []string,
+	ssmSvc *ssm.Client,
+	asgSvc *autoscaling.Client,
+	platform string,
+) (markedUnhealthyCount int, firstError error) {
+	checkCommand := a.getCheckCommand(platform)
+
+	// Use the appropriate SSM document based on platform
+	documentName := "AWS-RunShellScript"
+	if platform == "windows" {
+		documentName = "AWS-RunPowerShellScript"
+	}
+
+	for _, instanceID := range instances {
 		checkInput := &ssm.SendCommandInput{
 			InstanceIds:  []string{instanceID},
-			DocumentName: aws.String("AWS-RunShellScript"),
+			DocumentName: aws.String(documentName),
 			Parameters: map[string][]string{
 				"commands": {checkCommand},
 			},
@@ -176,10 +203,10 @@ esac
 		if checkCmdResult.Status == ssmTypes.CommandInvocationStatusFailed ||
 			(checkCmdResult.Status == ssmTypes.CommandInvocationStatusSuccess && checkCmdResult.StandardOutputContent != nil && strings.Contains(*checkCmdResult.StandardOutputContent, "NOT_RUNNING")) {
 
-			// Skip if it's already been marked for termination or is activating (based on script's output)
+			// Skip if it's already been marked for termination (based on script's output)
 			if checkCmdResult.StandardOutputContent != nil &&
-				(strings.Contains(*checkCmdResult.StandardOutputContent, "MARKER_EXISTS") || strings.Contains(*checkCmdResult.StandardOutputContent, "ACTIVATING")) {
-				log.Printf("[Elastic CI Mode] ℹ️ Instance %s has buildkite-agent in transition state (marker exists or activating), not a dangling instance", instanceID)
+				strings.Contains(*checkCmdResult.StandardOutputContent, "MARKER_EXISTS") {
+				log.Printf("[Elastic CI Mode] ℹ️ Instance %s is already marked for termination, skipping", instanceID)
 				if checkCmdResult.StandardOutputContent != nil {
 					log.Printf("[Elastic CI Mode] Service status details for %s: %s", instanceID, *checkCmdResult.StandardOutputContent)
 				}
@@ -191,27 +218,27 @@ esac
 				log.Printf("[Elastic CI Mode] Service status for %s: %s", instanceID, *checkCmdResult.StandardOutputContent)
 			}
 
-			_, termErr := ec2Svc.TerminateInstances(ctx, &ec2.TerminateInstancesInput{
-				InstanceIds: []string{instanceID},
+			// Mark instance as unhealthy so ASG will terminate it
+			_, err := asgSvc.SetInstanceHealth(ctx, &autoscaling.SetInstanceHealthInput{
+				InstanceId:   aws.String(instanceID),
+				HealthStatus: aws.String("Unhealthy"),
 			})
 
-			if termErr != nil {
-				log.Printf("[Elastic CI Mode] Error: Failed to terminate dangling instance %s: %v", instanceID, termErr)
+			if err != nil {
+				log.Printf("[Elastic CI Mode] Error: Failed to mark instance %s as unhealthy: %v", instanceID, err)
 				if firstError == nil {
-					firstError = fmt.Errorf("TerminateInstances failed for %s: %w", instanceID, termErr)
+					firstError = fmt.Errorf("SetInstanceHealth failed for %s: %w", instanceID, err)
 				}
 			} else {
-				log.Printf("[Elastic CI Mode] Successfully initiated termination for dangling instance %s via EC2 API", instanceID)
-				terminatedCount++
+				log.Printf("[Elastic CI Mode] Successfully marked instance %s as unhealthy", instanceID)
+				markedUnhealthyCount++
 			}
 		} else if checkCmdResult.Status != ssmTypes.CommandInvocationStatusSuccess {
 			log.Printf("[Elastic CI Mode] Agent status check command for %s did not succeed (status: %s). Output: %s", instanceID, checkCmdResult.Status, aws.ToString(checkCmdResult.StandardOutputContent))
-		} else {
-			log.Printf("[Elastic CI Mode] Agent on instance %s appears to be running normally. Status: %s. Output: %s", instanceID, checkCmdResult.Status, aws.ToString(checkCmdResult.StandardOutputContent))
 		}
 	}
 
-	return terminatedCount, firstError
+	return markedUnhealthyCount, firstError
 }
 
 func (a *ASGDriver) Describe(ctx context.Context) (AutoscaleGroupDetails, error) {
@@ -347,7 +374,19 @@ type dryRunASG struct {
 }
 
 func (a *ASGDriver) SendSIGTERMToAgents(ctx context.Context, instanceID string) error {
+	ec2Client := ec2.NewFromConfig(a.Cfg)
 	ssmClient := ssm.NewFromConfig(a.Cfg)
+
+	// Detect platform - graceful SIGTERM is only supported on Linux
+	descResp, err := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+		InstanceIds: []string{instanceID},
+	})
+	if err == nil && len(descResp.Reservations) > 0 && len(descResp.Reservations[0].Instances) > 0 {
+		instance := descResp.Reservations[0].Instances[0]
+		if strings.EqualFold(string(instance.Platform), "windows") {
+			return ErrWindowsGracefulScaleInNotSupported
+		}
+	}
 
 	// Wait for SSM agent to be ready before sending command
 	if err := a.waitForSSMReady(ctx, instanceID, 30*time.Second); err != nil {
@@ -367,7 +406,7 @@ sudo systemctl stop buildkite-agent.service || sudo /opt/buildkite-agent/bin/bui
 `
 	log.Printf("[Elastic CI Mode] Sending SIGTERM to instance %s", instanceID)
 
-	_, err := ssmClient.SendCommand(ctx, &ssm.SendCommandInput{
+	_, err = ssmClient.SendCommand(ctx, &ssm.SendCommandInput{
 		InstanceIds:  []string{instanceID},
 		DocumentName: aws.String("AWS-RunShellScript"),
 		Parameters:   map[string][]string{"commands": {command}},
@@ -382,10 +421,19 @@ sudo systemctl stop buildkite-agent.service || sudo /opt/buildkite-agent/bin/bui
 	return nil
 }
 
+// CleanupDanglingInstances finds and marks unhealthy any "zombie" instances where the
+// buildkite-agent service has stopped running but the EC2 instance is still alive.
+//
+// This is different from normal scale-in:
+// - Normal scale-in: instances are healthy, jobs may be running -> uses SIGTERM for graceful shutdown
+// - This function: agent service is stopped, no jobs can be running -> safe to mark as unhealthy
+//
+// Marking instances unhealthy (via autoscaling:SetInstanceHealth) causes the ASG to terminate
+// and replace them according to its configured policies.
 func (a *ASGDriver) CleanupDanglingInstances(ctx context.Context, minimumInstanceUptime time.Duration, maxDanglingInstancesToCheck int) error {
-	log.Printf("[Elastic CI Mode] Starting dangling instance check for ASG %s (min uptime: %s, max check: %d)", a.Name, minimumInstanceUptime, maxDanglingInstancesToCheck)
 	ec2Client := ec2.NewFromConfig(a.Cfg)
 	ssmClient := ssm.NewFromConfig(a.Cfg)
+	asgClient := autoscaling.NewFromConfig(a.Cfg)
 
 	asgDetails, err := a.Describe(ctx)
 	if err != nil {
@@ -393,7 +441,6 @@ func (a *ASGDriver) CleanupDanglingInstances(ctx context.Context, minimumInstanc
 	}
 
 	if len(asgDetails.InstanceIDs) == 0 {
-		log.Printf("[Elastic CI Mode] No instances in ASG %s to check.", a.Name)
 		return nil
 	}
 
@@ -417,41 +464,44 @@ func (a *ASGDriver) CleanupDanglingInstances(ctx context.Context, minimumInstanc
 	}
 
 	if len(instancesToConsiderChecking) == 0 {
-		log.Printf("[Elastic CI Mode] No running instances older than %s in ASG %s to consider for dangling check.", minimumInstanceUptime, a.Name)
 		return nil
 	}
+
+	// Detect platform from instances (each ASG is single-platform)
+	platform := a.getASGPlatform(ctx, instancesToConsiderChecking)
 
 	// Sort instances by launch time (oldest first) to prioritize checking older ones
 	sort.SliceStable(instancesToConsiderChecking, func(i, j int) bool {
 		return instancesToConsiderChecking[i].LaunchTime.Before(*instancesToConsiderChecking[j].LaunchTime)
 	})
 
-	checkedCount := 0
-	totalActuallyTerminated := 0
+	totalMarkedUnhealthy := 0
 	var firstErrorEncountered error
 
-	instancesForSSMCheck := make([]string, 0)
-	for i := 0; i < len(instancesToConsiderChecking) && (maxDanglingInstancesToCheck <= 0 || checkedCount < maxDanglingInstancesToCheck); i++ {
-		instance := instancesToConsiderChecking[i]
-		instanceID := *instance.InstanceId
-		instancesForSSMCheck = append(instancesForSSMCheck, instanceID)
-		checkedCount++
+	// Limit the number of instances to check if maxDanglingInstancesToCheck is set
+	instancesToCheck := instancesToConsiderChecking
+	if maxDanglingInstancesToCheck > 0 && len(instancesToCheck) > maxDanglingInstancesToCheck {
+		instancesToCheck = instancesToCheck[:maxDanglingInstancesToCheck]
+	}
+
+	instancesForSSMCheck := make([]string, 0, len(instancesToCheck))
+	for _, instance := range instancesToCheck {
+		instancesForSSMCheck = append(instancesForSSMCheck, *instance.InstanceId)
 	}
 
 	if len(instancesForSSMCheck) > 0 {
-		log.Printf("[Elastic CI Mode] Performing detailed SSM check for %d candidate instance(s): %v", len(instancesForSSMCheck), instancesForSSMCheck)
-		terminatedInCall, errInCall := a.checkAndTerminate(ctx, instancesForSSMCheck, ssmClient, ec2Client)
-		totalActuallyTerminated += terminatedInCall
-		// Only store the first error encountered during the process.
+		log.Printf("[Elastic CI Mode] Checking %d %s instance(s) for dangling agents: %v", len(instancesForSSMCheck), platform, instancesForSSMCheck)
+		markedInCall, errInCall := a.checkAndMarkUnhealthy(ctx, instancesForSSMCheck, ssmClient, asgClient, platform)
+		totalMarkedUnhealthy += markedInCall
 		if errInCall != nil {
 			firstErrorEncountered = errInCall
-			// Log the error but continue, as other instances might have been processed or other calls might succeed.
-			log.Printf("[Elastic CI Mode] Error during checkAndTerminate call: %v", errInCall)
 		}
 	}
 
-	log.Printf("[Elastic CI Mode] Dangling instance check complete for ASG %s. Considered: %d, Actually Sent for SSM Check: %d, Terminated this run: %d",
-		a.Name, len(instancesToConsiderChecking), checkedCount, totalActuallyTerminated)
+	// Only log summary when we actually marked instances unhealthy
+	if totalMarkedUnhealthy > 0 {
+		log.Printf("[Elastic CI Mode] Dangling instance check: marked %d instance(s) as unhealthy", totalMarkedUnhealthy)
+	}
 
 	return firstErrorEncountered
 }

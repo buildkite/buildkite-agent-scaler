@@ -2,9 +2,11 @@ package scaler
 
 import (
 	"context"
+	"errors"
 	"log"
 	"math"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -114,6 +116,13 @@ func NewScaler(client *buildkite.Client, cfg aws.Config, params Params) (*Scaler
 		}
 	}
 
+	if params.ElasticCIMode {
+		log.Printf("🛡️ [Elastic CI Mode] Running with enhanced safety features (stale metrics detection, dangling instance protection)")
+		if params.ScaleInParams.Disable {
+			log.Printf("ℹ️ [Elastic CI Mode] DISABLE_SCALE_IN=true is set but will be ignored to allow proper bidirectional scaling")
+		}
+	}
+
 	return scaler, nil
 }
 
@@ -126,12 +135,6 @@ func (s *Scaler) LastScaleOut() time.Time {
 }
 
 func (s *Scaler) Run(ctx context.Context) (time.Duration, error) {
-	if s.elasticCIMode {
-		log.Printf("🛡️ [Elastic CI Mode] Running scaler with enhanced safety features (stale metrics detection, dangling instance protection)")
-		if s.scaleInParams.Disable {
-			log.Printf("ℹ️ [Elastic CI Mode] DISABLE_SCALE_IN=true is set but will be ignored in ElasticCIMode to allow proper bidirectional scaling")
-		}
-	}
 
 	// In Elastic CI mode, check for any dangling instances (where buildkite-agent is not running)
 	// This runs first, before getting metrics or scaling
@@ -448,27 +451,38 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 			}
 		}
 
-		log.Printf("Sending SIGTERM to %d instances: %v", len(instancesForTermination), instancesForTermination)
+		log.Printf("[Elastic CI Mode] Attempting graceful termination for %d instance(s): %v", len(instancesForTermination), instancesForTermination)
 
 		sigTermErrors := 0
+		sigTermSkipped := 0
+		sigTermSuccess := 0
 		for _, instanceID := range instancesForTermination {
 			if err := s.autoscaling.SendSIGTERMToAgents(ctx, instanceID); err != nil {
-				log.Printf("⚠️  Failed to send SIGTERM to instance %s: %v", instanceID, err)
-				sigTermErrors++
+				if errors.Is(err, ErrWindowsGracefulScaleInNotSupported) {
+					sigTermSkipped++
+				} else {
+					log.Printf("⚠️  Failed to send SIGTERM to instance %s: %v", instanceID, err)
+					sigTermErrors++
+				}
 			} else {
 				log.Printf("✅ Successfully sent SIGTERM to instance %s", instanceID)
+				sigTermSuccess++
 			}
 		}
 
 		if sigTermErrors > 0 {
 			log.Printf("⚠️  Failed to send SIGTERM to %d/%d instances",
 				sigTermErrors, len(instancesForTermination))
-		} else {
-			log.Printf("✅ Successfully sent SIGTERM to all %d instances",
-				len(instancesForTermination))
+		}
+		if sigTermSkipped > 0 {
+			log.Printf("ℹ️  Skipped %d Windows instance(s) - graceful scale-in not supported, will be terminated directly by ASG",
+				sigTermSkipped)
+		}
+		if sigTermSuccess > 0 {
+			log.Printf("✅ Successfully sent SIGTERM to %d instance(s)", sigTermSuccess)
 		}
 
-		log.Printf("[Elastic CI Mode] Updating ASG desired capacity to %d after sending SIGTERMs.", desired)
+		log.Printf("[Elastic CI Mode] Updating ASG desired capacity to %d", desired)
 		if err := s.setDesiredCapacity(ctx, desired); err != nil {
 			log.Printf("CRITICAL: [Elastic CI Mode] Failed to set desired capacity to %d after sending SIGTERMs: %v. ASG might replace terminated instances.", desired, err)
 
@@ -482,12 +496,30 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 			ssmClient := ssm.NewFromConfig(s.cfg)
 			ec2Client := ec2.NewFromConfig(s.cfg)
 
+			// Detect platform for this instance
+			descResp, descErr := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+				InstanceIds: []string{instanceID},
+			})
+
+			documentName := "AWS-RunShellScript"
+			checkCommand := "systemctl is-active buildkite-agent"
+			if descErr != nil {
+				log.Printf("[Elastic CI Mode] Warning: Failed to detect platform for %s, defaulting to Linux: %v", instanceID, descErr)
+			} else if len(descResp.Reservations) > 0 && len(descResp.Reservations[0].Instances) > 0 {
+				instance := descResp.Reservations[0].Instances[0]
+				if strings.EqualFold(string(instance.Platform), "windows") {
+					documentName = "AWS-RunPowerShellScript"
+					checkCommand = "nssm status buildkite-agent"
+					log.Printf("[Elastic CI Mode] Detected Windows platform for instance %s", instanceID)
+				}
+			}
+
 			// Try to check if buildkite-agent is running via SSM
 			_, err := ssmClient.SendCommand(ctx, &ssm.SendCommandInput{
 				InstanceIds:  []string{instanceID},
-				DocumentName: aws.String("AWS-RunShellScript"),
+				DocumentName: aws.String(documentName),
 				Parameters: map[string][]string{
-					"commands": {"systemctl is-active buildkite-agent"},
+					"commands": {checkCommand},
 				},
 				Comment: aws.String("Check if buildkite-agent service is running"),
 			})
