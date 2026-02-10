@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## [v1.11.0](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.10.1...v1.11.0) (2026-02-10)
+### Fixed
+* Fix: restore SIGTERM marker by @scadu in https://github.com/buildkite/buildkite-agent-scaler/pull/283
+
+### Changed
+* Add dangling instance check for Windows by @scadu in https://github.com/buildkite/buildkite-agent-scaler/pull/280
+
+## Dependencies
+* chore(deps): bump the aws group with 5 updates by @dependabot[bot] in https://github.com/buildkite/buildkite-agent-scaler/pull/272
+* chore(deps): bump the aws group with 7 updates by @dependabot[bot] in https://github.com/buildkite/buildkite-agent-scaler/pull/273
+* SUP-2919: Add ManagedPolicyARNs to Lambda Scaler by @Mykematt in https://github.com/buildkite/buildkite-agent-scaler/pull/274
+* chore(deps): bump the aws group with 5 updates by @dependabot[bot] in https://github.com/buildkite/buildkite-agent-scaler/pull/275
+* chore(deps): bump the aws group with 3 updates by @dependabot[bot] in https://github.com/buildkite/buildkite-agent-scaler/pull/276
+* chore(deps): bump the aws group with 7 updates by @dependabot[bot] in https://github.com/buildkite/buildkite-agent-scaler/pull/277
+* chore(deps): bump the aws group with 2 updates by @dependabot[bot] in https://github.com/buildkite/buildkite-agent-scaler/pull/278
+* chore(deps): bump the aws group with 2 updates by @dependabot[bot] in https://github.com/buildkite/buildkite-agent-scaler/pull/279
+* chore(deps): bump github.com/aws/aws-sdk-go-v2/service/ec2 from 1.282.0 to 1.285.0 in the aws group by @dependabot[bot] in https://github.com/buildkite/buildkite-agent-scaler/pull/281
+
+### Internal
+* Release v1.10.1 by @Mykematt in https://github.com/buildkite/buildkite-agent-scaler/pull/282
+
 ## [v1.10.1](https://github.com/buildkite/buildkite-agent-scaler/tree/v1.10.1) (2025-12-10)
 [Full Changelog](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.10.0...v1.10.1)
 
