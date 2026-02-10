@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 ### Changed
 * Add dangling instance check for Windows by @scadu in https://github.com/buildkite/buildkite-agent-scaler/pull/280
 
-## Dependencies
+### Dependencies
 * chore(deps): bump the aws group with 5 updates by @dependabot[bot] in https://github.com/buildkite/buildkite-agent-scaler/pull/272
 * chore(deps): bump the aws group with 7 updates by @dependabot[bot] in https://github.com/buildkite/buildkite-agent-scaler/pull/273
 * SUP-2919: Add ManagedPolicyARNs to Lambda Scaler by @Mykematt in https://github.com/buildkite/buildkite-agent-scaler/pull/274
