@@ -301,7 +301,7 @@ Resources:
       PermissionsBoundary: !If [ SetRolePermissionsBoundaryARN, !Ref RolePermissionsBoundaryARN, !Ref "AWS::NoValue" ]
       Timeout: 120
       Handler: bootstrap
-      Runtime: provided.al2
+      Runtime: provided.al2023
       Architectures:
         - x86_64
       MemorySize: 128

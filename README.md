@@ -81,7 +81,7 @@ the following IAM permissions:
 * `autoscaling:DescribeScalingActivities`
 * `autoscaling:SetDesiredCapacity`
 
-Its handler is `bootstrap`, it uses a `provided.al2` runtime and requires the following env vars:
+Its handler is `bootstrap`, it uses a `provided.al2023` runtime and requires the following env vars:
 
 * `BUILDKITE_AGENT_TOKEN` or `BUILDKITE_AGENT_TOKEN_SSM_KEY`
 * `BUILDKITE_QUEUE`
@@ -97,7 +97,7 @@ aws lambda create-function \
   --function-name buildkite-agent-scaler \
   --memory 128 \
   --role arn:aws:iam::account-id:role/execution_role \
-  --runtime provided.al2 \
+  --runtime provided.al2023 \
   --zip-file fileb://handler.zip \
   --handler bootstrap
 ```
