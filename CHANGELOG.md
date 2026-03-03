@@ -1,8 +1,21 @@
 # Changelog
+
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
+
+## [v1.11.1](https://github.com/buildkite/buildkite-agent-scaler/tree/v1.11.1) (2026-03-04)
+
+[Full Changelog](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.11.0...v1.11.1)
+
+### Dependencies
+
+- chore(deps): bump the aws group across 1 directory with 6 updates [#290](https://github.com/buildkite/buildkite-agent-scaler/pull/290) (@dependabot[bot]
+
+### Internal
+
+- chore: remove support from codeowners [#292](https://github.com/buildkite/buildkite-agent-scaler/pull/292) (@mcncl)
 
 ## [v1.11.0](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.10.1...v1.11.0) (2026-02-10)
 ### Fixed
