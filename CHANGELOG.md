@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## [v1.11.2](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.11.1...v1.11.2) (2026-03-09)
+
+* Bump Go to 1.26.1, and gotestsum to 1.13.0 [#295](https://github.com/buildkite/buildkite-agent-scaler/pull/295) ([scadu](https://github.com/scadu))
+
 ## [v1.11.1](https://github.com/buildkite/buildkite-agent-scaler/tree/v1.11.1) (2026-03-04)
 
 [Full Changelog](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.11.0...v1.11.1)
