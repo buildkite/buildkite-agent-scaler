@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 ## [v1.12.0](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.11.2...v1.12.0) (2026-03-12)
 
+* Add logging for all SSM service check outcomes in dangling instance detection [#303](https://github.com/buildkite/buildkite-agent-scaler/pull/303) ([petetomasik](https://github.com/petetomasik))
 * Add a Renovate config [#301](https://github.com/buildkite/buildkite-agent-scaler/pull/301) ([mcncl](https://github.com/mcncl))
 * chore(deps): bump the aws group across 1 directory with 7 updates [#296](https://github.com/buildkite/buildkite-agent-scaler/pull/296) ([dependabot[bot]](https://github.com/apps/dependabot))
 * Detect dangling instances when agents report zero but instances are running [#300](https://github.com/buildkite/buildkite-agent-scaler/pull/300) ([omehegan](https://github.com/omehegan))
