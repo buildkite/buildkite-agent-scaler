@@ -452,6 +452,7 @@ type asgTestDriver struct {
 	err                    error
 	desiredCapacity        int64
 	actualCapacity         int64 // If 0, will default to desiredCapacity
+	maxSize                int64 // If 0, defaults to 100
 	sigTermsSent           []string
 	elasticCIMode          bool
 	danglingInstancesFound int
@@ -469,11 +470,16 @@ func (d *asgTestDriver) Describe(ctx context.Context) (AutoscaleGroupDetails, er
 		actualCount = d.desiredCapacity
 	}
 
+	maxSize := d.maxSize
+	if maxSize == 0 {
+		maxSize = 100
+	}
+
 	return AutoscaleGroupDetails{
 		DesiredCount: d.desiredCapacity,
 		ActualCount:  actualCount,
 		MinSize:      0,
-		MaxSize:      100,
+		MaxSize:      maxSize,
 		InstanceIDs:  instanceIDs,
 	}, d.err
 }
@@ -638,6 +644,141 @@ func TestAvailabilityBasedScaling(t *testing.T) {
 			if asg.desiredCapacity != tc.expectedDesiredCapacity {
 				t.Errorf("Expected desired capacity: %d, got: %d",
 					tc.expectedDesiredCapacity, asg.desiredCapacity)
+			}
+		})
+	}
+}
+
+func TestDanglingInstanceDetection(t *testing.T) {
+	testCases := []struct {
+		name                    string
+		metrics                 buildkite.AgentMetrics
+		asgDesired              int64
+		asgActual               int64
+		maxSize                 int64
+		agentsPerInstance       int
+		elasticCIMode           bool
+		expectedDesiredCapacity int64
+		expectedDanglingChecks  int
+	}{
+		// Core scenario from SUP-5153: agents die on running instance, MaxSize=1 caps
+		// desired to 1, scaler sees desired==actual and says "No scaling required".
+		// With the fix, it should detect total=0 with instances running and trigger cleanup.
+		{
+			name: "Elastic CI detects dangling instance when agents die and MaxSize caps desired",
+			metrics: buildkite.AgentMetrics{
+				ScheduledJobs: 4,
+				RunningJobs:   0,
+				WaitingJobs:   7,
+				TotalAgents:   0,
+			},
+			asgDesired:              1,
+			asgActual:               1,
+			maxSize:                 1,
+			agentsPerInstance:       6,
+			elasticCIMode:           true,
+			expectedDesiredCapacity: 1, // capacity unchanged — cleanup handles recovery
+			expectedDanglingChecks:  1,
+		},
+		// Same scenario but without Elastic CI Mode — should NOT trigger dangling check.
+		{
+			name: "Non-Elastic CI mode does not trigger dangling check",
+			metrics: buildkite.AgentMetrics{
+				ScheduledJobs: 4,
+				RunningJobs:   0,
+				WaitingJobs:   7,
+				TotalAgents:   0,
+			},
+			asgDesired:              1,
+			asgActual:               1,
+			maxSize:                 1,
+			agentsPerInstance:       6,
+			elasticCIMode:           false,
+			expectedDesiredCapacity: 1,
+			expectedDanglingChecks:  0,
+		},
+		// When there are zero instances AND zero agents (normal idle state),
+		// should NOT trigger dangling check — there's nothing dangling.
+		{
+			name: "No dangling check when zero instances and zero agents",
+			metrics: buildkite.AgentMetrics{
+				ScheduledJobs: 0,
+				RunningJobs:   0,
+				TotalAgents:   0,
+			},
+			asgDesired:              0,
+			asgActual:               0,
+			maxSize:                 1,
+			agentsPerInstance:       6,
+			elasticCIMode:           true,
+			expectedDesiredCapacity: 0,
+			expectedDanglingChecks:  0,
+		},
+		// When agents are healthy (total > 0), no dangling check needed.
+		{
+			name: "No dangling check when agents are healthy",
+			metrics: buildkite.AgentMetrics{
+				ScheduledJobs: 0,
+				RunningJobs:   0,
+				TotalAgents:   6,
+			},
+			asgDesired:              1,
+			asgActual:               1,
+			maxSize:                 1,
+			agentsPerInstance:       6,
+			elasticCIMode:           true,
+			expectedDesiredCapacity: 0, // scales in to 0 (idle agents, no jobs)
+			expectedDanglingChecks:  0,
+		},
+		// Multiple instances with zero agents — should still trigger dangling check.
+		{
+			name: "Elastic CI detects dangling with multiple instances and zero agents",
+			metrics: buildkite.AgentMetrics{
+				ScheduledJobs: 10,
+				RunningJobs:   0,
+				TotalAgents:   0,
+			},
+			asgDesired:              3,
+			asgActual:               3,
+			maxSize:                 3,
+			agentsPerInstance:       4,
+			elasticCIMode:           true,
+			expectedDesiredCapacity: 3, // capacity unchanged — cleanup handles recovery
+			expectedDanglingChecks:  1,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			asg := &asgTestDriver{
+				desiredCapacity: tc.asgDesired,
+				actualCapacity:  tc.asgActual,
+				maxSize:         tc.maxSize,
+			}
+
+			s := Scaler{
+				autoscaling:   asg,
+				bk:            &buildkiteTestDriver{metrics: tc.metrics},
+				elasticCIMode: tc.elasticCIMode,
+				scaling: ScalingCalculator{
+					includeWaiting:    true,
+					agentsPerInstance: tc.agentsPerInstance,
+				},
+			}
+
+			_, err := s.Run(context.Background())
+			if err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+
+			if asg.desiredCapacity != tc.expectedDesiredCapacity {
+				t.Errorf("Expected desired capacity: %d, got: %d",
+					tc.expectedDesiredCapacity, asg.desiredCapacity)
+			}
+
+			if asg.danglingInstancesFound != tc.expectedDanglingChecks {
+				t.Errorf("Expected %d dangling instance check(s), got: %d",
+					tc.expectedDanglingChecks, asg.danglingInstancesFound)
 			}
 		})
 	}
