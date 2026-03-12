@@ -274,6 +274,24 @@ func (s *Scaler) Run(ctx context.Context) (time.Duration, error) {
 		return metrics.PollDuration, s.scaleIn(ctx, desired, asg)
 	}
 
+	// In Elastic CI mode, detect dangling instances: we have running instances but zero agents reporting.
+	// This can happen when the buildkite-agent process dies on the instance (e.g. OOM killed) while
+	// the EC2 instance itself remains healthy. In this case, the normal CleanupDanglingInstances check
+	// at the top of Run() may not fire due to the minimumInstanceUptime filter, and neither scaleIn()
+	// nor scaleOut() is called because desired == instanceCount after MaxSize capping.
+	// We use a 10-minute uptime threshold here to ensure we don't check instances that are still
+	// booting (typical boot-to-agent-registration takes 3-5 minutes for Elastic CI Stack instances).
+	// This is shorter than the default 1-hour minimumInstanceUptime but long enough to avoid
+	// prematurely killing instances that haven't finished starting up.
+	if s.elasticCIMode && instanceCount > 0 && metrics.TotalAgents == 0 {
+		log.Printf("🔍 [Elastic CI Mode] Detected %d running instance(s) but 0 agents reporting — checking for dangling instances", instanceCount)
+		danglingCheckUptime := 10 * time.Minute
+		if err := s.autoscaling.CleanupDanglingInstances(ctx, danglingCheckUptime, s.maxDanglingInstancesToCheck); err != nil {
+			log.Printf("⚠️  [Elastic CI Mode] Failed to cleanup dangling instances: %v", err)
+		}
+		return metrics.PollDuration, nil
+	}
+
 	log.Printf("No scaling required, currently %d actual instances (desired set to %d)",
 		instanceCount, asg.DesiredCount)
 	return metrics.PollDuration, nil
