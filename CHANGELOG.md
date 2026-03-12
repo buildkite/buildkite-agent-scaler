@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## [v1.12.0](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.11.2...v1.12.0) (2026-03-12)
+
+* Add a Renovate config [#301](https://github.com/buildkite/buildkite-agent-scaler/pull/301) ([mcncl](https://github.com/mcncl))
+* chore(deps): bump the aws group across 1 directory with 7 updates [#296](https://github.com/buildkite/buildkite-agent-scaler/pull/296) ([dependabot[bot]](https://github.com/apps/dependabot))
+* Detect dangling instances when agents report zero but instances are running [#300](https://github.com/buildkite/buildkite-agent-scaler/pull/300) ([omehegan](https://github.com/omehegan))
+* chore: add support to codeowners [#299](https://github.com/buildkite/buildkite-agent-scaler/pull/299) ([CerealBoy](https://github.com/CerealBoy))
+
 ## [v1.11.2](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.11.1...v1.11.2) (2026-03-09)
 
 * Bump Go to 1.26.1, and gotestsum to 1.13.0 [#295](https://github.com/buildkite/buildkite-agent-scaler/pull/295) ([scadu](https://github.com/scadu))
