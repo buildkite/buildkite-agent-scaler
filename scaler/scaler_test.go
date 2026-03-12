@@ -651,15 +651,15 @@ func TestAvailabilityBasedScaling(t *testing.T) {
 
 func TestDanglingInstanceDetection(t *testing.T) {
 	testCases := []struct {
-		name                        string
-		metrics                     buildkite.AgentMetrics
-		asgDesired                  int64
-		asgActual                   int64
-		maxSize                     int64
-		agentsPerInstance           int
-		elasticCIMode               bool
-		expectedDesiredCapacity     int64
-		expectedDanglingChecks      int
+		name                    string
+		metrics                 buildkite.AgentMetrics
+		asgDesired              int64
+		asgActual               int64
+		maxSize                 int64
+		agentsPerInstance       int
+		elasticCIMode           bool
+		expectedDesiredCapacity int64
+		expectedDanglingChecks  int
 	}{
 		// Core scenario from SUP-5153: agents die on running instance, MaxSize=1 caps
 		// desired to 1, scaler sees desired==actual and says "No scaling required".
@@ -672,13 +672,13 @@ func TestDanglingInstanceDetection(t *testing.T) {
 				WaitingJobs:   7,
 				TotalAgents:   0,
 			},
-			asgDesired:                  1,
-			asgActual:                   1,
-			maxSize:                     1,
-			agentsPerInstance:           6,
-			elasticCIMode:               true,
-			expectedDesiredCapacity:     1, // capacity unchanged — cleanup handles recovery
-			expectedDanglingChecks:      1,
+			asgDesired:              1,
+			asgActual:               1,
+			maxSize:                 1,
+			agentsPerInstance:       6,
+			elasticCIMode:           true,
+			expectedDesiredCapacity: 1, // capacity unchanged — cleanup handles recovery
+			expectedDanglingChecks:  1,
 		},
 		// Same scenario but without Elastic CI Mode — should NOT trigger dangling check.
 		{
@@ -689,13 +689,13 @@ func TestDanglingInstanceDetection(t *testing.T) {
 				WaitingJobs:   7,
 				TotalAgents:   0,
 			},
-			asgDesired:                  1,
-			asgActual:                   1,
-			maxSize:                     1,
-			agentsPerInstance:           6,
-			elasticCIMode:               false,
-			expectedDesiredCapacity:     1,
-			expectedDanglingChecks:      0,
+			asgDesired:              1,
+			asgActual:               1,
+			maxSize:                 1,
+			agentsPerInstance:       6,
+			elasticCIMode:           false,
+			expectedDesiredCapacity: 1,
+			expectedDanglingChecks:  0,
 		},
 		// When there are zero instances AND zero agents (normal idle state),
 		// should NOT trigger dangling check — there's nothing dangling.
@@ -706,13 +706,13 @@ func TestDanglingInstanceDetection(t *testing.T) {
 				RunningJobs:   0,
 				TotalAgents:   0,
 			},
-			asgDesired:                  0,
-			asgActual:                   0,
-			maxSize:                     1,
-			agentsPerInstance:           6,
-			elasticCIMode:               true,
-			expectedDesiredCapacity:     0,
-			expectedDanglingChecks:      0,
+			asgDesired:              0,
+			asgActual:               0,
+			maxSize:                 1,
+			agentsPerInstance:       6,
+			elasticCIMode:           true,
+			expectedDesiredCapacity: 0,
+			expectedDanglingChecks:  0,
 		},
 		// When agents are healthy (total > 0), no dangling check needed.
 		{
@@ -722,13 +722,13 @@ func TestDanglingInstanceDetection(t *testing.T) {
 				RunningJobs:   0,
 				TotalAgents:   6,
 			},
-			asgDesired:                  1,
-			asgActual:                   1,
-			maxSize:                     1,
-			agentsPerInstance:           6,
-			elasticCIMode:               true,
-			expectedDesiredCapacity:     0, // scales in to 0 (idle agents, no jobs)
-			expectedDanglingChecks:      0,
+			asgDesired:              1,
+			asgActual:               1,
+			maxSize:                 1,
+			agentsPerInstance:       6,
+			elasticCIMode:           true,
+			expectedDesiredCapacity: 0, // scales in to 0 (idle agents, no jobs)
+			expectedDanglingChecks:  0,
 		},
 		// Multiple instances with zero agents — should still trigger dangling check.
 		{
@@ -738,13 +738,13 @@ func TestDanglingInstanceDetection(t *testing.T) {
 				RunningJobs:   0,
 				TotalAgents:   0,
 			},
-			asgDesired:                  3,
-			asgActual:                   3,
-			maxSize:                     3,
-			agentsPerInstance:           4,
-			elasticCIMode:               true,
-			expectedDesiredCapacity:     3, // capacity unchanged — cleanup handles recovery
-			expectedDanglingChecks:      1,
+			asgDesired:              3,
+			asgActual:               3,
+			maxSize:                 3,
+			agentsPerInstance:       4,
+			elasticCIMode:           true,
+			expectedDesiredCapacity: 3, // capacity unchanged — cleanup handles recovery
+			expectedDanglingChecks:  1,
 		},
 	}
 
