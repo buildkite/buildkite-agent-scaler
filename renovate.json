@@ -1,0 +1,25 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "schedule:weekly",
+    ":semanticCommits"
+  ],
+  "minimumReleaseAge": "3 days",
+  "packageRules": [
+    {
+      "matchUpdateTypes": ["minor", "patch", "digest"],
+      "automerge": true
+    },
+    {
+      "groupName": "aws-sdk-go",
+      "matchManagers": ["gomod"],
+      "matchPackagePrefixes": ["github.com/aws/"]
+    },
+    {
+      "groupName": "buildkite-plugins",
+      "matchFileNames": [".buildkite/**"],
+      "matchManagers": ["buildkite"]
+    }
+  ]
+}
