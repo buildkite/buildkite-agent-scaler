@@ -2,6 +2,7 @@ package scaler
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -67,6 +68,44 @@ func TestGetASGPlatform(t *testing.T) {
 			platform := driver.getASGPlatform(ctx, tc.instances)
 			if platform != tc.expectedPlatform {
 				t.Errorf("expected platform %q, got %q", tc.expectedPlatform, platform)
+			}
+		})
+	}
+}
+
+func TestParseStaleInstanceIDs(t *testing.T) {
+	testCases := []struct {
+		name     string
+		msg      string
+		expected []string
+	}{
+		{
+			name:     "single stale ID",
+			msg:      "The instance ID 'i-0027f3b5de8a270d2' does not exist",
+			expected: []string{"i-0027f3b5de8a270d2"},
+		},
+		{
+			name:     "multiple stale IDs",
+			msg:      "The instance IDs 'i-0abc1234, i-0def5678, i-0099aabbccdd' do not exist",
+			expected: []string{"i-0abc1234", "i-0def5678", "i-0099aabbccdd"},
+		},
+		{
+			name:     "message with no instance IDs",
+			msg:      "You are not authorized to perform this operation",
+			expected: nil,
+		},
+		{
+			name:     "empty message",
+			msg:      "",
+			expected: nil,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseStaleInstanceIDs(tc.msg)
+			if !slices.Equal(got, tc.expected) {
+				t.Errorf("parseStaleInstanceIDs(%q) = %v, want %v", tc.msg, got, tc.expected)
 			}
 		})
 	}

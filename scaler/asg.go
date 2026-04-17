@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -516,6 +517,14 @@ func (a *ASGDriver) CleanupDanglingInstances(ctx context.Context, minimumInstanc
 	}
 
 	return firstErrorEncountered
+}
+
+var staleInstanceIDRegex = regexp.MustCompile(`i-[0-9a-f]{8,17}`)
+
+// parseStaleInstanceIDs extracts instance IDs from an InvalidInstanceID.NotFound message.
+// Example: "The instance IDs 'i-0abc1234def5, i-0def5678abcd' do not exist"
+func parseStaleInstanceIDs(msg string) []string {
+	return staleInstanceIDRegex.FindAllString(msg, -1)
 }
 
 func (a *dryRunASG) Describe(ctx context.Context) (AutoscaleGroupDetails, error) {
