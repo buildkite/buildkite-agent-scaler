@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ import (
 	ec2Types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	ssmTypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
+	"github.com/aws/smithy-go"
 )
 
 // ErrWindowsGracefulScaleInNotSupported is returned when attempting graceful scale-in on Windows instances.
@@ -517,6 +519,50 @@ func (a *ASGDriver) CleanupDanglingInstances(ctx context.Context, minimumInstanc
 	}
 
 	return firstErrorEncountered
+}
+
+// describeInstancesAPI is the subset of ec2.Client used by describeInstancesTolerant.
+// Defined as an interface so tests can substitute a stub without wiring a full EC2 mock.
+type describeInstancesAPI interface {
+	DescribeInstances(ctx context.Context, params *ec2.DescribeInstancesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error)
+}
+
+// describeInstancesTolerant calls EC2 DescribeInstances and retries once with stale IDs
+// removed if the API returns InvalidInstanceID.NotFound. This handles the race where an
+// instance is terminated between the ASG Describe and the EC2 Describe. If all IDs are
+// stale, an empty output is returned.
+func describeInstancesTolerant(ctx context.Context, client describeInstancesAPI, instanceIDs []string, asgName string) (*ec2.DescribeInstancesOutput, error) {
+	out, err := client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{InstanceIds: instanceIDs})
+	if err == nil {
+		return out, nil
+	}
+
+	var apiErr smithy.APIError
+	if !errors.As(err, &apiErr) || apiErr.ErrorCode() != "InvalidInstanceID.NotFound" {
+		return nil, err
+	}
+
+	stale := parseStaleInstanceIDs(apiErr.ErrorMessage())
+	if len(stale) == 0 {
+		return nil, err
+	}
+
+	staleSet := make(map[string]struct{}, len(stale))
+	for _, id := range stale {
+		staleSet[id] = struct{}{}
+	}
+	remaining := slices.DeleteFunc(slices.Clone(instanceIDs), func(id string) bool {
+		_, ok := staleSet[id]
+		return ok
+	})
+	log.Printf("[Elastic CI Mode] Skipping %d stale instance ID(s) in ASG %s (no longer present in EC2): %v", len(stale), asgName, stale)
+
+	if len(remaining) == 0 {
+		log.Printf("[Elastic CI Mode] All %d instance ID(s) in ASG %s are stale; nothing to check", len(instanceIDs), asgName)
+		return &ec2.DescribeInstancesOutput{}, nil
+	}
+
+	return client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{InstanceIds: remaining})
 }
 
 var staleInstanceIDRegex = regexp.MustCompile(`i-[0-9a-f]{8,17}`)
