@@ -451,9 +451,7 @@ func (a *ASGDriver) CleanupDanglingInstances(ctx context.Context, minimumInstanc
 		return nil
 	}
 
-	descInstancesOutput, err := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
-		InstanceIds: asgDetails.InstanceIDs,
-	})
+	descInstancesOutput, err := describeInstancesTolerant(ctx, ec2Client, asgDetails.InstanceIDs, a.Name)
 	if err != nil {
 		return fmt.Errorf("failed to describe instances in ASG %s: %w", a.Name, err)
 	}
