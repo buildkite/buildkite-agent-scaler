@@ -41,7 +41,7 @@ steps:
       - build-lambda
     command: .buildkite/steps/upload-to-s3.sh
     plugins:
-      - aws-assume-role-with-web-identity#v1.4.0:
+      - aws-assume-role-with-web-identity#v1.6.0:
           role-arn: arn:aws:iam::172840064832:role/pipeline-buildkite-buildkite-agent-scaler
           session-tags:
             - organization_slug
@@ -57,16 +57,16 @@ steps:
     env:
       BUILDKITE_AGENT_GIT_FETCH_FLAGS: -v --prune --tags
     plugins:
-      - aws-assume-role-with-web-identity#v1.4.0:
+      - aws-assume-role-with-web-identity#v1.6.0:
           role-arn: arn:aws:iam::445615400570:role/pipeline-buildkite-buildkite-agent-scaler
           session-tags:
             - organization_slug
             - organization_id
             - pipeline_slug
-      - aws-ssm#v1.0.0:
+      - aws-ssm#v1.1.0:
           parameters:
             GITHUB_RELEASE_ACCESS_TOKEN: /pipelines/buildkite/buildkite-agent-scaler/GITHUB_RELEASE_ACCESS_TOKEN
-      - docker#v5.8.0:
+      - docker#v5.13.0:
           image: alpine:3.18
           propagate-environment: true
           mount-buildkite-agent: true
@@ -86,7 +86,7 @@ steps:
       - block-s3-release
     command: .buildkite/steps/upload-to-s3.sh release
     plugins:
-      - aws-assume-role-with-web-identity#v1.4.0:
+      - aws-assume-role-with-web-identity#v1.6.0:
           role-arn: arn:aws:iam::172840064832:role/pipeline-buildkite-buildkite-agent-scaler
           session-tags:
             - organization_slug
