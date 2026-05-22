@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
-	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/buildkite/buildkite-agent-scaler/buildkite"
 	"github.com/buildkite/buildkite-agent-scaler/scaler"
 	"github.com/buildkite/buildkite-agent-scaler/version"
@@ -96,7 +95,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 	}
 
 	// establish an AWS session to be re-used
-	cfg, err := config.LoadDefaultConfig(ctx)
+	cfg, err := scaler.LoadAWSConfig(ctx)
 	if err != nil {
 		return "", err
 	}

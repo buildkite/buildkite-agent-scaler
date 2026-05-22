@@ -6,7 +6,6 @@ import (
 	"log"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/buildkite/buildkite-agent-scaler/buildkite"
 	"github.com/buildkite/buildkite-agent-scaler/scaler"
 )
@@ -42,7 +41,7 @@ func main() {
 
 	// establish an AWS session to be re-used
 	ctx := context.Background()
-	cfg, err := config.LoadDefaultConfig(ctx)
+	cfg, err := scaler.LoadAWSConfig(ctx)
 	if err != nil {
 		log.Fatal("unable to load SDK config, ", err)
 	}
