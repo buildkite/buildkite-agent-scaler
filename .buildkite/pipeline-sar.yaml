@@ -1,24 +1,15 @@
-# YAML anchor for mise setup
-x-mise-setup: &mise-setup |
-  if [[ ! -f ./bin/mise ]]; then
-    mkdir -p ./bin
-    curl -fsSL https://mise.jdx.dev/mise-latest-linux-x64 > ./bin/mise
-    chmod +x ./bin/mise
-  fi
-  ./bin/mise install
-
 steps:
   - name: ":golang: Tests"
     key: test
-    commands:
-      - *mise-setup
-      - .buildkite/steps/tests.sh
+    command: .buildkite/steps/tests.sh
+    plugins:
+      - mise#v1.1.2: ~
 
   - name: ":hammer::lambda: Build Lambda"
     key: build
-    commands:
-      - *mise-setup
-      - .buildkite/steps/build-lambda.sh
+    command: .buildkite/steps/build-lambda.sh
+    plugins:
+      - mise#v1.1.2: ~
     artifact_paths:
       - handler.zip
       - handler-arm64.zip

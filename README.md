@@ -105,7 +105,7 @@ aws lambda create-function \
 ## Development
 
 This project uses [mise](https://mise.jdx.dev/) to manage development tooling ensuring all the tooling needed is installed with one step, and in expected versions.
-To install mise, execute [./bin/mise](./bin/mise) bootstrap script or follow [mise documentation](https://mise.jdx.dev/installing-mise.html).
+To install mise, follow the [mise documentation](https://mise.jdx.dev/installing-mise.html).
 Run `mise install` to install all the required tooling defined in [mise.toml](./mise.toml).
 
 ### Running agent-scaler locally

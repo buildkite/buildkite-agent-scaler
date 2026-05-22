@@ -1,35 +1,26 @@
 agents:
   queue: elastic-runners
 
-# YAML anchor for mise setup
-x-mise-setup: &mise-setup |
-  if [[ ! -f ./bin/mise ]]; then
-    mkdir -p ./bin
-    curl -fsSL https://mise.jdx.dev/mise-latest-linux-x64 > ./bin/mise
-    chmod +x ./bin/mise
-  fi
-  ./bin/mise install
-
 steps:
   - name: ":go: Check go fmt"
     key: go-fmt
-    commands:
-      - *mise-setup
-      - .buildkite/steps/test-go-fmt.sh
+    command: .buildkite/steps/test-go-fmt.sh
+    plugins:
+      - mise#v1.1.2: ~
 
   - name: ":golang: Run Tests"
     key: test
-    commands:
-      - *mise-setup
-      - .buildkite/steps/tests.sh
+    command: .buildkite/steps/tests.sh
+    plugins:
+      - mise#v1.1.2: ~
 
   - name: ":lambda: Build Lambda"
     key: build-lambda
     depends_on:
       - go-fmt
-    commands:
-      - *mise-setup
-      - .buildkite/steps/build-lambda.sh
+    command: .buildkite/steps/build-lambda.sh
+    plugins:
+      - mise#v1.1.2: ~
     artifact_paths:
       - handler.zip
       - handler-arm64.zip

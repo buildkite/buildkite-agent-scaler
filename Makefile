@@ -33,8 +33,7 @@ handler-arm64.zip: bootstrap-arm64
 	@rm -f bootstrap
 
 bootstrap: lambda/main.go
-	./bin/mise install
-	GOARCH=amd64 ./bin/mise exec -- go build \
+	GOARCH=amd64 mise exec -- go build \
 	    -ldflags="$(LD_FLAGS)" \
 	    -buildvcs="$(BUILDVCS_FLAG)" \
 	    -tags lambda.norpc \
@@ -42,8 +41,7 @@ bootstrap: lambda/main.go
 	    ./lambda
 
 bootstrap-arm64: lambda/main.go
-	./bin/mise install
-	GOARCH=arm64 ./bin/mise exec -- go build \
+	GOARCH=arm64 mise exec -- go build \
 	    -ldflags="$(LD_FLAGS)" \
 	    -buildvcs="$(BUILDVCS_FLAG)" \
 	    -tags lambda.norpc \
