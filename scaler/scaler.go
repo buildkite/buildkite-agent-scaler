@@ -123,6 +123,10 @@ func NewScaler(client *buildkite.Client, cfg aws.Config, params Params) (*Scaler
 		}
 	}
 
+	if params.IncludeWaiting {
+		log.Printf("ℹ️ ScaleOutForWaitingJobs is enabled. Agents will be created for jobs behind a wait step which can cause Agent bloat if the jobs being waited on are long running.")
+	}
+
 	return scaler, nil
 }
 
