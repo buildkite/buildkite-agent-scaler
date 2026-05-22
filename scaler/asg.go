@@ -47,7 +47,8 @@ type ASGDriver struct {
 	MaxDescribeScalingActivitiesPages int
 	ElasticCIMode                     bool
 	MinimumInstanceUptime             time.Duration
-	MaxDanglingInstancesToCheck       int // Maximum number of instances to check for dangling instances (only used for dangling instance scanning, not for normal scale-in)
+	MaxDanglingInstancesToCheck       int   // Maximum number of instances to check for dangling instances (only used for dangling instance scanning, not for normal scale-in)
+	EventPeriodSec                    int64 // Tick size in seconds for the dangling-check rotation. Defaults to 60 when 0.
 }
 
 // waitForSSMReady blocks until the SSM agent on instanceID reports PingStatus="Online",
@@ -484,11 +485,9 @@ func (a *ASGDriver) CleanupDanglingInstances(ctx context.Context, minimumInstanc
 	totalMarkedUnhealthy := 0
 	var firstErrorEncountered error
 
-	// Limit the number of instances to check if maxDanglingInstancesToCheck is set
-	instancesToCheck := instancesToConsiderChecking
-	if maxDanglingInstancesToCheck > 0 && len(instancesToCheck) > maxDanglingInstancesToCheck {
-		instancesToCheck = instancesToCheck[:maxDanglingInstancesToCheck]
-	}
+	// Pick a sliding slice so oldest-N instances stuck failing SSM checks
+	// don't block the rest of the fleet from ever being examined.
+	instancesToCheck := rotateInstanceWindow(instancesToConsiderChecking, maxDanglingInstancesToCheck, a.EventPeriodSec, time.Now())
 
 	instancesForSSMCheck := make([]string, 0, len(instancesToCheck))
 	for _, instance := range instancesToCheck {
@@ -561,6 +560,32 @@ func describeInstancesTolerant(ctx context.Context, client describeInstancesAPI,
 	}
 
 	return client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{InstanceIds: remaining})
+}
+
+// rotateInstanceWindow returns windowSize instances from sorted, picked at a
+// time-seeded offset that advances by windowSize every eventPeriodSec seconds.
+// Returns sorted unchanged when it's already <= windowSize. eventPeriodSec
+// defaults to 60 when <= 0.
+func rotateInstanceWindow(sorted []ec2Types.Instance, windowSize int, eventPeriodSec int64, now time.Time) []ec2Types.Instance {
+	total := len(sorted)
+	if windowSize <= 0 || total <= windowSize {
+		return sorted
+	}
+	if eventPeriodSec <= 0 {
+		eventPeriodSec = 60
+	}
+
+	tick := now.Unix() / eventPeriodSec
+	offset := int((tick * int64(windowSize)) % int64(total))
+	if offset < 0 {
+		offset += total
+	}
+
+	window := make([]ec2Types.Instance, 0, windowSize)
+	for i := 0; i < windowSize; i++ {
+		window = append(window, sorted[(offset+i)%total])
+	}
+	return window
 }
 
 var staleInstanceIDRegex = regexp.MustCompile(`i-[0-9a-f]{8,17}`)

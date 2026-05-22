@@ -41,6 +41,7 @@ type Params struct {
 	MinimumInstanceUptime       time.Duration // How long instance should be online before being eligible for dangling instance check
 	MaxDanglingInstancesToCheck int           // Maximum number of instances to check for dangling instances (only used for dangling instance scanning, not for normal scale-in)
 	MaxInstanceCap              int           // Maximum instance count cap (0 means no cap)
+	EventPeriodSec              int64         // Tick size in seconds for the dangling-check rotation. Defaults to 60 when 0.
 }
 
 type Scaler struct {
@@ -102,12 +103,18 @@ func NewScaler(client *buildkite.Client, cfg aws.Config, params Params) (*Scaler
 		return scaler, nil
 	}
 
+	eventPeriodSec := params.EventPeriodSec
+	if eventPeriodSec <= 0 {
+		eventPeriodSec = 60
+	}
+
 	scaler.autoscaling = &ASGDriver{
 		Name:                        params.AutoScalingGroupName,
 		Cfg:                         cfg,
 		ElasticCIMode:               params.ElasticCIMode,
 		MinimumInstanceUptime:       params.MinimumInstanceUptime,
 		MaxDanglingInstancesToCheck: params.MaxDanglingInstancesToCheck,
+		EventPeriodSec:              eventPeriodSec,
 	}
 
 	if params.PublishCloudWatchMetrics {

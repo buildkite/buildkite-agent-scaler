@@ -3,9 +3,11 @@ package scaler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -305,4 +307,85 @@ func TestGetCheckCommand(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRotateInstanceWindowSmallerThanWindow(t *testing.T) {
+	// When len(sorted) <= windowSize, all instances are returned without rotation.
+	instances := makeInstancesForRotation(3)
+	got := rotateInstanceWindow(instances, 5, 60, time.Unix(0, 0))
+	if len(got) != 3 {
+		t.Fatalf("expected 3 instances, got %d", len(got))
+	}
+	for i := range instances {
+		if *got[i].InstanceId != *instances[i].InstanceId {
+			t.Errorf("at index %d: got %q, want %q", i, *got[i].InstanceId, *instances[i].InstanceId)
+		}
+	}
+}
+
+func TestRotateInstanceWindowCoversFullList(t *testing.T) {
+	// Over enough invocations, every instance in a fleet larger than windowSize
+	// should be examined at least once.
+	const (
+		total          = 100
+		windowSize     = 5
+		eventPeriodSec = 60
+	)
+	instances := makeInstancesForRotation(total)
+
+	seen := make(map[string]bool, total)
+	for i := 0; i < (total/windowSize)+2; i++ {
+		at := time.Unix(int64(i*eventPeriodSec), 0)
+		window := rotateInstanceWindow(instances, windowSize, eventPeriodSec, at)
+		if len(window) != windowSize {
+			t.Fatalf("iteration %d: expected window of %d, got %d", i, windowSize, len(window))
+		}
+		for _, inst := range window {
+			seen[*inst.InstanceId] = true
+		}
+	}
+
+	if len(seen) != total {
+		var missing []string
+		for _, inst := range instances {
+			if !seen[*inst.InstanceId] {
+				missing = append(missing, *inst.InstanceId)
+			}
+		}
+		t.Errorf("expected all %d instances to be checked, missing: %v", total, missing)
+	}
+}
+
+func TestRotateInstanceWindowZeroPeriodDefaultsToSixty(t *testing.T) {
+	instances := makeInstancesForRotation(20)
+	got := rotateInstanceWindow(instances, 5, 0, time.Unix(60, 0))
+	if len(got) != 5 {
+		t.Fatalf("expected window of 5, got %d", len(got))
+	}
+	// tick = 60/60 = 1; offset = (1 * 5) % 20 = 5.
+	if *got[0].InstanceId != "i-00000005" {
+		t.Errorf("expected first instance i-00000005 at offset 5, got %s", *got[0].InstanceId)
+	}
+}
+
+func TestRotateInstanceWindowAdvancesEveryPeriod(t *testing.T) {
+	instances := makeInstancesForRotation(20)
+	prev := rotateInstanceWindow(instances, 5, 60, time.Unix(0, 0))
+	next := rotateInstanceWindow(instances, 5, 60, time.Unix(60, 0))
+
+	if *prev[0].InstanceId == *next[0].InstanceId {
+		t.Errorf("window did not advance across a period boundary: both started at %s", *prev[0].InstanceId)
+	}
+	if *next[0].InstanceId != "i-00000005" {
+		t.Errorf("expected next window to start at i-00000005 (offset 5), got %s", *next[0].InstanceId)
+	}
+}
+
+func makeInstancesForRotation(n int) []ec2Types.Instance {
+	out := make([]ec2Types.Instance, 0, n)
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("i-%08x", i)
+		out = append(out, ec2Types.Instance{InstanceId: aws.String(id)})
+	}
+	return out
 }

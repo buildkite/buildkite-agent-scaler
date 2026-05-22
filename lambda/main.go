@@ -191,6 +191,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		MinimumInstanceUptime:       minimumInstanceUptime,
 		MaxDanglingInstancesToCheck: maxDanglingInstancesToCheck,
 		MaxInstanceCap:              maxInstanceCap,
+		EventPeriodSec:              int64(interval.Seconds()),
 	}
 
 	scaler, err := scaler.NewScaler(client, cfg, params)
