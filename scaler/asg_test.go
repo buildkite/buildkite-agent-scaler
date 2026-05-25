@@ -312,7 +312,7 @@ func TestGetCheckCommand(t *testing.T) {
 func TestRotateInstanceWindowSmallerThanWindow(t *testing.T) {
 	// When len(sorted) <= windowSize, all instances are returned without rotation.
 	instances := makeInstancesForRotation(3)
-	got := rotateInstanceWindow(instances, 5, 60, time.Unix(0, 0))
+	got := rotateInstanceWindow(instances, 5, time.Minute, time.Unix(0, 0))
 	if len(got) != 3 {
 		t.Fatalf("expected 3 instances, got %d", len(got))
 	}
@@ -327,16 +327,16 @@ func TestRotateInstanceWindowCoversFullList(t *testing.T) {
 	// Over enough invocations, every instance in a fleet larger than windowSize
 	// should be examined at least once.
 	const (
-		total          = 100
-		windowSize     = 5
-		eventPeriodSec = 60
+		total         = 100
+		windowSize    = 5
+		checkInterval = time.Minute
 	)
 	instances := makeInstancesForRotation(total)
 
 	seen := make(map[string]bool, total)
 	for i := 0; i < (total/windowSize)+2; i++ {
-		at := time.Unix(int64(i*eventPeriodSec), 0)
-		window := rotateInstanceWindow(instances, windowSize, eventPeriodSec, at)
+		at := time.Unix(int64(i)*int64(checkInterval.Seconds()), 0)
+		window := rotateInstanceWindow(instances, windowSize, checkInterval, at)
 		if len(window) != windowSize {
 			t.Fatalf("iteration %d: expected window of %d, got %d", i, windowSize, len(window))
 		}
@@ -370,8 +370,8 @@ func TestRotateInstanceWindowZeroPeriodDefaultsToSixty(t *testing.T) {
 
 func TestRotateInstanceWindowAdvancesEveryPeriod(t *testing.T) {
 	instances := makeInstancesForRotation(20)
-	prev := rotateInstanceWindow(instances, 5, 60, time.Unix(0, 0))
-	next := rotateInstanceWindow(instances, 5, 60, time.Unix(60, 0))
+	prev := rotateInstanceWindow(instances, 5, time.Minute, time.Unix(0, 0))
+	next := rotateInstanceWindow(instances, 5, time.Minute, time.Unix(60, 0))
 
 	if *prev[0].InstanceId == *next[0].InstanceId {
 		t.Errorf("window did not advance across a period boundary: both started at %s", *prev[0].InstanceId)

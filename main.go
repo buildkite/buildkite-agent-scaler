@@ -73,11 +73,11 @@ func main() {
 			Factor:         *scaleOutFactor,
 			CooldownPeriod: *scaleOutCooldown,
 		},
-		InstanceBuffer:              *instanceBuffer,
-		ElasticCIMode:               *elasticCIMode,
-		MinimumInstanceUptime:       *minimumInstanceUptime,
-		MaxDanglingInstancesToCheck: *maxDanglingInstancesToCheck,
-		EventPeriodSec:              int64(interval.Seconds()),
+		InstanceBuffer:                 *instanceBuffer,
+		ElasticCIMode:                  *elasticCIMode,
+		MinimumInstanceUptime:          *minimumInstanceUptime,
+		MaxDanglingInstancesToCheck:    *maxDanglingInstancesToCheck,
+		DanglingInstancesCheckInterval: interval,
 	})
 	if err != nil {
 		log.Fatal(err)
