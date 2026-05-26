@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2Types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	ssmTypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/aws/smithy-go"
 )
 
@@ -388,4 +391,116 @@ func makeInstancesForRotation(n int) []ec2Types.Instance {
 		out = append(out, ec2Types.Instance{InstanceId: aws.String(id)})
 	}
 	return out
+}
+
+// stubSSMClient implements ssmCheckAPI for unit tests. Each
+// ListCommandInvocations call returns the next listResponses entry, or repeats
+// the last one if exhausted (so deadline-driven tests don't have to enumerate
+// every poll).
+type stubSSMClient struct {
+	describeOut   *ssm.DescribeInstanceInformationOutput
+	describeErr   error
+	listResponses []stubListResponse
+	listCalls     int
+}
+
+type stubListResponse struct {
+	out *ssm.ListCommandInvocationsOutput
+	err error
+}
+
+func (s *stubSSMClient) DescribeInstanceInformation(ctx context.Context, params *ssm.DescribeInstanceInformationInput, _ ...func(*ssm.Options)) (*ssm.DescribeInstanceInformationOutput, error) {
+	return s.describeOut, s.describeErr
+}
+
+func (s *stubSSMClient) SendCommand(ctx context.Context, params *ssm.SendCommandInput, _ ...func(*ssm.Options)) (*ssm.SendCommandOutput, error) {
+	return nil, errors.New("SendCommand not stubbed")
+}
+
+func (s *stubSSMClient) ListCommandInvocations(ctx context.Context, params *ssm.ListCommandInvocationsInput, _ ...func(*ssm.Options)) (*ssm.ListCommandInvocationsOutput, error) {
+	idx := s.listCalls
+	s.listCalls++
+	if idx >= len(s.listResponses) {
+		if n := len(s.listResponses); n > 0 {
+			r := s.listResponses[n-1]
+			return r.out, r.err
+		}
+		return &ssm.ListCommandInvocationsOutput{}, nil
+	}
+	r := s.listResponses[idx]
+	return r.out, r.err
+}
+
+func TestFilterOnlineSSMInstances(t *testing.T) {
+	stub := &stubSSMClient{
+		describeOut: &ssm.DescribeInstanceInformationOutput{
+			InstanceInformationList: []ssmTypes.InstanceInformation{
+				{InstanceId: aws.String("i-a"), PingStatus: ssmTypes.PingStatusOnline},
+				{InstanceId: aws.String("i-b"), PingStatus: ssmTypes.PingStatusConnectionLost},
+				{InstanceId: aws.String("i-c"), PingStatus: ssmTypes.PingStatusOnline},
+			},
+		},
+	}
+	got, err := filterOnlineSSMInstances(context.Background(), stub, []string{"i-a", "i-b", "i-c", "i-d"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	sort.Strings(got)
+	if !slices.Equal(got, []string{"i-a", "i-c"}) {
+		t.Errorf("got %v, want [i-a i-c]", got)
+	}
+}
+
+func TestPollCommandInvocations(t *testing.T) {
+	ctx := context.Background()
+	inv := func(id string, status ssmTypes.CommandInvocationStatus) ssmTypes.CommandInvocation {
+		return ssmTypes.CommandInvocation{InstanceId: aws.String(id), Status: status}
+	}
+
+	t.Run("returns when all expected reach terminal status", func(t *testing.T) {
+		stub := &stubSSMClient{listResponses: []stubListResponse{
+			{out: &ssm.ListCommandInvocationsOutput{CommandInvocations: []ssmTypes.CommandInvocation{
+				inv("i-a", ssmTypes.CommandInvocationStatusInProgress),
+			}}},
+			{out: &ssm.ListCommandInvocationsOutput{CommandInvocations: []ssmTypes.CommandInvocation{
+				inv("i-a", ssmTypes.CommandInvocationStatusSuccess),
+				inv("i-b", ssmTypes.CommandInvocationStatusSuccess),
+			}}},
+		}}
+		results, err := pollCommandInvocations(ctx, stub, "cmd-1", 2, time.Millisecond, time.Second)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if results["i-a"].Status != ssmTypes.CommandInvocationStatusSuccess ||
+			results["i-b"].Status != ssmTypes.CommandInvocationStatusSuccess {
+			t.Errorf("expected both Success, got %+v", results)
+		}
+		if stub.listCalls != 2 {
+			t.Errorf("expected 2 list calls, got %d", stub.listCalls)
+		}
+	})
+
+	t.Run("returns partial result on deadline", func(t *testing.T) {
+		stub := &stubSSMClient{listResponses: []stubListResponse{
+			{out: &ssm.ListCommandInvocationsOutput{CommandInvocations: []ssmTypes.CommandInvocation{
+				inv("i-a", ssmTypes.CommandInvocationStatusInProgress),
+			}}},
+		}}
+		// expected=2 with only InProgress for i-a; never terminal, deadline elapses.
+		results, err := pollCommandInvocations(ctx, stub, "cmd-1", 2, time.Millisecond, 5*time.Millisecond)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if results["i-a"].Status != ssmTypes.CommandInvocationStatusInProgress {
+			t.Errorf("expected InProgress partial result, got %v", results["i-a"].Status)
+		}
+	})
+
+	t.Run("API error propagates", func(t *testing.T) {
+		stub := &stubSSMClient{listResponses: []stubListResponse{{err: errors.New("throttled")}}}
+		_, err := pollCommandInvocations(ctx, stub, "cmd-1", 1, time.Millisecond, time.Second)
+		if err == nil || !strings.Contains(err.Error(), "throttled") {
+			t.Errorf("expected throttled error, got %v", err)
+		}
+	})
 }
