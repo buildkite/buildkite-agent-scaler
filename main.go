@@ -39,6 +39,8 @@ func main() {
 	)
 	flag.Parse()
 
+	interval := 10 * time.Second
+
 	// establish an AWS session to be re-used
 	ctx := context.Background()
 	cfg, err := scaler.LoadAWSConfig(ctx)
@@ -71,10 +73,11 @@ func main() {
 			Factor:         *scaleOutFactor,
 			CooldownPeriod: *scaleOutCooldown,
 		},
-		InstanceBuffer:              *instanceBuffer,
-		ElasticCIMode:               *elasticCIMode,
-		MinimumInstanceUptime:       *minimumInstanceUptime,
-		MaxDanglingInstancesToCheck: *maxDanglingInstancesToCheck,
+		InstanceBuffer:                 *instanceBuffer,
+		ElasticCIMode:                  *elasticCIMode,
+		MinimumInstanceUptime:          *minimumInstanceUptime,
+		MaxDanglingInstancesToCheck:    *maxDanglingInstancesToCheck,
+		DanglingInstancesCheckInterval: interval,
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -83,8 +86,6 @@ func main() {
 	if *dryRun {
 		log.Printf("Running as a dry-run, no changes will be made")
 	}
-
-	var interval = 10 * time.Second
 
 	for {
 		minPollDuration, err := scaler.Run(ctx)

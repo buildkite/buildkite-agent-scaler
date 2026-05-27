@@ -183,14 +183,15 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 			LastEvent:      lastScaleOut,
 			Disable:        disableScaleOut,
 		},
-		InstanceBuffer:              instanceBuffer,
-		ScaleOnlyAfterAllEvent:      scaleOnlyAfterAllEvent,
-		PublishCloudWatchMetrics:    publishCloudWatchMetrics,
-		AvailabilityThreshold:       availabilityThreshold,
-		ElasticCIMode:               elasticCIMode,
-		MinimumInstanceUptime:       minimumInstanceUptime,
-		MaxDanglingInstancesToCheck: maxDanglingInstancesToCheck,
-		MaxInstanceCap:              maxInstanceCap,
+		InstanceBuffer:                 instanceBuffer,
+		ScaleOnlyAfterAllEvent:         scaleOnlyAfterAllEvent,
+		PublishCloudWatchMetrics:       publishCloudWatchMetrics,
+		AvailabilityThreshold:          availabilityThreshold,
+		ElasticCIMode:                  elasticCIMode,
+		MinimumInstanceUptime:          minimumInstanceUptime,
+		MaxDanglingInstancesToCheck:    maxDanglingInstancesToCheck,
+		MaxInstanceCap:                 maxInstanceCap,
+		DanglingInstancesCheckInterval: interval,
 	}
 
 	scaler, err := scaler.NewScaler(client, cfg, params)

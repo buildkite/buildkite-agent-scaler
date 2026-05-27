@@ -23,24 +23,25 @@ type ScaleParams struct {
 }
 
 type Params struct {
-	AutoScalingGroupName        string
-	AgentsPerInstance           int
-	BuildkiteAgentToken         string
-	BuildkiteQueue              string
-	UserAgent                   string
-	PublishCloudWatchMetrics    bool
-	DryRun                      bool
-	IncludeWaiting              bool
-	ScaleInParams               ScaleParams
-	ScaleOutParams              ScaleParams
-	InstanceBuffer              int
-	ScaleOnlyAfterAllEvent      bool
-	AvailabilityThreshold       float64       // Threshold for agent availability (default 50%, all modes)
-	ASGActivityCooldown         time.Duration // How long to wait after an ASG activity before scaling again
-	ElasticCIMode               bool          // Special mode for Elastic CI Stack with additional safety checks
-	MinimumInstanceUptime       time.Duration // How long instance should be online before being eligible for dangling instance check
-	MaxDanglingInstancesToCheck int           // Maximum number of instances to check for dangling instances (only used for dangling instance scanning, not for normal scale-in)
-	MaxInstanceCap              int           // Maximum instance count cap (0 means no cap)
+	AutoScalingGroupName           string
+	AgentsPerInstance              int
+	BuildkiteAgentToken            string
+	BuildkiteQueue                 string
+	UserAgent                      string
+	PublishCloudWatchMetrics       bool
+	DryRun                         bool
+	IncludeWaiting                 bool
+	ScaleInParams                  ScaleParams
+	ScaleOutParams                 ScaleParams
+	InstanceBuffer                 int
+	ScaleOnlyAfterAllEvent         bool
+	AvailabilityThreshold          float64       // Threshold for agent availability (default 50%, all modes)
+	ASGActivityCooldown            time.Duration // How long to wait after an ASG activity before scaling again
+	ElasticCIMode                  bool          // Special mode for Elastic CI Stack with additional safety checks
+	MinimumInstanceUptime          time.Duration // How long instance should be online before being eligible for dangling instance check
+	MaxDanglingInstancesToCheck    int           // Maximum number of instances to check for dangling instances (only used for dangling instance scanning, not for normal scale-in)
+	MaxInstanceCap                 int           // Maximum instance count cap (0 means no cap)
+	DanglingInstancesCheckInterval time.Duration // Interval between dangling-instance checks; used to rotate the check window. Defaults to 60s when 0.
 }
 
 type Scaler struct {
@@ -102,12 +103,18 @@ func NewScaler(client *buildkite.Client, cfg aws.Config, params Params) (*Scaler
 		return scaler, nil
 	}
 
+	danglingInstancesCheckInterval := params.DanglingInstancesCheckInterval
+	if danglingInstancesCheckInterval <= 0 {
+		danglingInstancesCheckInterval = time.Minute
+	}
+
 	scaler.autoscaling = &ASGDriver{
-		Name:                        params.AutoScalingGroupName,
-		Cfg:                         cfg,
-		ElasticCIMode:               params.ElasticCIMode,
-		MinimumInstanceUptime:       params.MinimumInstanceUptime,
-		MaxDanglingInstancesToCheck: params.MaxDanglingInstancesToCheck,
+		Name:                           params.AutoScalingGroupName,
+		Cfg:                            cfg,
+		ElasticCIMode:                  params.ElasticCIMode,
+		MinimumInstanceUptime:          params.MinimumInstanceUptime,
+		MaxDanglingInstancesToCheck:    params.MaxDanglingInstancesToCheck,
+		DanglingInstancesCheckInterval: danglingInstancesCheckInterval,
 	}
 
 	if params.PublishCloudWatchMetrics {

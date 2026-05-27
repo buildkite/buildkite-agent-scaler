@@ -47,7 +47,8 @@ type ASGDriver struct {
 	MaxDescribeScalingActivitiesPages int
 	ElasticCIMode                     bool
 	MinimumInstanceUptime             time.Duration
-	MaxDanglingInstancesToCheck       int // Maximum number of instances to check for dangling instances (only used for dangling instance scanning, not for normal scale-in)
+	MaxDanglingInstancesToCheck       int           // Maximum number of instances to check for dangling instances (only used for dangling instance scanning, not for normal scale-in)
+	DanglingInstancesCheckInterval    time.Duration // Interval between dangling-instance checks; used to rotate the check window. Defaults to 60s when 0.
 }
 
 // waitForSSMReady blocks until the SSM agent on instanceID reports PingStatus="Online",
@@ -484,11 +485,9 @@ func (a *ASGDriver) CleanupDanglingInstances(ctx context.Context, minimumInstanc
 	totalMarkedUnhealthy := 0
 	var firstErrorEncountered error
 
-	// Limit the number of instances to check if maxDanglingInstancesToCheck is set
-	instancesToCheck := instancesToConsiderChecking
-	if maxDanglingInstancesToCheck > 0 && len(instancesToCheck) > maxDanglingInstancesToCheck {
-		instancesToCheck = instancesToCheck[:maxDanglingInstancesToCheck]
-	}
+	// Pick a sliding slice so oldest-N instances stuck failing SSM checks
+	// don't block the rest of the fleet from ever being examined.
+	instancesToCheck := rotateInstanceWindow(instancesToConsiderChecking, maxDanglingInstancesToCheck, a.DanglingInstancesCheckInterval, time.Now())
 
 	instancesForSSMCheck := make([]string, 0, len(instancesToCheck))
 	for _, instance := range instancesToCheck {
@@ -561,6 +560,28 @@ func describeInstancesTolerant(ctx context.Context, client describeInstancesAPI,
 	}
 
 	return client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{InstanceIds: remaining})
+}
+
+// rotateInstanceWindow returns windowSize instances from sorted, picked at a
+// time-seeded offset that advances by windowSize every checkInterval.
+// Returns sorted unchanged when it's already <= windowSize. checkInterval
+// defaults to 60s when <= 0.
+func rotateInstanceWindow(sorted []ec2Types.Instance, windowSize int, checkInterval time.Duration, now time.Time) []ec2Types.Instance {
+	total := len(sorted)
+	if windowSize <= 0 || total <= windowSize {
+		return sorted
+	}
+	if checkInterval <= 0 {
+		checkInterval = time.Minute
+	}
+
+	offset := int(now.UnixNano() / int64(checkInterval) * int64(windowSize) % int64(total))
+
+	window := make([]ec2Types.Instance, windowSize)
+	for i := range window {
+		window[i] = sorted[(offset+i)%total]
+	}
+	return window
 }
 
 var staleInstanceIDRegex = regexp.MustCompile(`i-[0-9a-f]{8,17}`)
