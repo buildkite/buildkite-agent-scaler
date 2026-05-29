@@ -267,7 +267,9 @@ Resources:
                     - !Sub "arn:aws:ssm:${AWS::Region}::document/AWS-RunShellScript"
                     - !Sub "arn:aws:ssm:${AWS::Region}::document/AWS-RunPowerShellScript"
                 - Effect: Allow
-                  Action: ssm:SendCommand
+                  Action:
+                    - ssm:SendCommand
+                    - ssm:ListCommandInvocations
                   Resource: !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/*"
                   Condition:
                     StringEquals:
