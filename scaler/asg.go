@@ -307,6 +307,11 @@ func (a *ASGDriver) checkAndMarkUnhealthy(
 		firstError = fmt.Errorf("ListCommandInvocations failed: %w", pollErr)
 	}
 
+	// Healthy and already-marked instances are the common, non-actionable
+	// cases; collect them and log one summary line each instead of one line
+	// per instance.
+	var healthy, alreadyMarked []string
+
 	for _, instanceID := range onlineIDs {
 		inv, ok := results[instanceID]
 		if !ok {
@@ -337,12 +342,14 @@ func (a *ASGDriver) checkAndMarkUnhealthy(
 			(inv.Status == ssmTypes.CommandInvocationStatusSuccess && strings.Contains(output, "NOT_RUNNING"))
 
 		if !isDangling {
-			log.Printf("[Elastic CI Mode] Instance %s agent service is running (status: %s)", instanceID, strings.TrimSpace(output))
-			continue
-		}
-
-		if strings.Contains(output, "MARKER_EXISTS") {
-			log.Printf("[Elastic CI Mode] ℹ️ Instance %s is already marked for termination, skipping. Output: %s", instanceID, output)
+			// A marker means a previous run already flagged this instance for
+			// termination; the script exits before checking the agent, so we
+			// can't claim it's running.
+			if strings.Contains(output, "MARKER_EXISTS") {
+				alreadyMarked = append(alreadyMarked, instanceID)
+			} else {
+				healthy = append(healthy, instanceID)
+			}
 			continue
 		}
 
@@ -359,6 +366,13 @@ func (a *ASGDriver) checkAndMarkUnhealthy(
 			log.Printf("[Elastic CI Mode] Marked instance %s as unhealthy", instanceID)
 			markedUnhealthyCount++
 		}
+	}
+
+	if len(healthy) > 0 {
+		log.Printf("[Elastic CI Mode] %d instance(s) healthy: %v", len(healthy), healthy)
+	}
+	if len(alreadyMarked) > 0 {
+		log.Printf("[Elastic CI Mode] ℹ️ %d instance(s) already marked for termination, skipping: %v", len(alreadyMarked), alreadyMarked)
 	}
 
 	return markedUnhealthyCount, checkedCount, firstError
