@@ -1,6 +1,7 @@
 package scaler
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -49,6 +50,12 @@ type ASGDriver struct {
 	MinimumInstanceUptime             time.Duration
 	MaxDanglingInstancesToCheck       int           // Maximum number of instances to check for dangling instances (only used for dangling instance scanning, not for normal scale-in)
 	DanglingInstancesCheckInterval    time.Duration // Interval between dangling-instance checks; used to rotate the check window. Defaults to 60s when 0.
+
+	// SSM Run Command timings for checkAndMarkUnhealthy. Zero values fall back
+	// to the defaults below; set only in tests to avoid real sleeps.
+	ssmRegistrationDelay time.Duration
+	ssmPollInterval      time.Duration
+	ssmPollDeadline      time.Duration
 }
 
 // waitForSSMReady blocks until the SSM agent on instanceID reports PingStatus="Online",
@@ -122,128 +129,250 @@ esac
 `
 }
 
-// checkAndMarkUnhealthy uses SSM to check if buildkite-agent is running on each instance.
-// Instances where the agent service is not running are marked unhealthy via the ASG API,
-// which will cause the ASG to terminate and replace them.
+// ssmCheckAPI is the subset of ssm.Client used by checkAndMarkUnhealthy,
+// extracted so tests can stub it.
+type ssmCheckAPI interface {
+	DescribeInstanceInformation(ctx context.Context, params *ssm.DescribeInstanceInformationInput, optFns ...func(*ssm.Options)) (*ssm.DescribeInstanceInformationOutput, error)
+	SendCommand(ctx context.Context, params *ssm.SendCommandInput, optFns ...func(*ssm.Options)) (*ssm.SendCommandOutput, error)
+	ListCommandInvocations(ctx context.Context, params *ssm.ListCommandInvocationsInput, optFns ...func(*ssm.Options)) (*ssm.ListCommandInvocationsOutput, error)
+}
+
+// asgHealthAPI is the subset of autoscaling.Client used by checkAndMarkUnhealthy,
+// extracted so tests can stub it.
+type asgHealthAPI interface {
+	SetInstanceHealth(ctx context.Context, params *autoscaling.SetInstanceHealthInput, optFns ...func(*autoscaling.Options)) (*autoscaling.SetInstanceHealthOutput, error)
+}
+
+// filterOnlineSSMInstances returns the subset of instanceIDs whose SSM agent
+// last pinged as Online. Anything else (ConnectionLost, Inactive) means
+// SendCommand would either fail or sit Pending until it times out.
+// https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_InstanceInformation.html
+func filterOnlineSSMInstances(ctx context.Context, ssmSvc ssmCheckAPI, instanceIDs []string) ([]string, error) {
+	resp, err := ssmSvc.DescribeInstanceInformation(ctx, &ssm.DescribeInstanceInformationInput{
+		Filters: []ssmTypes.InstanceInformationStringFilter{
+			{Key: aws.String("InstanceIds"), Values: instanceIDs},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	online := make([]string, 0, len(resp.InstanceInformationList))
+	for _, info := range resp.InstanceInformationList {
+		if info.PingStatus == ssmTypes.PingStatusOnline && info.InstanceId != nil {
+			online = append(online, *info.InstanceId)
+		}
+	}
+	return online, nil
+}
+
+// pollCommandInvocations polls ListCommandInvocations every interval until
+// every expected invocation reaches a terminal status or the deadline elapses.
+// On timeout it returns whatever invocations exist so far. Each poll lists every
+// commandID, following NextToken so fleets larger than one response page (50)
+// are fully collected.
+// https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_ListCommandInvocations.html
+func pollCommandInvocations(ctx context.Context, ssmSvc ssmCheckAPI, commandIDs []string, expected int, interval, deadline time.Duration) (map[string]ssmTypes.CommandInvocation, error) {
+	end := time.Now().Add(deadline)
+	results := make(map[string]ssmTypes.CommandInvocation, expected)
+	for {
+		allTerminal := true
+		for _, commandID := range commandIDs {
+			var nextToken *string
+			for {
+				out, err := ssmSvc.ListCommandInvocations(ctx, &ssm.ListCommandInvocationsInput{
+					CommandId: aws.String(commandID),
+					Details:   true,
+					NextToken: nextToken,
+				})
+				if err != nil {
+					return results, err
+				}
+				// Non-terminal statuses per CommandInvocation docs:
+				// https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_CommandInvocation.html
+				for _, inv := range out.CommandInvocations {
+					if inv.InstanceId == nil {
+						continue
+					}
+					results[*inv.InstanceId] = inv
+					switch inv.Status {
+					case ssmTypes.CommandInvocationStatusPending,
+						ssmTypes.CommandInvocationStatusInProgress,
+						ssmTypes.CommandInvocationStatusDelayed,
+						ssmTypes.CommandInvocationStatusCancelling:
+						allTerminal = false
+					}
+				}
+				if out.NextToken == nil || *out.NextToken == "" {
+					break
+				}
+				nextToken = out.NextToken
+			}
+		}
+		if len(results) >= expected && allTerminal {
+			return results, nil
+		}
+		if !time.Now().Before(end) {
+			return results, nil
+		}
+		select {
+		case <-ctx.Done():
+			return results, ctx.Err()
+		case <-time.After(interval):
+		}
+	}
+}
+
+// pluginOutput concatenates stdout across an invocation's plugins. SSM returns
+// one CommandPlugin per document step; our check documents (AWS-RunShellScript
+// and AWS-RunPowerShellScript) have a single step, but we concatenate to stay
+// correct if that ever changes.
+// https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_CommandPlugin.html
+func pluginOutput(inv ssmTypes.CommandInvocation) string {
+	var b strings.Builder
+	for _, p := range inv.CommandPlugins {
+		if p.Output != nil {
+			b.WriteString(*p.Output)
+		}
+	}
+	return b.String()
+}
+
+// checkAndMarkUnhealthy probes buildkite-agent on each instance via SSM and
+// marks unhealthy any whose agent service is not running, so the ASG
+// terminates and replaces them. Skipping graceful shutdown is safe here: a
+// stopped agent has no jobs to drain.
 //
-// This is safe to use without graceful shutdown because:
-// - We only mark unhealthy if the agent service is NOT running
-// - If the agent service is not running, there cannot be any jobs in progress
-// - This is different from normal scale-in which uses SIGTERM for graceful shutdown
-//
-// This function is specifically for "zombie" instances where the EC2 instance is running
-// but the buildkite-agent process has died (e.g., due to crashes, OOM, or other failures).
+// The probe is batched in three AWS calls plus polling:
+//  1. DescribeInstanceInformation filters down to instances whose SSM agent
+//     is reachable.
+//  2. One SendCommand fans the check script out to all targets in parallel
+//     (https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_SendCommand.html).
+//  3. ListCommandInvocations is polled until each invocation reaches a
+//     terminal status or the deadline elapses.
 func (a *ASGDriver) checkAndMarkUnhealthy(
 	ctx context.Context,
 	instances []string,
-	ssmSvc *ssm.Client,
-	asgSvc *autoscaling.Client,
+	ssmSvc ssmCheckAPI,
+	asgSvc asgHealthAPI,
 	platform string,
 ) (markedUnhealthyCount int, checkedCount int, firstError error) {
-	checkCommand := a.getCheckCommand(platform)
+	if len(instances) == 0 {
+		return 0, 0, nil
+	}
 
-	// Use the appropriate SSM document based on platform
+	onlineIDs, err := filterOnlineSSMInstances(ctx, ssmSvc, instances)
+	if err != nil {
+		return 0, 0, fmt.Errorf("DescribeInstanceInformation failed: %w", err)
+	}
+	if offline := len(instances) - len(onlineIDs); offline > 0 {
+		log.Printf("[Elastic CI Mode] SSM agent not online for %d of %d instance(s); skipping those", offline, len(instances))
+	}
+	if len(onlineIDs) == 0 {
+		return 0, 0, nil
+	}
+
 	documentName := "AWS-RunShellScript"
 	if platform == "windows" {
 		documentName = "AWS-RunPowerShellScript"
 	}
-
-	for _, instanceID := range instances {
-		checkInput := &ssm.SendCommandInput{
-			InstanceIds:  []string{instanceID},
+	// SendCommand accepts at most 50 instance IDs per call, so fan out one
+	// command per batch and poll them together.
+	// https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_SendCommand.html
+	const sendCommandMaxTargets = 50
+	var commandIDs []string
+	for batch := range slices.Chunk(onlineIDs, sendCommandMaxTargets) {
+		sendOut, err := ssmSvc.SendCommand(ctx, &ssm.SendCommandInput{
+			InstanceIds:  batch,
 			DocumentName: aws.String(documentName),
-			Parameters: map[string][]string{
-				"commands": {checkCommand},
-			},
-			Comment: aws.String("Check if buildkite-agent service is running"),
-		}
-
-		if err := a.waitForSSMReady(ctx, instanceID, 2*time.Minute); err != nil {
-			log.Printf("[Elastic CI Mode] SSM agent never came online for %s: %v; skipping check for this instance", instanceID, err)
-			if firstError == nil {
-				firstError = fmt.Errorf("SSM agent not ready for %s: %w", instanceID, err)
-			}
-			continue // to the next instance in the 'instances' slice
-		}
-
-		checkOutput, err := ssmSvc.SendCommand(ctx, checkInput)
+			Parameters:   map[string][]string{"commands": {a.getCheckCommand(platform)}},
+			Comment:      aws.String("Check if buildkite-agent service is running"),
+		})
 		if err != nil {
-			log.Printf("[Elastic CI Mode] Warning: Could not send check command to instance %s: %v", instanceID, err)
+			return 0, 0, fmt.Errorf("SendCommand failed: %w", err)
+		}
+		commandIDs = append(commandIDs, *sendOut.Command.CommandId)
+	}
+
+	// Run Command follows an eventual consistency model, so invocations may
+	// not appear immediately after SendCommand returns. Wait once before the
+	// first poll, then poll on a fixed interval up to a bounded deadline.
+	// https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_GetCommandInvocation.html
+	registrationDelay := cmp.Or(a.ssmRegistrationDelay, 3*time.Second)
+	pollInterval := cmp.Or(a.ssmPollInterval, 3*time.Second)
+	pollDeadline := cmp.Or(a.ssmPollDeadline, 60*time.Second)
+	time.Sleep(registrationDelay)
+	results, pollErr := pollCommandInvocations(ctx, ssmSvc, commandIDs, len(onlineIDs), pollInterval, pollDeadline)
+	if pollErr != nil {
+		log.Printf("[Elastic CI Mode] ListCommandInvocations failed for commands %v: %v", commandIDs, pollErr)
+		firstError = fmt.Errorf("ListCommandInvocations failed: %w", pollErr)
+	}
+
+	// Healthy and already-marked instances are the common, non-actionable
+	// cases; collect them and log one summary line each instead of one line
+	// per instance.
+	var healthy, alreadyMarked []string
+
+	for _, instanceID := range onlineIDs {
+		inv, ok := results[instanceID]
+		if !ok {
+			log.Printf("[Elastic CI Mode] No invocation result for %s within deadline; skipping", instanceID)
 			if firstError == nil {
-				firstError = fmt.Errorf("SendCommand failed for %s: %w", instanceID, err)
+				firstError = fmt.Errorf("no invocation result for %s", instanceID)
 			}
-			continue // to the next instance
+			continue
 		}
-
-		time.Sleep(3 * time.Second) // Give SSM time to run and report
-
-		checkResultInput := &ssm.GetCommandInvocationInput{
-			CommandId:  checkOutput.Command.CommandId,
-			InstanceId: aws.String(instanceID),
-		}
-
-		var checkCmdResult *ssm.GetCommandInvocationOutput
-		// Retry GetCommandInvocation a few times as it might not be immediately available
-		for i := 0; i < 3; i++ {
-			checkCmdResult, err = ssmSvc.GetCommandInvocation(ctx, checkResultInput)
-			if err == nil && checkCmdResult.Status != ssmTypes.CommandInvocationStatusPending && checkCmdResult.Status != ssmTypes.CommandInvocationStatusInProgress {
-				break
-			}
-			if err != nil {
-				log.Printf("[Elastic CI Mode] Retrying GetCommandInvocation for %s (attempt %d): %v", instanceID, i+1, err)
-			}
-			time.Sleep(2 * time.Second)
-		}
-
-		if err != nil {
-			log.Printf("[Elastic CI Mode] Warning: Could not get check result for instance %s after retries: %v", instanceID, err)
+		switch inv.Status {
+		case ssmTypes.CommandInvocationStatusPending,
+			ssmTypes.CommandInvocationStatusInProgress,
+			ssmTypes.CommandInvocationStatusDelayed,
+			ssmTypes.CommandInvocationStatusCancelling:
+			log.Printf("[Elastic CI Mode] Invocation for %s did not terminate (status: %s); skipping", instanceID, inv.Status)
 			if firstError == nil {
-				firstError = fmt.Errorf("GetCommandInvocation failed for %s: %w", instanceID, err)
+				firstError = fmt.Errorf("invocation for %s did not terminate (status: %s)", instanceID, inv.Status)
 			}
-			continue // to the next instance
+			continue
 		}
 
 		checkedCount++
+		output := pluginOutput(inv)
 
-		// If command failed or agent service isn't running (based on script's exit code or output)
-		if checkCmdResult.Status == ssmTypes.CommandInvocationStatusFailed ||
-			(checkCmdResult.Status == ssmTypes.CommandInvocationStatusSuccess && checkCmdResult.StandardOutputContent != nil && strings.Contains(*checkCmdResult.StandardOutputContent, "NOT_RUNNING")) {
+		// Agent service isn't running (script printed NOT_RUNNING) or the
+		// command itself failed (e.g. script error / unsupported platform).
+		isDangling := inv.Status == ssmTypes.CommandInvocationStatusFailed ||
+			(inv.Status == ssmTypes.CommandInvocationStatusSuccess && strings.Contains(output, "NOT_RUNNING"))
 
-			// Skip if it's already been marked for termination (based on script's output)
-			if checkCmdResult.StandardOutputContent != nil &&
-				strings.Contains(*checkCmdResult.StandardOutputContent, "MARKER_EXISTS") {
-				log.Printf("[Elastic CI Mode] ℹ️ Instance %s is already marked for termination, skipping", instanceID)
-				if checkCmdResult.StandardOutputContent != nil {
-					log.Printf("[Elastic CI Mode] Service status details for %s: %s", instanceID, *checkCmdResult.StandardOutputContent)
-				}
-				continue // to the next instance
-			}
-
-			log.Printf("[Elastic CI Mode] 🧟 Found dangling instance %s - buildkite-agent service is not running or check command failed", instanceID)
-			if checkCmdResult.StandardOutputContent != nil {
-				log.Printf("[Elastic CI Mode] Service status for %s: %s", instanceID, *checkCmdResult.StandardOutputContent)
-			}
-
-			// Mark instance as unhealthy so ASG will terminate it
-			_, err := asgSvc.SetInstanceHealth(ctx, &autoscaling.SetInstanceHealthInput{
-				InstanceId:   aws.String(instanceID),
-				HealthStatus: aws.String("Unhealthy"),
-			})
-
-			if err != nil {
-				log.Printf("[Elastic CI Mode] Error: Failed to mark instance %s as unhealthy: %v", instanceID, err)
-				if firstError == nil {
-					firstError = fmt.Errorf("SetInstanceHealth failed for %s: %w", instanceID, err)
-				}
+		if !isDangling {
+			// A marker means a previous run already flagged this instance for
+			// termination; the script exits before checking the agent, so we
+			// can't claim it's running.
+			if strings.Contains(output, "MARKER_EXISTS") {
+				alreadyMarked = append(alreadyMarked, instanceID)
 			} else {
-				log.Printf("[Elastic CI Mode] Successfully marked instance %s as unhealthy", instanceID)
-				markedUnhealthyCount++
+				healthy = append(healthy, instanceID)
 			}
-		} else if checkCmdResult.Status == ssmTypes.CommandInvocationStatusSuccess {
-			log.Printf("[Elastic CI Mode] Instance %s agent service is running (status: %s)", instanceID, strings.TrimSpace(aws.ToString(checkCmdResult.StandardOutputContent)))
-		} else {
-			log.Printf("[Elastic CI Mode] Agent status check command for %s did not succeed (status: %s). Output: %s", instanceID, checkCmdResult.Status, aws.ToString(checkCmdResult.StandardOutputContent))
+			continue
 		}
+
+		log.Printf("[Elastic CI Mode] 🧟 Found dangling instance %s; output: %s", instanceID, output)
+		if _, err := asgSvc.SetInstanceHealth(ctx, &autoscaling.SetInstanceHealthInput{
+			InstanceId:   aws.String(instanceID),
+			HealthStatus: aws.String("Unhealthy"),
+		}); err != nil {
+			log.Printf("[Elastic CI Mode] Failed to mark instance %s as unhealthy: %v", instanceID, err)
+			if firstError == nil {
+				firstError = fmt.Errorf("SetInstanceHealth failed for %s: %w", instanceID, err)
+			}
+		} else {
+			log.Printf("[Elastic CI Mode] Marked instance %s as unhealthy", instanceID)
+			markedUnhealthyCount++
+		}
+	}
+
+	if len(healthy) > 0 {
+		log.Printf("[Elastic CI Mode] %d instance(s) healthy: %v", len(healthy), healthy)
+	}
+	if len(alreadyMarked) > 0 {
+		log.Printf("[Elastic CI Mode] ℹ️ %d instance(s) already marked for termination, skipping: %v", len(alreadyMarked), alreadyMarked)
 	}
 
 	return markedUnhealthyCount, checkedCount, firstError

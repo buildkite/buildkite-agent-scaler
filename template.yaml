@@ -274,7 +274,9 @@ Resources:
                       "ssm:resourceTag/Role": "buildkite-agent"
                       "ssm:resourceTag/aws:autoscaling:groupName": !Ref AgentAutoScaleGroup
                 - Effect: Allow
-                  Action: ssm:GetCommandInvocation
+                  Action:
+                    - ssm:GetCommandInvocation
+                    - ssm:ListCommandInvocations
                   Resource: "*"
                 - Effect: Allow
                   Action:
