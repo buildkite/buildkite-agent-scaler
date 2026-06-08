@@ -267,16 +267,16 @@ Resources:
                     - !Sub "arn:aws:ssm:${AWS::Region}::document/AWS-RunShellScript"
                     - !Sub "arn:aws:ssm:${AWS::Region}::document/AWS-RunPowerShellScript"
                 - Effect: Allow
-                  Action:
-                    - ssm:SendCommand
-                    - ssm:ListCommandInvocations
+                  Action: ssm:SendCommand
                   Resource: !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/*"
                   Condition:
                     StringEquals:
                       "ssm:resourceTag/Role": "buildkite-agent"
                       "ssm:resourceTag/aws:autoscaling:groupName": !Ref AgentAutoScaleGroup
                 - Effect: Allow
-                  Action: ssm:GetCommandInvocation
+                  Action:
+                    - ssm:GetCommandInvocation
+                    - ssm:ListCommandInvocations
                   Resource: "*"
                 - Effect: Allow
                   Action:
