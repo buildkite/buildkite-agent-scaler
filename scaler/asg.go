@@ -1,6 +1,7 @@
 package scaler
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -49,6 +50,12 @@ type ASGDriver struct {
 	MinimumInstanceUptime             time.Duration
 	MaxDanglingInstancesToCheck       int           // Maximum number of instances to check for dangling instances (only used for dangling instance scanning, not for normal scale-in)
 	DanglingInstancesCheckInterval    time.Duration // Interval between dangling-instance checks; used to rotate the check window. Defaults to 60s when 0.
+
+	// SSM Run Command timings for checkAndMarkUnhealthy. Zero values fall back
+	// to the defaults below; set only in tests to avoid real sleeps.
+	ssmRegistrationDelay time.Duration
+	ssmPollInterval      time.Duration
+	ssmPollDeadline      time.Duration
 }
 
 // waitForSSMReady blocks until the SSM agent on instanceID reports PingStatus="Online",
@@ -128,6 +135,12 @@ type ssmCheckAPI interface {
 	DescribeInstanceInformation(ctx context.Context, params *ssm.DescribeInstanceInformationInput, optFns ...func(*ssm.Options)) (*ssm.DescribeInstanceInformationOutput, error)
 	SendCommand(ctx context.Context, params *ssm.SendCommandInput, optFns ...func(*ssm.Options)) (*ssm.SendCommandOutput, error)
 	ListCommandInvocations(ctx context.Context, params *ssm.ListCommandInvocationsInput, optFns ...func(*ssm.Options)) (*ssm.ListCommandInvocationsOutput, error)
+}
+
+// asgHealthAPI is the subset of autoscaling.Client used by checkAndMarkUnhealthy,
+// extracted so tests can stub it.
+type asgHealthAPI interface {
+	SetInstanceHealth(ctx context.Context, params *autoscaling.SetInstanceHealthInput, optFns ...func(*autoscaling.Options)) (*autoscaling.SetInstanceHealthOutput, error)
 }
 
 // filterOnlineSSMInstances returns the subset of instanceIDs whose SSM agent
@@ -240,7 +253,7 @@ func (a *ASGDriver) checkAndMarkUnhealthy(
 	ctx context.Context,
 	instances []string,
 	ssmSvc ssmCheckAPI,
-	asgSvc *autoscaling.Client,
+	asgSvc asgHealthAPI,
 	platform string,
 ) (markedUnhealthyCount int, checkedCount int, firstError error) {
 	if len(instances) == 0 {
@@ -284,11 +297,9 @@ func (a *ASGDriver) checkAndMarkUnhealthy(
 	// not appear immediately after SendCommand returns. Wait once before the
 	// first poll, then poll on a fixed interval up to a bounded deadline.
 	// https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_GetCommandInvocation.html
-	const (
-		registrationDelay = 3 * time.Second
-		pollInterval      = 3 * time.Second
-		pollDeadline      = 60 * time.Second
-	)
+	registrationDelay := cmp.Or(a.ssmRegistrationDelay, 3*time.Second)
+	pollInterval := cmp.Or(a.ssmPollInterval, 3*time.Second)
+	pollDeadline := cmp.Or(a.ssmPollDeadline, 60*time.Second)
 	time.Sleep(registrationDelay)
 	results, pollErr := pollCommandInvocations(ctx, ssmSvc, commandIDs, len(onlineIDs), pollInterval, pollDeadline)
 	if pollErr != nil {
