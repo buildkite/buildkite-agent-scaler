@@ -467,7 +467,7 @@ func TestPollCommandInvocations(t *testing.T) {
 				inv("i-b", ssmTypes.CommandInvocationStatusSuccess),
 			}}},
 		}}
-		results, err := pollCommandInvocations(ctx, stub, "cmd-1", 2, time.Millisecond, time.Second)
+		results, err := pollCommandInvocations(ctx, stub, []string{"cmd-1"}, 2, time.Millisecond, time.Second)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -480,6 +480,29 @@ func TestPollCommandInvocations(t *testing.T) {
 		}
 	})
 
+	t.Run("follows NextToken within a single poll", func(t *testing.T) {
+		stub := &stubSSMClient{listResponses: []stubListResponse{
+			{out: &ssm.ListCommandInvocationsOutput{
+				CommandInvocations: []ssmTypes.CommandInvocation{inv("i-a", ssmTypes.CommandInvocationStatusSuccess)},
+				NextToken:          aws.String("page-2"),
+			}},
+			{out: &ssm.ListCommandInvocationsOutput{
+				CommandInvocations: []ssmTypes.CommandInvocation{inv("i-b", ssmTypes.CommandInvocationStatusSuccess)},
+			}},
+		}}
+		results, err := pollCommandInvocations(ctx, stub, []string{"cmd-1"}, 2, time.Millisecond, time.Second)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if results["i-a"].Status != ssmTypes.CommandInvocationStatusSuccess ||
+			results["i-b"].Status != ssmTypes.CommandInvocationStatusSuccess {
+			t.Errorf("expected both Success across pages, got %+v", results)
+		}
+		if stub.listCalls != 2 {
+			t.Errorf("expected 2 paginated list calls in one poll, got %d", stub.listCalls)
+		}
+	})
+
 	t.Run("returns partial result on deadline", func(t *testing.T) {
 		stub := &stubSSMClient{listResponses: []stubListResponse{
 			{out: &ssm.ListCommandInvocationsOutput{CommandInvocations: []ssmTypes.CommandInvocation{
@@ -487,7 +510,7 @@ func TestPollCommandInvocations(t *testing.T) {
 			}}},
 		}}
 		// expected=2 with only InProgress for i-a; never terminal, deadline elapses.
-		results, err := pollCommandInvocations(ctx, stub, "cmd-1", 2, time.Millisecond, 5*time.Millisecond)
+		results, err := pollCommandInvocations(ctx, stub, []string{"cmd-1"}, 2, time.Millisecond, 5*time.Millisecond)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -498,7 +521,7 @@ func TestPollCommandInvocations(t *testing.T) {
 
 	t.Run("API error propagates", func(t *testing.T) {
 		stub := &stubSSMClient{listResponses: []stubListResponse{{err: errors.New("throttled")}}}
-		_, err := pollCommandInvocations(ctx, stub, "cmd-1", 1, time.Millisecond, time.Second)
+		_, err := pollCommandInvocations(ctx, stub, []string{"cmd-1"}, 1, time.Millisecond, time.Second)
 		if err == nil || !strings.Contains(err.Error(), "throttled") {
 			t.Errorf("expected throttled error, got %v", err)
 		}

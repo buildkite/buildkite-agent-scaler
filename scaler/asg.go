@@ -154,34 +154,45 @@ func filterOnlineSSMInstances(ctx context.Context, ssmSvc ssmCheckAPI, instanceI
 
 // pollCommandInvocations polls ListCommandInvocations every interval until
 // every expected invocation reaches a terminal status or the deadline elapses.
-// On timeout it returns whatever invocations exist so far. One API call per
-// poll regardless of fleet size.
+// On timeout it returns whatever invocations exist so far. Each poll lists every
+// commandID, following NextToken so fleets larger than one response page (50)
+// are fully collected.
 // https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_ListCommandInvocations.html
-func pollCommandInvocations(ctx context.Context, ssmSvc ssmCheckAPI, commandID string, expected int, interval, deadline time.Duration) (map[string]ssmTypes.CommandInvocation, error) {
+func pollCommandInvocations(ctx context.Context, ssmSvc ssmCheckAPI, commandIDs []string, expected int, interval, deadline time.Duration) (map[string]ssmTypes.CommandInvocation, error) {
 	end := time.Now().Add(deadline)
 	results := make(map[string]ssmTypes.CommandInvocation, expected)
 	for {
-		out, err := ssmSvc.ListCommandInvocations(ctx, &ssm.ListCommandInvocationsInput{
-			CommandId: aws.String(commandID),
-			Details:   true,
-		})
-		if err != nil {
-			return results, err
-		}
-		// Non-terminal statuses per CommandInvocation docs:
-		// https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_CommandInvocation.html
 		allTerminal := true
-		for _, inv := range out.CommandInvocations {
-			if inv.InstanceId == nil {
-				continue
-			}
-			results[*inv.InstanceId] = inv
-			switch inv.Status {
-			case ssmTypes.CommandInvocationStatusPending,
-				ssmTypes.CommandInvocationStatusInProgress,
-				ssmTypes.CommandInvocationStatusDelayed,
-				ssmTypes.CommandInvocationStatusCancelling:
-				allTerminal = false
+		for _, commandID := range commandIDs {
+			var nextToken *string
+			for {
+				out, err := ssmSvc.ListCommandInvocations(ctx, &ssm.ListCommandInvocationsInput{
+					CommandId: aws.String(commandID),
+					Details:   true,
+					NextToken: nextToken,
+				})
+				if err != nil {
+					return results, err
+				}
+				// Non-terminal statuses per CommandInvocation docs:
+				// https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_CommandInvocation.html
+				for _, inv := range out.CommandInvocations {
+					if inv.InstanceId == nil {
+						continue
+					}
+					results[*inv.InstanceId] = inv
+					switch inv.Status {
+					case ssmTypes.CommandInvocationStatusPending,
+						ssmTypes.CommandInvocationStatusInProgress,
+						ssmTypes.CommandInvocationStatusDelayed,
+						ssmTypes.CommandInvocationStatusCancelling:
+						allTerminal = false
+					}
+				}
+				if out.NextToken == nil || *out.NextToken == "" {
+					break
+				}
+				nextToken = out.NextToken
 			}
 		}
 		if len(results) >= expected && allTerminal {
@@ -251,16 +262,23 @@ func (a *ASGDriver) checkAndMarkUnhealthy(
 	if platform == "windows" {
 		documentName = "AWS-RunPowerShellScript"
 	}
-	sendOut, err := ssmSvc.SendCommand(ctx, &ssm.SendCommandInput{
-		InstanceIds:  onlineIDs,
-		DocumentName: aws.String(documentName),
-		Parameters:   map[string][]string{"commands": {a.getCheckCommand(platform)}},
-		Comment:      aws.String("Check if buildkite-agent service is running"),
-	})
-	if err != nil {
-		return 0, 0, fmt.Errorf("SendCommand failed: %w", err)
+	// SendCommand accepts at most 50 instance IDs per call, so fan out one
+	// command per batch and poll them together.
+	// https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_SendCommand.html
+	const sendCommandMaxTargets = 50
+	var commandIDs []string
+	for batch := range slices.Chunk(onlineIDs, sendCommandMaxTargets) {
+		sendOut, err := ssmSvc.SendCommand(ctx, &ssm.SendCommandInput{
+			InstanceIds:  batch,
+			DocumentName: aws.String(documentName),
+			Parameters:   map[string][]string{"commands": {a.getCheckCommand(platform)}},
+			Comment:      aws.String("Check if buildkite-agent service is running"),
+		})
+		if err != nil {
+			return 0, 0, fmt.Errorf("SendCommand failed: %w", err)
+		}
+		commandIDs = append(commandIDs, *sendOut.Command.CommandId)
 	}
-	commandID := *sendOut.Command.CommandId
 
 	// Run Command follows an eventual consistency model, so invocations may
 	// not appear immediately after SendCommand returns. Wait once before the
@@ -272,9 +290,9 @@ func (a *ASGDriver) checkAndMarkUnhealthy(
 		pollDeadline      = 60 * time.Second
 	)
 	time.Sleep(registrationDelay)
-	results, pollErr := pollCommandInvocations(ctx, ssmSvc, commandID, len(onlineIDs), pollInterval, pollDeadline)
+	results, pollErr := pollCommandInvocations(ctx, ssmSvc, commandIDs, len(onlineIDs), pollInterval, pollDeadline)
 	if pollErr != nil {
-		log.Printf("[Elastic CI Mode] ListCommandInvocations failed for command %s: %v", commandID, pollErr)
+		log.Printf("[Elastic CI Mode] ListCommandInvocations failed for commands %v: %v", commandIDs, pollErr)
 		firstError = fmt.Errorf("ListCommandInvocations failed: %w", pollErr)
 	}
 
