@@ -179,7 +179,8 @@ func pollCommandInvocations(ctx context.Context, ssmSvc ssmCheckAPI, commandID s
 			switch inv.Status {
 			case ssmTypes.CommandInvocationStatusPending,
 				ssmTypes.CommandInvocationStatusInProgress,
-				ssmTypes.CommandInvocationStatusDelayed:
+				ssmTypes.CommandInvocationStatusDelayed,
+				ssmTypes.CommandInvocationStatusCancelling:
 				allTerminal = false
 			}
 		}
@@ -289,7 +290,8 @@ func (a *ASGDriver) checkAndMarkUnhealthy(
 		switch inv.Status {
 		case ssmTypes.CommandInvocationStatusPending,
 			ssmTypes.CommandInvocationStatusInProgress,
-			ssmTypes.CommandInvocationStatusDelayed:
+			ssmTypes.CommandInvocationStatusDelayed,
+			ssmTypes.CommandInvocationStatusCancelling:
 			log.Printf("[Elastic CI Mode] Invocation for %s did not terminate (status: %s); skipping", instanceID, inv.Status)
 			if firstError == nil {
 				firstError = fmt.Errorf("invocation for %s did not terminate (status: %s)", instanceID, inv.Status)
