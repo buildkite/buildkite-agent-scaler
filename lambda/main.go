@@ -47,8 +47,14 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 	agentsPerInstance := RequireEnvInt("AGENTS_PER_INSTANCE")
 
 	// Optional environment variables (but they must parse correctly if set).
+	startupJitterMax := EnvDuration("LAMBDA_STARTUP_JITTER_MAX", 0)
 	interval := EnvDuration("LAMBDA_INTERVAL", 10*time.Second)
 	timeoutDuration := EnvDuration("LAMBDA_TIMEOUT", -1)
+
+	if err := applyStartupJitter(ctx, asgName, startupJitterMax); err != nil {
+		return "", err
+	}
+
 	var timeout <-chan time.Time
 	if timeoutDuration >= 0 {
 		timeout = time.After(timeoutDuration)

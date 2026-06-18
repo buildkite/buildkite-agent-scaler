@@ -43,6 +43,11 @@ Parameters:
     Type: String
     Default: "1 minute"
 
+  EventScheduleJitter:
+    Description: Maximum deterministic delay before scheduled scaler invocations poll APIs. Use this to stagger many scaler Lambdas, e.g. "30s".
+    Type: String
+    Default: "0s"
+
   AgentsPerInstance:
     Description: ""
     Type: Number
@@ -326,6 +331,7 @@ Resources:
           INCLUDE_WAITING:               !Ref ScaleOutForWaitingJobs
           LAMBDA_TIMEOUT:                "50s"
           LAMBDA_INTERVAL:               !Ref MinPollInterval
+          LAMBDA_STARTUP_JITTER_MAX:     !Ref EventScheduleJitter
           MAX_DESCRIBE_SCALING_ACTIVITIES_PAGES: !Ref MaxDescribeScalingActivitiesPages
           AVAILABILITY_THRESHOLD:        !Ref AvailabilityThreshold
           SCALE_IN_COOLDOWN_PERIOD:      !Sub "${ScaleInCooldownPeriod}s"
