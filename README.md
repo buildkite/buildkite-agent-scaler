@@ -43,6 +43,14 @@ Set `AVAILABILITY_THRESHOLD=0` to disable availability-based scaling. The scaler
 * **Higher threshold (e.g., 0.8)**: Aggressive scaling to maintain high availability when agents are expected to connect quickly
 * **Disabled (0)**: Job-based scaling only, suitable when agents connect reliably
 
+### Scheduled invocation jitter
+
+When many scaler Lambdas run on the same schedule in one AWS account, they can all poll AWS APIs at
+the same time. Set `EventScheduleJitter` in the Serverless Application template, or
+`LAMBDA_STARTUP_JITTER_MAX` directly on the Lambda, to spread scheduled invocations across a
+deterministic delay window. For example, `30s` gives each Auto Scaling group a stable delay from 0
+to 30 seconds before polling APIs.
+
 ## Gracefully scaling in
 
 :construction: For [Elastic CI Stack][], there's now available a dedicated and experimental mode configured with `ELASTIC_CI_MODE` variable. You can read more about it [in here](./docs/elastic_ci_mode.md). :construction:

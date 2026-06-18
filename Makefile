@@ -32,7 +32,7 @@ handler-arm64.zip: bootstrap-arm64
 	@zip -9 -v -j $@ bootstrap
 	@rm -f bootstrap
 
-bootstrap: lambda/main.go
+bootstrap: lambda/*.go
 	GOARCH=amd64 mise exec -- go build \
 	    -ldflags="$(LD_FLAGS)" \
 	    -buildvcs="$(BUILDVCS_FLAG)" \
@@ -40,7 +40,7 @@ bootstrap: lambda/main.go
 	    -o bootstrap \
 	    ./lambda
 
-bootstrap-arm64: lambda/main.go
+bootstrap-arm64: lambda/*.go
 	GOARCH=arm64 mise exec -- go build \
 	    -ldflags="$(LD_FLAGS)" \
 	    -buildvcs="$(BUILDVCS_FLAG)" \
