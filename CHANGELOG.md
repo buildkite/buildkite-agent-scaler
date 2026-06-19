@@ -5,8 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
-## [v1.12.0](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.11.2...v1.12.0) (2026-03-12)
+## [v1.12.0](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.11.2...v1.12.0) (2026-06-19)
 
+* Add scheduled scaler invocation jitter [#319](https://github.com/buildkite/buildkite-agent-scaler/pull/319) ([vivster7](https://github.com/vivster7))
+* Log when ScaleOutForWaitingJobs enabled [#309](https://github.com/buildkite/buildkite-agent-scaler/pull/309) ([JoeColeman95](https://github.com/JoeColeman95))
+* Handle stale instance IDs in DescribeInstances batch [#305](https://github.com/buildkite/buildkite-agent-scaler/pull/305) ([scadu](https://github.com/scadu))
+* Improve dangling instance check logging on all paths [#303](https://github.com/buildkite/buildkite-agent-scaler/pull/303) ([petetomasik](https://github.com/petetomasik))
+* release: v1.12.0 [#302](https://github.com/buildkite/buildkite-agent-scaler/pull/302) ([mcncl](https://github.com/mcncl))
+* Add a Renovate config [#301](https://github.com/buildkite/buildkite-agent-scaler/pull/301) ([mcncl](https://github.com/mcncl))
+* chore(deps): bump the aws group across 1 directory with 7 updates [#296](https://github.com/buildkite/buildkite-agent-scaler/pull/296) ([dependabot[bot]](https://github.com/apps/dependabot))
+* Detect dangling instances when agents report zero but instances are running [#300](https://github.com/buildkite/buildkite-agent-scaler/pull/300) ([omehegan](https://github.com/omehegan))
+* chore: add support to codeowners [#299](https://github.com/buildkite/buildkite-agent-scaler/pull/299) ([CerealBoy](https://github.com/CerealBoy))
 * Add logging for all SSM service check outcomes in dangling instance detection [#303](https://github.com/buildkite/buildkite-agent-scaler/pull/303) ([petetomasik](https://github.com/petetomasik))
 * Add a Renovate config [#301](https://github.com/buildkite/buildkite-agent-scaler/pull/301) ([mcncl](https://github.com/mcncl))
 * chore(deps): bump the aws group across 1 directory with 7 updates [#296](https://github.com/buildkite/buildkite-agent-scaler/pull/296) ([dependabot[bot]](https://github.com/apps/dependabot))
