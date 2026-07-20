@@ -57,7 +57,7 @@ steps:
       - aws-ssm#v1.1.0:
           parameters:
             GITHUB_RELEASE_ACCESS_TOKEN: /pipelines/buildkite/buildkite-agent-scaler/GITHUB_RELEASE_ACCESS_TOKEN
-      - docker#v5.13.0:
+      - docker#v5.14.0:
           image: alpine:3.18
           propagate-environment: true
           mount-buildkite-agent: true
