@@ -333,22 +333,33 @@ func (a *ASGDriver) checkAndMarkUnhealthy(
 			continue
 		}
 
-		checkedCount++
-		output := pluginOutput(inv)
+		output := strings.TrimSpace(pluginOutput(inv))
+		if inv.Status != ssmTypes.CommandInvocationStatusSuccess {
+			log.Printf("[Elastic CI Mode] Invocation for %s was inconclusive (status: %s, details: %s, output: %q); skipping", instanceID, inv.Status, aws.ToString(inv.StatusDetails), output)
+			if firstError == nil {
+				firstError = fmt.Errorf("invocation for %s was inconclusive (status: %s, details: %s)", instanceID, inv.Status, aws.ToString(inv.StatusDetails))
+			}
+			continue
+		}
 
-		// Agent service isn't running (script printed NOT_RUNNING) or the
-		// command itself failed (e.g. script error / unsupported platform).
-		isDangling := inv.Status == ssmTypes.CommandInvocationStatusFailed ||
-			(inv.Status == ssmTypes.CommandInvocationStatusSuccess && strings.Contains(output, "NOT_RUNNING"))
-
-		if !isDangling {
+		switch {
+		case output == "NOT_RUNNING" || strings.HasPrefix(output, "NOT_RUNNING:"):
+			checkedCount++
+		case output == "MARKER_EXISTS" || strings.HasPrefix(output, "MARKER_EXISTS:"):
 			// A marker means a previous run already flagged this instance for
 			// termination; the script exits before checking the agent, so we
 			// can't claim it's running.
-			if strings.Contains(output, "MARKER_EXISTS") {
-				alreadyMarked = append(alreadyMarked, instanceID)
-			} else {
-				healthy = append(healthy, instanceID)
+			checkedCount++
+			alreadyMarked = append(alreadyMarked, instanceID)
+			continue
+		case output == "RUNNING":
+			checkedCount++
+			healthy = append(healthy, instanceID)
+			continue
+		default:
+			log.Printf("[Elastic CI Mode] Invocation for %s returned unexpected output %q; skipping", instanceID, output)
+			if firstError == nil {
+				firstError = fmt.Errorf("invocation for %s returned unexpected output %q", instanceID, output)
 			}
 			continue
 		}

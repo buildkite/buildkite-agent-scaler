@@ -575,14 +575,13 @@ func TestCheckAndMarkUnhealthy(t *testing.T) {
 		}
 	}
 
-	t.Run("marks dangling instances and skips healthy or already-marked", func(t *testing.T) {
+	t.Run("marks only an explicit NOT_RUNNING result", func(t *testing.T) {
 		ssmStub := &stubSSMClient{
-			describeOut: online("i-dangling", "i-healthy", "i-failed", "i-marked"),
+			describeOut: online("i-dangling", "i-healthy", "i-marked"),
 			listResponses: []stubListResponse{{out: &ssm.ListCommandInvocationsOutput{
 				CommandInvocations: []ssmTypes.CommandInvocation{
 					invOut("i-dangling", ssmTypes.CommandInvocationStatusSuccess, "NOT_RUNNING: dead"),
 					invOut("i-healthy", ssmTypes.CommandInvocationStatusSuccess, "RUNNING"),
-					invOut("i-failed", ssmTypes.CommandInvocationStatusFailed, ""),
 					invOut("i-marked", ssmTypes.CommandInvocationStatusSuccess, "MARKER_EXISTS: already marked"),
 				},
 			}}},
@@ -591,24 +590,65 @@ func TestCheckAndMarkUnhealthy(t *testing.T) {
 
 		// i-offline is not in the describe output, so it should be filtered out.
 		marked, checked, err := driver.checkAndMarkUnhealthy(ctx,
-			[]string{"i-dangling", "i-healthy", "i-failed", "i-marked", "i-offline"},
+			[]string{"i-dangling", "i-healthy", "i-marked", "i-offline"},
 			ssmStub, asgStub, "linux")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if checked != 4 {
-			t.Errorf("checkedCount = %d, want 4", checked)
+		if checked != 3 {
+			t.Errorf("checkedCount = %d, want 3", checked)
 		}
-		if marked != 2 {
-			t.Errorf("markedUnhealthyCount = %d, want 2", marked)
+		if marked != 1 {
+			t.Errorf("markedUnhealthyCount = %d, want 1", marked)
 		}
-		got := slices.Clone(asgStub.markedUnhealthy)
-		sort.Strings(got)
-		if !slices.Equal(got, []string{"i-dangling", "i-failed"}) {
-			t.Errorf("marked unhealthy = %v, want [i-dangling i-failed]", got)
+		if !slices.Equal(asgStub.markedUnhealthy, []string{"i-dangling"}) {
+			t.Errorf("marked unhealthy = %v, want [i-dangling]", asgStub.markedUnhealthy)
 		}
-		if len(ssmStub.sendBatches) != 1 || len(ssmStub.sendBatches[0]) != 4 {
-			t.Errorf("expected one SendCommand of 4 instances, got %v", ssmStub.sendBatches)
+		if len(ssmStub.sendBatches) != 1 || len(ssmStub.sendBatches[0]) != 3 {
+			t.Errorf("expected one SendCommand of 3 instances, got %v", ssmStub.sendBatches)
+		}
+	})
+
+	t.Run("treats failed or ambiguous results as inconclusive", func(t *testing.T) {
+		tests := []struct {
+			name          string
+			status        ssmTypes.CommandInvocationStatus
+			statusDetails string
+			output        string
+		}{
+			{name: "failed with empty output", status: ssmTypes.CommandInvocationStatusFailed, statusDetails: "Failed"},
+			{name: "failed with NOT_RUNNING output", status: ssmTypes.CommandInvocationStatusFailed, statusDetails: "Failed", output: "NOT_RUNNING: dead"},
+			{name: "undeliverable", status: ssmTypes.CommandInvocationStatusFailed, statusDetails: "Undeliverable"},
+			{name: "timed out", status: ssmTypes.CommandInvocationStatusTimedOut, statusDetails: "Delivery Timed Out"},
+			{name: "cancelled", status: ssmTypes.CommandInvocationStatusCancelled, statusDetails: "Cancelled"},
+			{name: "future terminal status", status: ssmTypes.CommandInvocationStatus("FutureStatus"), statusDetails: "FutureStatus"},
+			{name: "success with empty output", status: ssmTypes.CommandInvocationStatusSuccess, statusDetails: "Success"},
+			{name: "success with ambiguous output", status: ssmTypes.CommandInvocationStatusSuccess, statusDetails: "Success", output: "RUNNING_BUT_UNCONFIRMED"},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				inv := invOut("i-target", tc.status, tc.output)
+				inv.StatusDetails = aws.String(tc.statusDetails)
+				ssmStub := &stubSSMClient{
+					describeOut: online("i-target"),
+					listResponses: []stubListResponse{{out: &ssm.ListCommandInvocationsOutput{
+						CommandInvocations: []ssmTypes.CommandInvocation{inv},
+					}}},
+				}
+				asgStub := &stubASGClient{}
+
+				marked, checked, err := driver.checkAndMarkUnhealthy(ctx, []string{"i-target"}, ssmStub, asgStub, "linux")
+				if err == nil {
+					t.Fatal("expected an inconclusive-result error")
+				}
+				if marked != 0 || checked != 0 {
+					t.Errorf("marked = %d, checked = %d; want 0, 0", marked, checked)
+				}
+				if len(asgStub.markedUnhealthy) != 0 {
+					t.Errorf("marked unhealthy = %v, want none", asgStub.markedUnhealthy)
+				}
+			})
 		}
 	})
 
