@@ -106,10 +106,12 @@ to read a parameter in a different AWS account. For encrypted (`SecureString`) p
 full KMS key ARN via `BuildkiteAgentTokenParameterStoreKMSKey` so the Lambda can decrypt cross-account.
 
 `BuildkiteAgentTokenParameterStoreKMSKey` accepts a key ID (e.g., `abcd1234-...`) or a full key ARN
-(e.g., `arn:aws:kms:us-east-1:123456789012:key/abcd1234-...`). KMS aliases (e.g., `alias/buildkite-token`)
-are **not** supported as a bare value — the template assumes a non-ARN value is a key ID and constructs
-a `:key/...` ARN, which is invalid for aliases. To reference a key by alias, pass the full alias ARN
-(e.g., `arn:aws:kms:us-east-1:123456789012:alias/buildkite-token`).
+(e.g., `arn:aws:kms:us-east-1:123456789012:key/abcd1234-...`). KMS aliases are **not** supported in
+either form — neither a bare alias (e.g., `alias/buildkite-token`) nor a full alias ARN
+(e.g., `arn:aws:kms:us-east-1:123456789012:alias/buildkite-token`) will work. The template
+places this value directly in the `kms:Decrypt` IAM policy's `Resource` field, and IAM requires a
+key ARN there; an alias ARN in `Resource` grants no permissions. Resolve the alias to its
+underlying key ARN (via `aws kms describe-key --key-id alias/...`) and pass that instead.
 
 Cross-account access also requires configuration in the account that *owns* the parameter and key: attach a resource policy to the SSM parameter granting `ssm:GetParameter` to this Lambda's execution role, and a key policy on the KMS key granting `kms:Decrypt` to the same principal. The IAM permissions on the Lambda side are necessary but not sufficient.
 
