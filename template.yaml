@@ -4,7 +4,10 @@ Transform: AWS::Serverless-2016-10-31
 
 Parameters:
   BuildkiteAgentTokenParameter:
-    Description: Buildkite agent token Systems Manager Parameter Store path
+    Description: >
+      Buildkite agent token Systems Manager Parameter Store path (e.g., '/buildkite/agent-token')
+      or full SSM parameter ARN for cross-account access
+      (e.g., 'arn:aws:ssm:us-east-1:123456789012:parameter/buildkite/shared-token').
     Type: String
 
   BuildkiteAgentTokenParameterStoreKMSKey:
@@ -173,6 +176,8 @@ Conditions:
         - ""
   ElasticCIModeEnabled:
     !Equals [ !Ref EnableElasticCIMode, "true" ]
+  IsParameterStorePathARN:
+    !Equals [ !Select [ 0, !Split [ ":", !Ref BuildkiteAgentTokenParameter ] ], "arn" ]
 
 Mappings:
   LambdaBucket:
@@ -249,7 +254,10 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: ssm:GetParameter
-                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${BuildkiteAgentTokenParameter}
+                Resource: !If
+                  - IsParameterStorePathARN
+                  - !Ref BuildkiteAgentTokenParameter
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${BuildkiteAgentTokenParameter}
         - !If
           - UseKmsKeyForParameterStore
           - PolicyName: DecryptAgentToken
