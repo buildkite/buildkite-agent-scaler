@@ -3,13 +3,13 @@ steps:
     key: test
     command: .buildkite/steps/tests.sh
     plugins:
-      - mise#v1.1.4: ~
+      - mise#v1.1.5: ~
 
   - name: ":hammer::lambda: Build Lambda"
     key: build
     command: .buildkite/steps/build-lambda.sh
     plugins:
-      - mise#v1.1.4: ~
+      - mise#v1.1.5: ~
     artifact_paths:
       - handler.zip
       - handler-arm64.zip
