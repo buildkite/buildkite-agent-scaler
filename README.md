@@ -105,6 +105,8 @@ same-account use, or a full SSM parameter ARN (e.g., `arn:aws:ssm:us-east-1:1234
 to read a parameter in a different AWS account. For encrypted (`SecureString`) parameters, pass the
 full KMS key ARN via `BuildkiteAgentTokenParameterStoreKMSKey` so the Lambda can decrypt cross-account.
 
+Cross-account access also requires configuration in the account that *owns* the parameter and key: attach a resource policy to the SSM parameter granting `ssm:GetParameter` to this Lambda's execution role, and a key policy on the KMS key granting `kms:Decrypt` to the same principal. The IAM permissions on the Lambda side are necessary but not sufficient.
+
 ```bash
 aws lambda create-function \
   --function-name buildkite-agent-scaler \
