@@ -11,7 +11,10 @@ Parameters:
     Type: String
 
   BuildkiteAgentTokenParameterStoreKMSKey:
-    Description: (Optional) AWS KMS Key ID used to encrypt the BuildkiteAgentTokenParameter Systems Manager Parameter, if encrypted
+    Description: >
+      (Optional) AWS KMS Key ID used to encrypt the BuildkiteAgentTokenParameter Systems Manager Parameter,
+      if encrypted. Accepts a key ID (e.g., 'abcd1234-...') for same-account use, or a full key ARN
+      (e.g., 'arn:aws:kms:us-east-1:123456789012:key/abcd1234-...') for cross-account SecureString access.
     Type: String
     Default: ""
 
@@ -178,6 +181,8 @@ Conditions:
     !Equals [ !Ref EnableElasticCIMode, "true" ]
   IsParameterStorePathARN:
     !Equals [ !Select [ 0, !Split [ ":", !Ref BuildkiteAgentTokenParameter ] ], "arn" ]
+  IsKMSKeyARN:
+    !Equals [ !Select [ 0, !Split [ ":", !Ref BuildkiteAgentTokenParameterStoreKMSKey ] ], "arn" ]
 
 Mappings:
   LambdaBucket:
@@ -266,7 +271,10 @@ Resources:
               Statement:
                 - Effect: Allow
                   Action: kms:Decrypt
-                  Resource: !Sub arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/${BuildkiteAgentTokenParameterStoreKMSKey}
+                  Resource: !If
+                    - IsKMSKeyARN
+                    - !Ref BuildkiteAgentTokenParameterStoreKMSKey
+                    - !Sub arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/${BuildkiteAgentTokenParameterStoreKMSKey}
           - !Ref 'AWS::NoValue'
         - !If
           - ElasticCIModeEnabled

@@ -100,6 +100,11 @@ If `BUILDKITE_AGENT_TOKEN_SSM_KEY` is set, the token will be read from
 [AWS Systems Manager Parameter Store GetParameter](https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_GetParameter.html)
 which [can also read from AWS Secrets Manager](https://docs.aws.amazon.com/systems-manager/latest/userguide/integration-ps-secretsmanager.html).
 
+`BUILDKITE_AGENT_TOKEN_SSM_KEY` accepts either a parameter path (e.g., `/buildkite/agent-token`) for
+same-account use, or a full SSM parameter ARN (e.g., `arn:aws:ssm:us-east-1:123456789012:parameter/buildkite/shared-token`)
+to read a parameter in a different AWS account. For encrypted (`SecureString`) parameters, pass the
+full KMS key ARN via `BuildkiteAgentTokenParameterStoreKMSKey` so the Lambda can decrypt cross-account.
+
 ```bash
 aws lambda create-function \
   --function-name buildkite-agent-scaler \
