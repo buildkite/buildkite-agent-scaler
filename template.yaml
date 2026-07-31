@@ -179,7 +179,7 @@ Conditions:
         - ""
   ElasticCIModeEnabled:
     !Equals [ !Ref EnableElasticCIMode, "true" ]
-  IsBuildkiteAgentTokenParameterARN:
+  IsAgentTokenARN:
     !Equals [ !Select [ 0, !Split [ ":", !Ref BuildkiteAgentTokenParameter ] ], "arn" ]
   IsKMSKeyARN:
     !Equals [ !Select [ 0, !Split [ ":", !Ref BuildkiteAgentTokenParameterStoreKMSKey ] ], "arn" ]
@@ -260,7 +260,7 @@ Resources:
               - Effect: Allow
                 Action: ssm:GetParameter
                 Resource: !If
-                  - IsBuildkiteAgentTokenParameterARN
+                  - IsAgentTokenARN
                   - !Ref BuildkiteAgentTokenParameter
                   - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${BuildkiteAgentTokenParameter}
         - !If
