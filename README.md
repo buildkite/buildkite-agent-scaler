@@ -113,7 +113,12 @@ places this value directly in the `kms:Decrypt` IAM policy's `Resource` field, a
 key ARN there; an alias ARN in `Resource` grants no permissions. Resolve the alias to its
 underlying key ARN (via `aws kms describe-key --key-id alias/...`) and pass that instead.
 
-Cross-account access also requires configuration in the account that *owns* the parameter and key: attach a resource policy to the SSM parameter granting `ssm:GetParameter` to this Lambda's execution role, and a key policy on the KMS key granting `kms:Decrypt` to the same principal. The IAM permissions on the Lambda side are necessary but not sufficient.
+Cross-account access also requires configuration in the account that *owns* the parameter and key. The IAM permissions on the Lambda side are necessary but not sufficient:
+
+- The parameter must be **Advanced tier** — Standard-tier parameters (the default) cannot be shared cross-account. Create with `--tier Advanced` or upgrade an existing parameter (note: Advanced tier incurs a per-parameter monthly cost).
+- If the parameter is a `SecureString`, it must be encrypted with a **customer-managed KMS key** — the AWS-managed `alias/aws/ssm` key cannot be shared across accounts.
+- Attach a resource policy to the SSM parameter granting `ssm:GetParameter` to this Lambda's execution role.
+- Attach a key policy on the customer-managed KMS key granting `kms:Decrypt` to the same principal.
 
 ```bash
 aws lambda create-function \
