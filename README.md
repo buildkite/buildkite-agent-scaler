@@ -100,6 +100,26 @@ If `BUILDKITE_AGENT_TOKEN_SSM_KEY` is set, the token will be read from
 [AWS Systems Manager Parameter Store GetParameter](https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_GetParameter.html)
 which [can also read from AWS Secrets Manager](https://docs.aws.amazon.com/systems-manager/latest/userguide/integration-ps-secretsmanager.html).
 
+`BUILDKITE_AGENT_TOKEN_SSM_KEY` accepts either a parameter path (e.g., `/buildkite/agent-token`) for
+same-account use, or a full SSM parameter ARN (e.g., `arn:aws:ssm:us-east-1:123456789012:parameter/buildkite/shared-token`)
+to read a parameter in a different AWS account. For encrypted (`SecureString`) parameters, pass the
+full KMS key ARN via `BuildkiteAgentTokenParameterStoreKMSKey` so the Lambda can decrypt cross-account.
+
+`BuildkiteAgentTokenParameterStoreKMSKey` accepts a key ID (e.g., `abcd1234-...`) or a full key ARN
+(e.g., `arn:aws:kms:us-east-1:123456789012:key/abcd1234-...`). KMS aliases are **not** supported in
+either form — neither a bare alias (e.g., `alias/buildkite-token`) nor a full alias ARN
+(e.g., `arn:aws:kms:us-east-1:123456789012:alias/buildkite-token`) will work. The template
+places this value directly in the `kms:Decrypt` IAM policy's `Resource` field, and IAM requires a
+key ARN there; an alias ARN in `Resource` grants no permissions. Resolve the alias to its
+underlying key ARN (via `aws kms describe-key --key-id alias/...`) and pass that instead.
+
+Cross-account access also requires configuration in the account that *owns* the parameter and key. The IAM permissions on the Lambda side are necessary but not sufficient:
+
+- The parameter must be **Advanced tier** — Standard-tier parameters (the default) cannot be shared cross-account. Create with `--tier Advanced` or upgrade an existing parameter (note: Advanced tier incurs a per-parameter monthly cost).
+- If the parameter is a `SecureString`, it must be encrypted with a **customer-managed KMS key** — the AWS-managed `alias/aws/ssm` key cannot be shared across accounts.
+- Attach a resource policy to the SSM parameter granting `ssm:GetParameter` to this Lambda's execution role.
+- Attach a key policy on the customer-managed KMS key granting `kms:Decrypt` to the same principal.
+
 ```bash
 aws lambda create-function \
   --function-name buildkite-agent-scaler \
