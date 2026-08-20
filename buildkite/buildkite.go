@@ -15,19 +15,29 @@ import (
 
 const (
 	PollDurationHeader = "Buildkite-Agent-Metrics-Poll-Duration"
+
+	// defaultAgentTokenSource is used in error messages when the caller
+	// hasn't set AgentTokenSource to describe where the token came from.
+	defaultAgentTokenSource = "configured source"
 )
 
 type Client struct {
 	Endpoint   string
 	AgentToken string
-	UserAgent  string
+	// AgentTokenSource describes where AgentToken was retrieved from, e.g.
+	// "BUILDKITE_AGENT_TOKEN environment variable" or `SSM parameter
+	// "/my/param"`. It's used to give a more actionable error message if
+	// the token is rejected by the Buildkite Agent Metrics API.
+	AgentTokenSource string
+	UserAgent        string
 }
 
 func NewClient(agentToken, agentEndpoint string) *Client {
 	return &Client{
-		Endpoint:   agentEndpoint,
-		UserAgent:  fmt.Sprintf("buildkite-agent-scaler/%s", version.VersionString()),
-		AgentToken: agentToken,
+		Endpoint:         agentEndpoint,
+		UserAgent:        fmt.Sprintf("buildkite-agent-scaler/%s", version.VersionString()),
+		AgentToken:       agentToken,
+		AgentTokenSource: defaultAgentTokenSource,
 	}
 }
 
@@ -115,6 +125,15 @@ func (c *Client) queryMetrics(ctx context.Context, into interface{}, queue strin
 		return time.Duration(0), err
 	}
 	defer res.Body.Close()
+	if res.StatusCode == http.StatusUnauthorized {
+		return time.Duration(0), fmt.Errorf(
+			"couldn't retrieve Buildkite metrics for the `%s` queue: "+
+				"the Buildkite Agent token retrieved from the %s was rejected (%s). "+
+				"Retrieve or generate a new Buildkite Agent token from https://buildkite.com/organizations/-/agents "+
+				"and update the %s with the new value",
+			queue, c.AgentTokenSource, res.Status, c.AgentTokenSource,
+		)
+	}
 	if res.StatusCode != http.StatusOK {
 		return time.Duration(0), fmt.Errorf("%s %s: %s", req.Method, endpoint, res.Status)
 	}

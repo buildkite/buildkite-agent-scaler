@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"math"
 	"os"
@@ -158,12 +159,14 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 	token := os.Getenv("BUILDKITE_AGENT_TOKEN")
 	ssmTokenKey := os.Getenv("BUILDKITE_AGENT_TOKEN_SSM_KEY")
 
+	agentTokenSource := "BUILDKITE_AGENT_TOKEN environment variable"
 	if ssmTokenKey != "" {
 		tk, err := scaler.RetrieveFromParameterStore(cfg, ssmTokenKey)
 		if err != nil {
 			return "", err
 		}
 		token = tk
+		agentTokenSource = fmt.Sprintf("SSM parameter %q (BUILDKITE_AGENT_TOKEN_SSM_KEY)", ssmTokenKey)
 	}
 
 	if token == "" {
@@ -171,6 +174,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 	}
 
 	client := buildkite.NewClient(token, buildkiteAgentEndpoint)
+	client.AgentTokenSource = agentTokenSource
 
 	params := scaler.Params{
 		BuildkiteQueue:       buildkiteQueue,
