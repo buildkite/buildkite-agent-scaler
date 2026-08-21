@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/buildkite/buildkite-agent-scaler/version"
@@ -127,11 +129,11 @@ func (c *Client) queryMetrics(ctx context.Context, into interface{}, queue strin
 	defer res.Body.Close()
 	if res.StatusCode == http.StatusUnauthorized {
 		return time.Duration(0), fmt.Errorf(
-			"couldn't retrieve Buildkite metrics for the `%s` queue: "+
+			"couldn't retrieve Buildkite metrics for the `%s` queue from %s: "+
 				"the Buildkite Agent token retrieved from the %s was rejected (%s). "+
 				"Retrieve or generate a new Buildkite Agent token from https://buildkite.com/organizations/-/agents "+
 				"and update the %s with the new value",
-			queue, c.AgentTokenSource, res.Status, c.AgentTokenSource,
+			queue, endpoint, c.AgentTokenSource, responseErrorDetail(res), c.AgentTokenSource,
 		)
 	}
 	if res.StatusCode != http.StatusOK {
@@ -149,4 +151,27 @@ func (c *Client) queryMetrics(ctx context.Context, into interface{}, queue strin
 	}
 
 	return pollDuration, json.NewDecoder(res.Body).Decode(into)
+}
+
+// responseErrorDetail reads res.Body and folds it into a human-readable
+// status string, e.g. `401 Unauthorized: Eeep! You forgot to pass an agent
+// registration token`. Callers should not read res.Body afterwards.
+func responseErrorDetail(res *http.Response) string {
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		return res.Status
+	}
+
+	var parsed struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(body, &parsed); err == nil && parsed.Message != "" {
+		return fmt.Sprintf("%s: %s", res.Status, parsed.Message)
+	}
+
+	if trimmed := strings.TrimSpace(string(body)); trimmed != "" {
+		return fmt.Sprintf("%s: %s", res.Status, trimmed)
+	}
+
+	return res.Status
 }

@@ -166,7 +166,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 			return "", err
 		}
 		token = tk
-		agentTokenSource = fmt.Sprintf("SSM parameter %q (BUILDKITE_AGENT_TOKEN_SSM_KEY)", ssmTokenKey)
+		agentTokenSource = fmt.Sprintf("SSM parameter %q", ssmTokenKey)
 	}
 
 	if token == "" {
