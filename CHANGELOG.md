@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## [v1.13.0](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.12.0...v1.13.0) (2026-08-25)
+
+### Added
+
+- Support full ARNs for SSM parameter and KMS key (cross-account agent token) [#332](https://github.com/buildkite/buildkite-agent-scaler/pull/332) (@lizrabuya)
+- Expose dangling instance uptime parameter [#343](https://github.com/buildkite/buildkite-agent-scaler/pull/343) (@scadu)
+
+### Dependencies
+
+- chore(deps): update buildkite-plugins to v1.1.4 [#321](https://github.com/buildkite/buildkite-agent-scaler/pull/321) (@renovate[bot])
+- fix(deps): update aws-sdk-go to v1.307.1 [#322](https://github.com/buildkite/buildkite-agent-scaler/pull/322) (@renovate[bot])
+- fix(deps): update aws-sdk-go [#323](https://github.com/buildkite/buildkite-agent-scaler/pull/323) (@renovate[bot])
+- fix(deps): update aws-sdk-go [#324](https://github.com/buildkite/buildkite-agent-scaler/pull/324) (@renovate[bot])
+- chore(deps): update dependency go to v1.26.5 [#325](https://github.com/buildkite/buildkite-agent-scaler/pull/325) (@renovate[bot])
+- fix(deps): update aws-sdk-go [#326](https://github.com/buildkite/buildkite-agent-scaler/pull/326) (@renovate[bot])
+- fix(deps): update aws-sdk-go [#327](https://github.com/buildkite/buildkite-agent-scaler/pull/327) (@renovate[bot])
+- chore(deps): update buildkite plugin docker to v5.14.0 [#328](https://github.com/buildkite/buildkite-agent-scaler/pull/328) (@renovate[bot])
+- chore(deps): update buildkite plugin mise to v1.1.5 [#329](https://github.com/buildkite/buildkite-agent-scaler/pull/329) (@renovate[bot])
+- fix(deps): update aws-sdk-go [#330](https://github.com/buildkite/buildkite-agent-scaler/pull/330) (@renovate[bot])
+- fix(deps): update aws-sdk-go [#333](https://github.com/buildkite/buildkite-agent-scaler/pull/333) (@renovate[bot])
+- fix(deps): update aws-sdk-go [#334](https://github.com/buildkite/buildkite-agent-scaler/pull/334) (@renovate[bot])
+- chore(deps): update dependency go to v1.26.6 [#335](https://github.com/buildkite/buildkite-agent-scaler/pull/335) (@renovate[bot])
+- fix(deps): update aws-sdk-go [#336](https://github.com/buildkite/buildkite-agent-scaler/pull/336) (@renovate[bot])
+- fix(deps): update aws-sdk-go [#338](https://github.com/buildkite/buildkite-agent-scaler/pull/338) (@renovate[bot])
+- chore(deps): update buildkite plugin aws-assume-role-with-web-identity to v1.7.0 [#339](https://github.com/buildkite/buildkite-agent-scaler/pull/339) (@renovate[bot])
+
 ## [v1.12.0](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.11.2...v1.12.0) (2026-06-19)
 
 * Add scheduled scaler invocation jitter [#319](https://github.com/buildkite/buildkite-agent-scaler/pull/319) ([vivster7](https://github.com/vivster7))
