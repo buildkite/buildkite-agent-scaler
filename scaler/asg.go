@@ -255,6 +255,16 @@ func pluginOutput(inv ssmTypes.CommandInvocation) string {
 	return b.String()
 }
 
+// danglingCheckResult counts the conclusive outcomes of one dangling-instance
+// sweep. Instances whose probe failed, was ambiguous, or whose unhealthy mark
+// could not be applied appear in no bucket; the caller derives the skipped
+// count from the total it submitted.
+type danglingCheckResult struct {
+	healthy         int
+	draining        int
+	markedUnhealthy int
+}
+
 // checkAndMarkUnhealthy probes buildkite-agent on each instance via SSM and
 // marks unhealthy any whose agent service is not running, so the ASG
 // terminates and replaces them. Skipping graceful shutdown is safe here: a
@@ -273,20 +283,20 @@ func (a *ASGDriver) checkAndMarkUnhealthy(
 	ssmSvc ssmCheckAPI,
 	asgSvc asgHealthAPI,
 	platform string,
-) (markedUnhealthyCount int, checkedCount int, drainingCount int, firstError error) {
+) (result danglingCheckResult, firstError error) {
 	if len(instances) == 0 {
-		return 0, 0, 0, nil
+		return danglingCheckResult{}, nil
 	}
 
 	onlineIDs, err := filterOnlineSSMInstances(ctx, ssmSvc, instances)
 	if err != nil {
-		return 0, 0, 0, fmt.Errorf("DescribeInstanceInformation failed: %w", err)
+		return danglingCheckResult{}, fmt.Errorf("DescribeInstanceInformation failed: %w", err)
 	}
 	if offline := len(instances) - len(onlineIDs); offline > 0 {
 		log.Printf("[Elastic CI Mode] SSM agent not online for %d of %d instance(s); skipping those", offline, len(instances))
 	}
 	if len(onlineIDs) == 0 {
-		return 0, 0, 0, nil
+		return danglingCheckResult{}, nil
 	}
 
 	documentName := "AWS-RunShellScript"
@@ -306,7 +316,7 @@ func (a *ASGDriver) checkAndMarkUnhealthy(
 			Comment:      aws.String("Check if buildkite-agent service is running"),
 		})
 		if err != nil {
-			return 0, 0, 0, fmt.Errorf("SendCommand failed: %w", err)
+			return danglingCheckResult{}, fmt.Errorf("SendCommand failed: %w", err)
 		}
 		commandIDs = append(commandIDs, *sendOut.Command.CommandId)
 	}
@@ -351,12 +361,9 @@ func (a *ASGDriver) checkAndMarkUnhealthy(
 
 		switch {
 		case output == "RUNNING":
-			checkedCount++
 			healthy = append(healthy, instanceID)
 			continue
 		case output == "DRAINING" || strings.HasPrefix(output, "DRAINING:"):
-			checkedCount++
-			drainingCount++
 			draining = append(draining, instanceID)
 			continue
 		case output == "NOT_RUNNING" || strings.HasPrefix(output, "NOT_RUNNING:"):
@@ -381,8 +388,7 @@ func (a *ASGDriver) checkAndMarkUnhealthy(
 			}
 		} else {
 			log.Printf("[Elastic CI Mode] Marked instance %s as unhealthy", instanceID)
-			checkedCount++
-			markedUnhealthyCount++
+			result.markedUnhealthy++
 		}
 	}
 
@@ -393,7 +399,9 @@ func (a *ASGDriver) checkAndMarkUnhealthy(
 		log.Printf("[Elastic CI Mode] ℹ️ %d instance(s) draining: %v", len(draining), draining)
 	}
 
-	return markedUnhealthyCount, checkedCount, drainingCount, firstError
+	result.healthy = len(healthy)
+	result.draining = len(draining)
+	return result, firstError
 }
 
 func (a *ASGDriver) Describe(ctx context.Context) (AutoscaleGroupDetails, error) {
@@ -639,10 +647,9 @@ func (a *ASGDriver) CleanupDanglingInstances(ctx context.Context, minimumInstanc
 	}
 
 	log.Printf("[Elastic CI Mode] Checking %d %s instance(s) for dangling agents: %v", len(instancesForSSMCheck), platform, instancesForSSMCheck)
-	markedUnhealthy, checked, draining, checkErr := a.checkAndMarkUnhealthy(ctx, instancesForSSMCheck, ssmClient, asgClient, platform)
-	healthy := checked - draining - markedUnhealthy
-	skipped := len(instancesForSSMCheck) - checked
-	log.Printf("[Elastic CI Mode] Dangling instance check complete: %d healthy, %d draining, %d marked unhealthy, %d skipped (of %d instance(s))", healthy, draining, markedUnhealthy, skipped, len(instancesForSSMCheck))
+	result, checkErr := a.checkAndMarkUnhealthy(ctx, instancesForSSMCheck, ssmClient, asgClient, platform)
+	skipped := len(instancesForSSMCheck) - result.healthy - result.draining - result.markedUnhealthy
+	log.Printf("[Elastic CI Mode] Dangling instance check complete: %d healthy, %d draining, %d marked unhealthy, %d skipped (of %d instance(s))", result.healthy, result.draining, result.markedUnhealthy, skipped, len(instancesForSSMCheck))
 
 	return checkErr
 }

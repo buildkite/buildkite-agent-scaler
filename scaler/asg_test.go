@@ -647,14 +647,14 @@ func TestCheckAndMarkUnhealthy(t *testing.T) {
 		}
 		asgStub := &stubASGClient{}
 
-		marked, checked, draining, err := driver.checkAndMarkUnhealthy(ctx,
+		result, err := driver.checkAndMarkUnhealthy(ctx,
 			[]string{"i-dangling", "i-healthy", "i-draining"},
 			ssmStub, asgStub, "linux")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if marked != 1 || checked != 3 || draining != 1 {
-			t.Errorf("marked = %d, checked = %d, draining = %d; want 1, 3, 1", marked, checked, draining)
+		if want := (danglingCheckResult{healthy: 1, draining: 1, markedUnhealthy: 1}); result != want {
+			t.Errorf("result = %+v, want %+v", result, want)
 		}
 		if !slices.Equal(asgStub.markedUnhealthy, []string{"i-dangling"}) {
 			t.Errorf("marked unhealthy = %v, want [i-dangling]", asgStub.markedUnhealthy)
@@ -678,19 +678,19 @@ func TestCheckAndMarkUnhealthy(t *testing.T) {
 		}
 		asgStub := &stubASGClient{}
 
-		marked, checked, draining, err := driver.checkAndMarkUnhealthy(ctx, ids, ssmStub, asgStub, "linux")
+		result, err := driver.checkAndMarkUnhealthy(ctx, ids, ssmStub, asgStub, "linux")
 		if err == nil {
 			t.Fatal("expected an inconclusive-result error")
 		}
-		if marked != 0 || checked != 0 || draining != 0 {
-			t.Errorf("marked = %d, checked = %d, draining = %d; want 0, 0, 0", marked, checked, draining)
+		if result != (danglingCheckResult{}) {
+			t.Errorf("result = %+v, want all zero", result)
 		}
 		if len(asgStub.markedUnhealthy) != 0 {
 			t.Errorf("marked unhealthy = %v, want none", asgStub.markedUnhealthy)
 		}
 	})
 
-	t.Run("does not count a failed unhealthy mark as checked", func(t *testing.T) {
+	t.Run("excludes a failed unhealthy mark from every bucket", func(t *testing.T) {
 		ssmStub := &stubSSMClient{
 			describeOut: online("i-dangling"),
 			listResponses: []stubListResponse{{out: &ssm.ListCommandInvocationsOutput{
@@ -701,12 +701,12 @@ func TestCheckAndMarkUnhealthy(t *testing.T) {
 		}
 		asgStub := &stubASGClient{setHealthErr: errors.New("unavailable")}
 
-		marked, checked, draining, err := driver.checkAndMarkUnhealthy(ctx, []string{"i-dangling"}, ssmStub, asgStub, "linux")
+		result, err := driver.checkAndMarkUnhealthy(ctx, []string{"i-dangling"}, ssmStub, asgStub, "linux")
 		if err == nil {
 			t.Fatal("expected SetInstanceHealth error")
 		}
-		if marked != 0 || checked != 0 || draining != 0 {
-			t.Errorf("marked = %d, checked = %d, draining = %d; want 0, 0, 0", marked, checked, draining)
+		if result != (danglingCheckResult{}) {
+			t.Errorf("result = %+v, want all zero", result)
 		}
 	})
 
@@ -722,7 +722,7 @@ func TestCheckAndMarkUnhealthy(t *testing.T) {
 			listResponses: []stubListResponse{{out: &ssm.ListCommandInvocationsOutput{CommandInvocations: invs}}},
 		}
 
-		_, checked, _, err := driver.checkAndMarkUnhealthy(ctx, ids, ssmStub, &stubASGClient{}, "linux")
+		result, err := driver.checkAndMarkUnhealthy(ctx, ids, ssmStub, &stubASGClient{}, "linux")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -734,8 +734,8 @@ func TestCheckAndMarkUnhealthy(t *testing.T) {
 		if !slices.Equal(gotSizes, []int{50, 1}) {
 			t.Errorf("SendCommand batch sizes = %v, want [50 1]", gotSizes)
 		}
-		if checked != 51 {
-			t.Errorf("checkedCount = %d, want 51", checked)
+		if result.healthy != 51 {
+			t.Errorf("healthy = %d, want 51", result.healthy)
 		}
 	})
 }
