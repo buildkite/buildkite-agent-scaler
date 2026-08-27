@@ -340,6 +340,16 @@ printf 'ActiveState=%s\nMainPID=%s\n' "$ACTIVE_STATE" "$MAIN_PID"
 		{name: "draining", activeState: "active", mainPID: "123", marker: true, want: "DRAINING: ActiveState=active MainPID=123"},
 		{name: "marked but stopped", activeState: "inactive", mainPID: "0", marker: true, want: "NOT_RUNNING: ActiveState=inactive"},
 		{name: "activating", activeState: "activating", mainPID: "0", marker: true, want: "DRAINING: ActiveState=activating MainPID=0"},
+		// A live process in deactivating may still be draining a job, so it
+		// must not be classified NOT_RUNNING while the PID exists.
+		{name: "deactivating without marker", activeState: "deactivating", mainPID: "123", want: "RUNNING"},
+		// The normal graceful scale-in window: marker written, systemd
+		// stopping the unit, agent finishing its last job.
+		{name: "deactivating with marker", activeState: "deactivating", mainPID: "123", marker: true, want: "DRAINING: ActiveState=deactivating MainPID=123"},
+		{name: "failed unit", activeState: "failed", mainPID: "0", want: "NOT_RUNNING: ActiveState=failed"},
+		// Type=simple assumption: active with MainPID=0 means the process is
+		// gone even though systemd still reports the unit active.
+		{name: "active without main PID", activeState: "active", mainPID: "0", want: "NOT_RUNNING: ActiveState=active"},
 		{name: "systemctl failure", systemctlErr: "systemctl unavailable", want: "UNKNOWN: systemctl unavailable"},
 		{name: "malformed PID", activeState: "active", mainPID: "invalid", want: "UNKNOWN: ActiveState=active MainPID=invalid"},
 	}
