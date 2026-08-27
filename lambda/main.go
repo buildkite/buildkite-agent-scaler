@@ -128,7 +128,12 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		defer cancel()
 
 		scalingLastActivityStartTime := time.Now()
-		scaleOutOutput, scaleInOutput, err := asg.GetLastScalingInAndOutActivity(cctx, !disableScaleOut, !disableScaleIn)
+		activityLookback := max(scaleInCooldownPeriod, scaleOutCooldownPeriod)
+		activitySince := time.Time{}
+		if activityLookback > 0 {
+			activitySince = time.Now().Add(-activityLookback)
+		}
+		scaleOutOutput, scaleInOutput, err := asg.GetLastScalingInAndOutActivity(cctx, !disableScaleOut, !disableScaleIn || elasticCIMode, activitySince)
 		if errors.Is(err, context.DeadlineExceeded) {
 			log.Printf("Failed to retrieve last scaling activity events due to %v timeout", asgActivityTimeoutDuration)
 			return
@@ -189,15 +194,17 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 			LastEvent:      lastScaleOut,
 			Disable:        disableScaleOut,
 		},
-		InstanceBuffer:                 instanceBuffer,
-		ScaleOnlyAfterAllEvent:         scaleOnlyAfterAllEvent,
-		PublishCloudWatchMetrics:       publishCloudWatchMetrics,
-		AvailabilityThreshold:          availabilityThreshold,
-		ElasticCIMode:                  elasticCIMode,
-		MinimumInstanceUptime:          minimumInstanceUptime,
-		MaxDanglingInstancesToCheck:    maxDanglingInstancesToCheck,
-		MaxInstanceCap:                 maxInstanceCap,
-		DanglingInstancesCheckInterval: interval,
+		InstanceBuffer:                    instanceBuffer,
+		ScaleOnlyAfterAllEvent:            scaleOnlyAfterAllEvent,
+		PublishCloudWatchMetrics:          publishCloudWatchMetrics,
+		AvailabilityThreshold:             availabilityThreshold,
+		ASGActivityTimeout:                asgActivityTimeoutDuration,
+		MaxDescribeScalingActivitiesPages: maxDescribeScalingActivitiesPages,
+		ElasticCIMode:                     elasticCIMode,
+		MinimumInstanceUptime:             minimumInstanceUptime,
+		MaxDanglingInstancesToCheck:       maxDanglingInstancesToCheck,
+		MaxInstanceCap:                    maxInstanceCap,
+		DanglingInstancesCheckInterval:    interval,
 	}
 
 	scaler, err := scaler.NewScaler(client, cfg, params)

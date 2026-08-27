@@ -25,25 +25,27 @@ type ScaleParams struct {
 }
 
 type Params struct {
-	AutoScalingGroupName           string
-	AgentsPerInstance              int
-	BuildkiteAgentToken            string
-	BuildkiteQueue                 string
-	UserAgent                      string
-	PublishCloudWatchMetrics       bool
-	DryRun                         bool
-	IncludeWaiting                 bool
-	ScaleInParams                  ScaleParams
-	ScaleOutParams                 ScaleParams
-	InstanceBuffer                 int
-	ScaleOnlyAfterAllEvent         bool
-	AvailabilityThreshold          float64       // Threshold for agent availability (default 50%, all modes)
-	ASGActivityCooldown            time.Duration // How long to wait after an ASG activity before scaling again
-	ElasticCIMode                  bool          // Special mode for Elastic CI Stack with additional safety checks
-	MinimumInstanceUptime          time.Duration // How long instance should be online before being eligible for dangling instance check
-	MaxDanglingInstancesToCheck    int           // Maximum number of instances to check for dangling instances (only used for dangling instance scanning, not for normal scale-in)
-	MaxInstanceCap                 int           // Maximum instance count cap (0 means no cap)
-	DanglingInstancesCheckInterval time.Duration // Interval between dangling-instance checks; used to rotate the check window. Defaults to 60s when 0.
+	AutoScalingGroupName              string
+	AgentsPerInstance                 int
+	BuildkiteAgentToken               string
+	BuildkiteQueue                    string
+	UserAgent                         string
+	PublishCloudWatchMetrics          bool
+	DryRun                            bool
+	IncludeWaiting                    bool
+	ScaleInParams                     ScaleParams
+	ScaleOutParams                    ScaleParams
+	InstanceBuffer                    int
+	ScaleOnlyAfterAllEvent            bool
+	AvailabilityThreshold             float64       // Threshold for agent availability (default 50%, all modes)
+	ASGActivityCooldown               time.Duration // How long to wait after an ASG activity before scaling again
+	ASGActivityTimeout                time.Duration // Maximum time to wait when retrieving ASG scaling activities
+	MaxDescribeScalingActivitiesPages int           // Maximum DescribeScalingActivities pages; non-positive means unlimited
+	ElasticCIMode                     bool          // Special mode for Elastic CI Stack with additional safety checks
+	MinimumInstanceUptime             time.Duration // How long instance should be online before being eligible for dangling instance check
+	MaxDanglingInstancesToCheck       int           // Maximum number of instances to check for dangling instances (only used for dangling instance scanning, not for normal scale-in)
+	MaxInstanceCap                    int           // Maximum instance count cap (0 means no cap)
+	DanglingInstancesCheckInterval    time.Duration // Interval between dangling-instance checks; used to rotate the check window. Defaults to 60s when 0.
 }
 
 type Scaler struct {
@@ -105,18 +107,25 @@ func NewScaler(client *buildkite.Client, cfg aws.Config, params Params) (*Scaler
 		return scaler, nil
 	}
 
+	asgActivityTimeout := params.ASGActivityTimeout
+	if asgActivityTimeout <= 0 {
+		asgActivityTimeout = 10 * time.Second
+	}
+
 	danglingInstancesCheckInterval := params.DanglingInstancesCheckInterval
 	if danglingInstancesCheckInterval <= 0 {
 		danglingInstancesCheckInterval = time.Minute
 	}
 
 	scaler.autoscaling = &ASGDriver{
-		Name:                           params.AutoScalingGroupName,
-		Cfg:                            cfg,
-		ElasticCIMode:                  params.ElasticCIMode,
-		MinimumInstanceUptime:          params.MinimumInstanceUptime,
-		MaxDanglingInstancesToCheck:    params.MaxDanglingInstancesToCheck,
-		DanglingInstancesCheckInterval: danglingInstancesCheckInterval,
+		Name:                              params.AutoScalingGroupName,
+		Cfg:                               cfg,
+		MaxDescribeScalingActivitiesPages: params.MaxDescribeScalingActivitiesPages,
+		ElasticCIMode:                     params.ElasticCIMode,
+		MinimumInstanceUptime:             params.MinimumInstanceUptime,
+		MaxDanglingInstancesToCheck:       params.MaxDanglingInstancesToCheck,
+		DanglingInstancesCheckInterval:    danglingInstancesCheckInterval,
+		scalingActivitiesTimeout:          asgActivityTimeout,
 	}
 
 	if params.PublishCloudWatchMetrics {
@@ -317,7 +326,7 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 	}
 
 	// Special Elastic CI Stack mode with additional safety checks
-	if s.elasticCIMode {
+	if s.elasticCIMode && s.scaleInParams.CooldownPeriod > 0 {
 		// Only walk the ASG activity history when this process has no
 		// scale-in on record, e.g. cold-start seeding failed. Once we've sent
 		// a graceful stop ourselves, LastEvent is the better signal: Elastic
@@ -325,21 +334,14 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 		// cause whether we asked them to stop or they idled out on their own,
 		// so the history can't tell our scale-ins apart from idle churn.
 		if driver, ok := s.autoscaling.(*ASGDriver); ok && s.scaleInParams.LastEvent.IsZero() {
-			// In ElasticCIMode, override the page limit to allow unlimited pages
-			if driver.MaxDescribeScalingActivitiesPages >= 0 {
-				// Override to allow unlimited pages (-1) for full activity history in ElasticCIMode
-				log.Printf("ℹ️ [Elastic CI Mode] Setting MAX_DESCRIBE_SCALING_ACTIVITIES_PAGES from %d to -1 (unlimited) for better safety checks",
-					driver.MaxDescribeScalingActivitiesPages)
-				driver.MaxDescribeScalingActivitiesPages = -1
-			}
-
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(ctx, driver.scalingActivitiesTimeout)
 			defer cancel()
 
-			// Get the last scale-in activity from ASG history
-			_, lastScaleInActivity, err := driver.GetLastScalingInAndOutActivity(ctx, false, true)
+			// Get the last scale-in activity within the configured cooldown period.
+			activitySince := time.Now().Add(-s.scaleInParams.CooldownPeriod)
+			_, lastScaleInActivity, err := driver.GetLastScalingInAndOutActivity(ctx, false, true, activitySince)
 			if err != nil {
-				log.Printf("⚠️ [Elastic CI Mode] Could not check last ASG scale-in activity: %v", err)
+				return fmt.Errorf("check last ASG scale-in activity: %w", err)
 			} else if lastScaleInActivity != nil && lastScaleInActivity.StartTime != nil {
 				// Check how recently the ASG scaled down
 				lastScaleInTime := *lastScaleInActivity.StartTime

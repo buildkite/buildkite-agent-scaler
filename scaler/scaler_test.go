@@ -9,10 +9,32 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/autoscaling"
+	"github.com/aws/aws-sdk-go-v2/service/autoscaling/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2Types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/buildkite/buildkite-agent-scaler/buildkite"
 )
+
+func TestNewScalerConfiguresScalingActivityLookup(t *testing.T) {
+	s, err := NewScaler(nil, aws.Config{}, Params{
+		ASGActivityTimeout:                3 * time.Second,
+		MaxDescribeScalingActivitiesPages: 7,
+	})
+	if err != nil {
+		t.Fatalf("NewScaler() error = %v", err)
+	}
+	driver, ok := s.autoscaling.(*ASGDriver)
+	if !ok {
+		t.Fatalf("autoscaling driver type = %T, want *ASGDriver", s.autoscaling)
+	}
+	if got := driver.scalingActivitiesTimeout; got != 3*time.Second {
+		t.Errorf("scaling activities timeout = %s, want %s", got, 3*time.Second)
+	}
+	if got := driver.MaxDescribeScalingActivitiesPages; got != 7 {
+		t.Errorf("maximum scaling activity pages = %d, want 7", got)
+	}
+}
 
 func TestScalingOutWithoutError(t *testing.T) {
 	for _, tc := range []struct {
@@ -827,6 +849,89 @@ func TestScalerRunWaitsToScaleInWhileInstancesArePending(t *testing.T) {
 	}
 	if asg.desiredCapacity != 5 {
 		t.Errorf("desired capacity = %d, want 5", asg.desiredCapacity)
+	}
+}
+
+func TestScaleInFailsClosedWhenActivityLookupFails(t *testing.T) {
+	wantErr := errors.New("describe activities")
+	client := &stubScalingActivitiesClient{
+		responses: []stubScalingActivitiesResponse{{err: wantErr}},
+	}
+	driver := &ASGDriver{
+		Name:                              "agents",
+		MaxDescribeScalingActivitiesPages: -1,
+		scalingActivitiesSvc:              client,
+		scalingActivitiesTimeout:          time.Second,
+	}
+	s := Scaler{
+		autoscaling:   driver,
+		elasticCIMode: true,
+		scaleInParams: ScaleParams{
+			CooldownPeriod: time.Hour,
+		},
+	}
+
+	err := s.scaleIn(t.Context(), 1, AutoscaleGroupDetails{DesiredCount: 2})
+	if !errors.Is(err, wantErr) {
+		t.Errorf("scaleIn() error = %v, want %v", err, wantErr)
+	}
+}
+
+func TestScaleInActivityLookupUsesCallerContext(t *testing.T) {
+	client := &stubScalingActivitiesClient{
+		describe: func(ctx context.Context, _ *autoscaling.DescribeScalingActivitiesInput) (*autoscaling.DescribeScalingActivitiesOutput, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	}
+	driver := &ASGDriver{
+		MaxDescribeScalingActivitiesPages: -1,
+		scalingActivitiesSvc:              client,
+		scalingActivitiesTimeout:          time.Hour,
+	}
+	s := Scaler{
+		autoscaling:   driver,
+		elasticCIMode: true,
+		scaleInParams: ScaleParams{
+			CooldownPeriod: time.Hour,
+		},
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	err := s.scaleIn(ctx, 1, AutoscaleGroupDetails{DesiredCount: 2})
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("scaleIn() error = %v, want %v", err, context.Canceled)
+	}
+}
+
+func TestScaleInHonorsRecoveredActivity(t *testing.T) {
+	client := &stubScalingActivitiesClient{
+		responses: []stubScalingActivitiesResponse{{
+			output: &autoscaling.DescribeScalingActivitiesOutput{
+				Activities: []types.Activity{{
+					Cause:      aws.String("At 2026-08-26T16:14:36Z instance i-017bacd33066f0408 was taken out of service in response to a user request, shrinking the capacity from 2 to 1."),
+					StartTime:  aws.Time(time.Now().Add(-time.Minute)),
+					StatusCode: types.ScalingActivityStatusCodeSuccessful,
+				}},
+			},
+		}},
+	}
+	driver := &ASGDriver{
+		MaxDescribeScalingActivitiesPages: -1,
+		scalingActivitiesSvc:              client,
+		scalingActivitiesTimeout:          time.Second,
+	}
+	s := Scaler{
+		autoscaling:   driver,
+		elasticCIMode: true,
+		scaleInParams: ScaleParams{
+			CooldownPeriod: time.Hour,
+		},
+	}
+
+	if err := s.scaleIn(t.Context(), 1, AutoscaleGroupDetails{DesiredCount: 2}); err != nil {
+		t.Fatalf("scaleIn() error = %v", err)
 	}
 }
 
