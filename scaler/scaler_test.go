@@ -449,13 +449,14 @@ func (d *buildkiteTestDriver) GetAgentMetrics(ctx context.Context) (buildkite.Ag
 }
 
 type asgTestDriver struct {
-	err                    error
-	desiredCapacity        int64
-	actualCapacity         int64 // If 0, will default to desiredCapacity
-	maxSize                int64 // If 0, defaults to 100
-	sigTermsSent           []string
-	elasticCIMode          bool
-	danglingInstancesFound int
+	err                     error
+	desiredCapacity         int64
+	actualCapacity          int64 // If 0, will default to desiredCapacity
+	maxSize                 int64 // If 0, defaults to 100
+	sigTermsSent            []string
+	setDesiredCapacityCalls int
+	elasticCIMode           bool
+	danglingInstancesFound  int
 }
 
 func (d *asgTestDriver) Describe(ctx context.Context) (AutoscaleGroupDetails, error) {
@@ -485,6 +486,7 @@ func (d *asgTestDriver) Describe(ctx context.Context) (AutoscaleGroupDetails, er
 }
 
 func (d *asgTestDriver) SetDesiredCapacity(ctx context.Context, count int64) error {
+	d.setDesiredCapacityCalls++
 	d.desiredCapacity = count
 	return d.err
 }
@@ -500,6 +502,82 @@ func (d *asgTestDriver) SendSIGTERMToAgents(ctx context.Context, instanceID stri
 func (d *asgTestDriver) CleanupDanglingInstances(ctx context.Context, minimumInstanceUptime time.Duration, maxDanglingInstancesToCheck int) error {
 	d.danglingInstancesFound++
 	return d.err
+}
+
+// TestScaleInWhileASGConverging pins the early return in Run that suppresses
+// repeated scaling while the ASG is still converging on a previously set
+// desired capacity. It must fire only when the computed desired count equals
+// the ASG's desired count, and must never swallow a real scale-in.
+func TestScaleInWhileASGConverging(t *testing.T) {
+	testCases := []struct {
+		name                     string
+		asgDesired               int64
+		asgActual                int64
+		expectedDesiredCapacity  int64
+		expectedSetCapacityCalls int
+	}{
+		// The ASG was already told to shrink to 3 and 5 instances are still
+		// running: the scaler must wait, not issue another scale-in.
+		{
+			name:                     "no scale-in while converging down",
+			asgDesired:               3,
+			asgActual:                5,
+			expectedDesiredCapacity:  3,
+			expectedSetCapacityCalls: 0,
+		},
+		// Converging up: desired already 3, only 2 running yet. If the
+		// converging guard ever moves below the desired > instanceCount
+		// branch, this case would fall through to scaleIn.
+		{
+			name:                     "no scale-in while converging up",
+			asgDesired:               3,
+			asgActual:                2,
+			expectedDesiredCapacity:  3,
+			expectedSetCapacityCalls: 0,
+		},
+		// The ASG desired count is above the computed desired count, so a
+		// real scale-in must still fire despite actual == computed desired.
+		{
+			name:                     "scale-in fires when ASG desired exceeds computed desired",
+			asgDesired:               5,
+			asgActual:                3,
+			expectedDesiredCapacity:  3,
+			expectedSetCapacityCalls: 1,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			asg := &asgTestDriver{
+				desiredCapacity: tc.asgDesired,
+				actualCapacity:  tc.asgActual,
+			}
+			s := Scaler{
+				autoscaling: asg,
+				// ScheduledJobs 3 with one agent per instance computes a
+				// desired count of 3 in every case.
+				bk: &buildkiteTestDriver{metrics: buildkite.AgentMetrics{
+					ScheduledJobs: 3,
+				}},
+				scaling: ScalingCalculator{agentsPerInstance: 1},
+			}
+
+			if _, err := s.Run(context.Background()); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if asg.setDesiredCapacityCalls != tc.expectedSetCapacityCalls {
+				t.Errorf("SetDesiredCapacity calls = %d, want %d",
+					asg.setDesiredCapacityCalls, tc.expectedSetCapacityCalls)
+			}
+			if asg.desiredCapacity != tc.expectedDesiredCapacity {
+				t.Errorf("desired capacity = %d, want %d",
+					asg.desiredCapacity, tc.expectedDesiredCapacity)
+			}
+			if len(asg.sigTermsSent) != 0 {
+				t.Errorf("SIGTERMs sent to %v, want none", asg.sigTermsSent)
+			}
+		})
+	}
 }
 
 func TestAvailabilityBasedScaling(t *testing.T) {

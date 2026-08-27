@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -271,11 +274,11 @@ func TestGetCheckCommand(t *testing.T) {
 				"ActiveState",
 				"RUNNING",
 				"NOT_RUNNING",
-				"MARKER_EXISTS",
 			},
 			expectedNotContains: []string{
 				"PowerShell",
 				"Get-Service",
+				"MARKER_EXISTS",
 			},
 		},
 		{
@@ -308,6 +311,72 @@ func TestGetCheckCommand(t *testing.T) {
 				if strings.Contains(cmd, notExpected) {
 					t.Errorf("expected command NOT to contain %q, but it did.\nCommand: %s", notExpected, cmd)
 				}
+			}
+		})
+	}
+}
+
+func TestLinuxCheckCommand(t *testing.T) {
+	binDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(binDir, "systemctl"), []byte(`#!/bin/sh
+if [ -n "$SYSTEMCTL_ERROR" ]; then
+  echo "$SYSTEMCTL_ERROR"
+  exit 1
+fi
+printf 'ActiveState=%s\nMainPID=%s\n' "$ACTIVE_STATE" "$MAIN_PID"
+`), 0o755); err != nil {
+		t.Fatalf("write systemctl stub: %v", err)
+	}
+
+	tests := []struct {
+		name         string
+		activeState  string
+		mainPID      string
+		marker       bool
+		systemctlErr string
+		want         string
+	}{
+		{name: "running", activeState: "active", mainPID: "123", want: "RUNNING"},
+		{name: "draining", activeState: "active", mainPID: "123", marker: true, want: "DRAINING: ActiveState=active MainPID=123"},
+		{name: "marked but stopped", activeState: "inactive", mainPID: "0", marker: true, want: "NOT_RUNNING: ActiveState=inactive"},
+		{name: "activating", activeState: "activating", mainPID: "0", marker: true, want: "DRAINING: ActiveState=activating MainPID=0"},
+		// A live process in deactivating may still be draining a job, so it
+		// must not be classified NOT_RUNNING while the PID exists.
+		{name: "deactivating without marker", activeState: "deactivating", mainPID: "123", want: "RUNNING"},
+		// The normal graceful scale-in window: marker written, systemd
+		// stopping the unit, agent finishing its last job.
+		{name: "deactivating with marker", activeState: "deactivating", mainPID: "123", marker: true, want: "DRAINING: ActiveState=deactivating MainPID=123"},
+		{name: "failed unit", activeState: "failed", mainPID: "0", want: "NOT_RUNNING: ActiveState=failed"},
+		// Type=simple assumption: active with MainPID=0 means the process is
+		// gone even though systemd still reports the unit active.
+		{name: "active without main PID", activeState: "active", mainPID: "0", want: "NOT_RUNNING: ActiveState=active"},
+		{name: "systemctl failure", systemctlErr: "systemctl unavailable", want: "UNKNOWN: systemctl unavailable"},
+		{name: "malformed PID", activeState: "active", mainPID: "invalid", want: "UNKNOWN: ActiveState=active MainPID=invalid"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			marker := filepath.Join(t.TempDir(), "termination-marker")
+			if tc.marker {
+				if err := os.WriteFile(marker, nil, 0o600); err != nil {
+					t.Fatalf("write termination marker: %v", err)
+				}
+			}
+
+			script := strings.ReplaceAll((&ASGDriver{}).getCheckCommand("linux"), terminationMarkerPath, marker)
+			cmd := exec.Command("bash", "-c", script)
+			cmd.Env = append(os.Environ(),
+				"PATH="+binDir+":"+os.Getenv("PATH"),
+				"ACTIVE_STATE="+tc.activeState,
+				"MAIN_PID="+tc.mainPID,
+				"SYSTEMCTL_ERROR="+tc.systemctlErr,
+			)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("run check command: %v\n%s", err, out)
+			}
+			if got := strings.TrimSpace(string(out)); got != tc.want {
+				t.Errorf("output = %q, want %q", got, tc.want)
 			}
 		})
 	}
@@ -575,40 +644,79 @@ func TestCheckAndMarkUnhealthy(t *testing.T) {
 		}
 	}
 
-	t.Run("marks dangling instances and skips healthy or already-marked", func(t *testing.T) {
+	t.Run("classifies conclusive results", func(t *testing.T) {
 		ssmStub := &stubSSMClient{
-			describeOut: online("i-dangling", "i-healthy", "i-failed", "i-marked"),
+			describeOut: online("i-dangling", "i-healthy", "i-draining"),
 			listResponses: []stubListResponse{{out: &ssm.ListCommandInvocationsOutput{
 				CommandInvocations: []ssmTypes.CommandInvocation{
 					invOut("i-dangling", ssmTypes.CommandInvocationStatusSuccess, "NOT_RUNNING: dead"),
 					invOut("i-healthy", ssmTypes.CommandInvocationStatusSuccess, "RUNNING"),
-					invOut("i-failed", ssmTypes.CommandInvocationStatusFailed, ""),
-					invOut("i-marked", ssmTypes.CommandInvocationStatusSuccess, "MARKER_EXISTS: already marked"),
+					invOut("i-draining", ssmTypes.CommandInvocationStatusSuccess, "DRAINING: ActiveState=active MainPID=123"),
 				},
 			}}},
 		}
 		asgStub := &stubASGClient{}
 
-		// i-offline is not in the describe output, so it should be filtered out.
-		marked, checked, err := driver.checkAndMarkUnhealthy(ctx,
-			[]string{"i-dangling", "i-healthy", "i-failed", "i-marked", "i-offline"},
+		result, err := driver.checkAndMarkUnhealthy(ctx,
+			[]string{"i-dangling", "i-healthy", "i-draining"},
 			ssmStub, asgStub, "linux")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if checked != 4 {
-			t.Errorf("checkedCount = %d, want 4", checked)
+		if want := (danglingCheckResult{healthy: 1, draining: 1, markedUnhealthy: 1}); result != want {
+			t.Errorf("result = %+v, want %+v", result, want)
 		}
-		if marked != 2 {
-			t.Errorf("markedUnhealthyCount = %d, want 2", marked)
+		if !slices.Equal(asgStub.markedUnhealthy, []string{"i-dangling"}) {
+			t.Errorf("marked unhealthy = %v, want [i-dangling]", asgStub.markedUnhealthy)
 		}
-		got := slices.Clone(asgStub.markedUnhealthy)
-		sort.Strings(got)
-		if !slices.Equal(got, []string{"i-dangling", "i-failed"}) {
-			t.Errorf("marked unhealthy = %v, want [i-dangling i-failed]", got)
+	})
+
+	t.Run("treats failed or ambiguous results as inconclusive", func(t *testing.T) {
+		ids := []string{"i-failed", "i-timed-out", "i-future-status", "i-empty", "i-ambiguous", "i-unknown"}
+		ssmStub := &stubSSMClient{
+			describeOut: online(ids...),
+			listResponses: []stubListResponse{{out: &ssm.ListCommandInvocationsOutput{
+				CommandInvocations: []ssmTypes.CommandInvocation{
+					invOut("i-failed", ssmTypes.CommandInvocationStatusFailed, "NOT_RUNNING: dead"),
+					invOut("i-timed-out", ssmTypes.CommandInvocationStatusTimedOut, ""),
+					invOut("i-future-status", ssmTypes.CommandInvocationStatus("FutureStatus"), ""),
+					invOut("i-empty", ssmTypes.CommandInvocationStatusSuccess, ""),
+					invOut("i-ambiguous", ssmTypes.CommandInvocationStatusSuccess, "RUNNING: maybe"),
+					invOut("i-unknown", ssmTypes.CommandInvocationStatusSuccess, "UNKNOWN: systemctl failed"),
+				},
+			}}},
 		}
-		if len(ssmStub.sendBatches) != 1 || len(ssmStub.sendBatches[0]) != 4 {
-			t.Errorf("expected one SendCommand of 4 instances, got %v", ssmStub.sendBatches)
+		asgStub := &stubASGClient{}
+
+		result, err := driver.checkAndMarkUnhealthy(ctx, ids, ssmStub, asgStub, "linux")
+		if err == nil {
+			t.Fatal("expected an inconclusive-result error")
+		}
+		if result != (danglingCheckResult{}) {
+			t.Errorf("result = %+v, want all zero", result)
+		}
+		if len(asgStub.markedUnhealthy) != 0 {
+			t.Errorf("marked unhealthy = %v, want none", asgStub.markedUnhealthy)
+		}
+	})
+
+	t.Run("excludes a failed unhealthy mark from every bucket", func(t *testing.T) {
+		ssmStub := &stubSSMClient{
+			describeOut: online("i-dangling"),
+			listResponses: []stubListResponse{{out: &ssm.ListCommandInvocationsOutput{
+				CommandInvocations: []ssmTypes.CommandInvocation{
+					invOut("i-dangling", ssmTypes.CommandInvocationStatusSuccess, "NOT_RUNNING: dead"),
+				},
+			}}},
+		}
+		asgStub := &stubASGClient{setHealthErr: errors.New("unavailable")}
+
+		result, err := driver.checkAndMarkUnhealthy(ctx, []string{"i-dangling"}, ssmStub, asgStub, "linux")
+		if err == nil {
+			t.Fatal("expected SetInstanceHealth error")
+		}
+		if result != (danglingCheckResult{}) {
+			t.Errorf("result = %+v, want all zero", result)
 		}
 	})
 
@@ -624,7 +732,7 @@ func TestCheckAndMarkUnhealthy(t *testing.T) {
 			listResponses: []stubListResponse{{out: &ssm.ListCommandInvocationsOutput{CommandInvocations: invs}}},
 		}
 
-		_, checked, err := driver.checkAndMarkUnhealthy(ctx, ids, ssmStub, &stubASGClient{}, "linux")
+		result, err := driver.checkAndMarkUnhealthy(ctx, ids, ssmStub, &stubASGClient{}, "linux")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -636,8 +744,8 @@ func TestCheckAndMarkUnhealthy(t *testing.T) {
 		if !slices.Equal(gotSizes, []int{50, 1}) {
 			t.Errorf("SendCommand batch sizes = %v, want [50 1]", gotSizes)
 		}
-		if checked != 51 {
-			t.Errorf("checkedCount = %d, want 51", checked)
+		if result.healthy != 51 {
+			t.Errorf("healthy = %d, want 51", result.healthy)
 		}
 	})
 }

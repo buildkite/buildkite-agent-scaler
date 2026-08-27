@@ -240,6 +240,10 @@ func (s *Scaler) Run(ctx context.Context) (time.Duration, error) {
 	if instanceCount == 0 {
 		instanceCount = asg.DesiredCount
 	}
+	if asg.DesiredCount == desired && instanceCount != desired {
+		log.Printf("ASG is converging to desired capacity %d (currently %d running instances)", desired, instanceCount)
+		return metrics.PollDuration, nil
+	}
 
 	if desired > instanceCount {
 		log.Printf("Scaling decision: calculated desired %d instances. ASG current desired: %d, ASG actual running: %d (approx %d agents), Buildkite scheduled: %d, running: %d, waiting: %d",
@@ -248,24 +252,9 @@ func (s *Scaler) Run(ctx context.Context) (time.Duration, error) {
 		if desired > asg.DesiredCount {
 			log.Printf(" Action: Scale out from %d to %d", asg.DesiredCount, desired)
 			return metrics.PollDuration, s.scaleOut(ctx, desired, asg)
-		} else if desired < asg.DesiredCount {
-			log.Printf(" Action: Scale in from %d to %d", asg.DesiredCount, desired)
-			return metrics.PollDuration, s.scaleIn(ctx, desired, asg)
-		} else {
-			log.Printf(" Action: No change needed. Desired capacity %d matches ASG desired %d.", desired, asg.DesiredCount)
 		}
-
-		// The following block handles a scenario where desired == asg.DesiredCount, but instanceCount might be different
-		// (e.g. instances still launching or terminating).
-		// If instanceCount > desired (and desired == asg.DesiredCount), it implies instances might be terminating slowly or stuck.
-		// If instanceCount < desired (and desired == asg.DesiredCount), it implies instances might be launching slowly.
-		// In these cases, no direct scaling action is taken here as the ASG is already set to the correct desired count.
-		if instanceCount > desired && asg.DesiredCount == desired {
-			log.Printf("INFO: Instance count (%d) > desired (%d), but ASG desired count (%d) already matches. ASG may be converging.", instanceCount, desired, asg.DesiredCount)
-		} else if instanceCount < desired && asg.DesiredCount == desired {
-			log.Printf("INFO: Instance count (%d) < desired (%d), but ASG desired count (%d) already matches. ASG may be converging.", instanceCount, desired, asg.DesiredCount)
-		}
-		return metrics.PollDuration, nil
+		log.Printf(" Action: Scale in from %d to %d", asg.DesiredCount, desired)
+		return metrics.PollDuration, s.scaleIn(ctx, desired, asg)
 	}
 
 	if asg.DesiredCount > desired {
@@ -362,14 +351,14 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 
 				// Check if we're in cooldown period based on the last ASG scale-in activity
 				if s.scaleInParams.CooldownPeriod > 0 && timeSinceLastScaleIn < s.scaleInParams.CooldownPeriod {
-					log.Printf("⏲ [Elastic CI Mode] Last ASG scale-in was %s ago, in cooldown period for %s more (cooldown: %s)",
+					log.Printf("⏲ [Elastic CI Mode] Last successful ASG scale-in was %s ago, in cooldown period for %s more (cooldown: %s)",
 						timeSinceLastScaleIn.Round(time.Second),
 						(s.scaleInParams.CooldownPeriod - timeSinceLastScaleIn).Round(time.Second),
 						s.scaleInParams.CooldownPeriod)
 					return nil
 				}
 
-				log.Printf("[Elastic CI Mode] Last ASG scale-in was %s ago", timeSinceLastScaleIn.Round(time.Second))
+				log.Printf("[Elastic CI Mode] Last successful ASG scale-in was %s ago", timeSinceLastScaleIn.Round(time.Second))
 			}
 		}
 	}

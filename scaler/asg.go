@@ -100,6 +100,11 @@ func (a *ASGDriver) getASGPlatform(ctx context.Context, instances []ec2Types.Ins
 	return "linux"
 }
 
+// terminationMarkerPath is created by the graceful-stop script sent from
+// SendSIGTERMToAgents and probed by the dangling-instance check script, so
+// both sides of the drain handshake must agree on it.
+const terminationMarkerPath = "/tmp/buildkite-agent-termination-marker"
+
 // getCheckCommand returns the appropriate check command for the platform
 func (a *ASGDriver) getCheckCommand(platform string) string {
 	if platform == "windows" {
@@ -116,16 +121,29 @@ if ($AgentStatus -match "SERVICE_RUNNING") {
 	// Default to Linux
 	return `#!/bin/bash
 # Linux check command
-if [ -f /tmp/buildkite-agent-termination-marker ]; then
-  echo "MARKER_EXISTS: Instance is already marked for termination"
+if ! SERVICE_STATE=$(systemctl show buildkite-agent --property=ActiveState --property=MainPID 2>&1); then
+  echo "UNKNOWN: $SERVICE_STATE"
   exit 0
 fi
 
-ACTIVE_STATE=$(systemctl show buildkite-agent -p ActiveState | cut -d= -f2)
-case "$ACTIVE_STATE" in
-  "active"|"activating") echo "RUNNING" ;;
-  *) echo "NOT_RUNNING: $ACTIVE_STATE" ;;
+ACTIVE_STATE=$(printf '%s\n' "$SERVICE_STATE" | sed -n 's/^ActiveState=//p')
+MAIN_PID=$(printf '%s\n' "$SERVICE_STATE" | sed -n 's/^MainPID=//p')
+case "$ACTIVE_STATE:$MAIN_PID" in
+  :*|*:|*:*[!0-9]*)
+    echo "UNKNOWN: ActiveState=$ACTIVE_STATE MainPID=$MAIN_PID"
+    exit 0
+    ;;
 esac
+
+if [ "$MAIN_PID" != "0" ] || [ "$ACTIVE_STATE" = "activating" ]; then
+  if [ -f ` + terminationMarkerPath + ` ]; then
+    echo "DRAINING: ActiveState=$ACTIVE_STATE MainPID=$MAIN_PID"
+  else
+    echo "RUNNING"
+  fi
+else
+  echo "NOT_RUNNING: ActiveState=$ACTIVE_STATE"
+fi
 `
 }
 
@@ -237,6 +255,16 @@ func pluginOutput(inv ssmTypes.CommandInvocation) string {
 	return b.String()
 }
 
+// danglingCheckResult counts the conclusive outcomes of one dangling-instance
+// sweep. Instances whose probe failed, was ambiguous, or whose unhealthy mark
+// could not be applied appear in no bucket; the caller derives the skipped
+// count from the total it submitted.
+type danglingCheckResult struct {
+	healthy         int
+	draining        int
+	markedUnhealthy int
+}
+
 // checkAndMarkUnhealthy probes buildkite-agent on each instance via SSM and
 // marks unhealthy any whose agent service is not running, so the ASG
 // terminates and replaces them. Skipping graceful shutdown is safe here: a
@@ -255,20 +283,20 @@ func (a *ASGDriver) checkAndMarkUnhealthy(
 	ssmSvc ssmCheckAPI,
 	asgSvc asgHealthAPI,
 	platform string,
-) (markedUnhealthyCount int, checkedCount int, firstError error) {
+) (result danglingCheckResult, firstError error) {
 	if len(instances) == 0 {
-		return 0, 0, nil
+		return danglingCheckResult{}, nil
 	}
 
 	onlineIDs, err := filterOnlineSSMInstances(ctx, ssmSvc, instances)
 	if err != nil {
-		return 0, 0, fmt.Errorf("DescribeInstanceInformation failed: %w", err)
+		return danglingCheckResult{}, fmt.Errorf("DescribeInstanceInformation failed: %w", err)
 	}
 	if offline := len(instances) - len(onlineIDs); offline > 0 {
 		log.Printf("[Elastic CI Mode] SSM agent not online for %d of %d instance(s); skipping those", offline, len(instances))
 	}
 	if len(onlineIDs) == 0 {
-		return 0, 0, nil
+		return danglingCheckResult{}, nil
 	}
 
 	documentName := "AWS-RunShellScript"
@@ -288,7 +316,7 @@ func (a *ASGDriver) checkAndMarkUnhealthy(
 			Comment:      aws.String("Check if buildkite-agent service is running"),
 		})
 		if err != nil {
-			return 0, 0, fmt.Errorf("SendCommand failed: %w", err)
+			return danglingCheckResult{}, fmt.Errorf("SendCommand failed: %w", err)
 		}
 		commandIDs = append(commandIDs, *sendOut.Command.CommandId)
 	}
@@ -307,10 +335,10 @@ func (a *ASGDriver) checkAndMarkUnhealthy(
 		firstError = fmt.Errorf("ListCommandInvocations failed: %w", pollErr)
 	}
 
-	// Healthy and already-marked instances are the common, non-actionable
+	// Healthy and draining instances are the common, non-actionable
 	// cases; collect them and log one summary line each instead of one line
 	// per instance.
-	var healthy, alreadyMarked []string
+	var healthy, draining []string
 
 	for _, instanceID := range onlineIDs {
 		inv, ok := results[instanceID]
@@ -321,34 +349,30 @@ func (a *ASGDriver) checkAndMarkUnhealthy(
 			}
 			continue
 		}
-		switch inv.Status {
-		case ssmTypes.CommandInvocationStatusPending,
-			ssmTypes.CommandInvocationStatusInProgress,
-			ssmTypes.CommandInvocationStatusDelayed,
-			ssmTypes.CommandInvocationStatusCancelling:
-			log.Printf("[Elastic CI Mode] Invocation for %s did not terminate (status: %s); skipping", instanceID, inv.Status)
+
+		output := strings.TrimSpace(pluginOutput(inv))
+		if inv.Status != ssmTypes.CommandInvocationStatusSuccess {
+			log.Printf("[Elastic CI Mode] Invocation for %s was inconclusive (status: %s, details: %s, output: %q); skipping", instanceID, inv.Status, aws.ToString(inv.StatusDetails), output)
 			if firstError == nil {
-				firstError = fmt.Errorf("invocation for %s did not terminate (status: %s)", instanceID, inv.Status)
+				firstError = fmt.Errorf("invocation for %s was inconclusive (status: %s, details: %s)", instanceID, inv.Status, aws.ToString(inv.StatusDetails))
 			}
 			continue
 		}
 
-		checkedCount++
-		output := pluginOutput(inv)
-
-		// Agent service isn't running (script printed NOT_RUNNING) or the
-		// command itself failed (e.g. script error / unsupported platform).
-		isDangling := inv.Status == ssmTypes.CommandInvocationStatusFailed ||
-			(inv.Status == ssmTypes.CommandInvocationStatusSuccess && strings.Contains(output, "NOT_RUNNING"))
-
-		if !isDangling {
-			// A marker means a previous run already flagged this instance for
-			// termination; the script exits before checking the agent, so we
-			// can't claim it's running.
-			if strings.Contains(output, "MARKER_EXISTS") {
-				alreadyMarked = append(alreadyMarked, instanceID)
-			} else {
-				healthy = append(healthy, instanceID)
+		switch {
+		case output == "RUNNING":
+			healthy = append(healthy, instanceID)
+			continue
+		case output == "DRAINING" || strings.HasPrefix(output, "DRAINING:"):
+			draining = append(draining, instanceID)
+			continue
+		case output == "NOT_RUNNING" || strings.HasPrefix(output, "NOT_RUNNING:"):
+			// A successful probe found no agent process, so there are no jobs
+			// to drain before the ASG replaces this instance.
+		default:
+			log.Printf("[Elastic CI Mode] Invocation for %s returned inconclusive output %q; skipping", instanceID, output)
+			if firstError == nil {
+				firstError = fmt.Errorf("invocation for %s returned inconclusive output %q", instanceID, output)
 			}
 			continue
 		}
@@ -364,18 +388,20 @@ func (a *ASGDriver) checkAndMarkUnhealthy(
 			}
 		} else {
 			log.Printf("[Elastic CI Mode] Marked instance %s as unhealthy", instanceID)
-			markedUnhealthyCount++
+			result.markedUnhealthy++
 		}
 	}
 
 	if len(healthy) > 0 {
 		log.Printf("[Elastic CI Mode] %d instance(s) healthy: %v", len(healthy), healthy)
 	}
-	if len(alreadyMarked) > 0 {
-		log.Printf("[Elastic CI Mode] ℹ️ %d instance(s) already marked for termination, skipping: %v", len(alreadyMarked), alreadyMarked)
+	if len(draining) > 0 {
+		log.Printf("[Elastic CI Mode] ℹ️ %d instance(s) draining: %v", len(draining), draining)
 	}
 
-	return markedUnhealthyCount, checkedCount, firstError
+	result.healthy = len(healthy)
+	result.draining = len(draining)
+	return result, firstError
 }
 
 func (a *ASGDriver) Describe(ctx context.Context) (AutoscaleGroupDetails, error) {
@@ -534,11 +560,11 @@ func (a *ASGDriver) SendSIGTERMToAgents(ctx context.Context, instanceID string) 
 	// With consecutive Lambda invocations the same instance selected for scale-in,
 	// only during the first invocation will actually signal the agent to finish current jobs and stop.
 	command := `#!/bin/bash
-if [ -f /tmp/buildkite-agent-termination-marker ]; then
+if [ -f ` + terminationMarkerPath + ` ]; then
   echo "Already marked for termination, skipping"
   exit 0
 fi
-echo "Termination requested at $(date)" > /tmp/buildkite-agent-termination-marker
+echo "Termination requested at $(date)" > ` + terminationMarkerPath + `
 sudo systemctl stop buildkite-agent.service || sudo /opt/buildkite-agent/bin/buildkite-agent stop --signal SIGTERM
 `
 	log.Printf("[Elastic CI Mode] Sending SIGTERM to instance %s", instanceID)
@@ -611,9 +637,6 @@ func (a *ASGDriver) CleanupDanglingInstances(ctx context.Context, minimumInstanc
 		return instancesToConsiderChecking[i].LaunchTime.Before(*instancesToConsiderChecking[j].LaunchTime)
 	})
 
-	totalMarkedUnhealthy := 0
-	var firstErrorEncountered error
-
 	// Pick a sliding slice so oldest-N instances stuck failing SSM checks
 	// don't block the rest of the fleet from ever being examined.
 	instancesToCheck := rotateInstanceWindow(instancesToConsiderChecking, maxDanglingInstancesToCheck, a.DanglingInstancesCheckInterval, time.Now())
@@ -623,28 +646,12 @@ func (a *ASGDriver) CleanupDanglingInstances(ctx context.Context, minimumInstanc
 		instancesForSSMCheck = append(instancesForSSMCheck, *instance.InstanceId)
 	}
 
-	totalChecked := 0
+	log.Printf("[Elastic CI Mode] Checking %d %s instance(s) for dangling agents: %v", len(instancesForSSMCheck), platform, instancesForSSMCheck)
+	result, checkErr := a.checkAndMarkUnhealthy(ctx, instancesForSSMCheck, ssmClient, asgClient, platform)
+	skipped := len(instancesForSSMCheck) - result.healthy - result.draining - result.markedUnhealthy
+	log.Printf("[Elastic CI Mode] Dangling instance check complete: %d healthy, %d draining, %d marked unhealthy, %d skipped (of %d instance(s))", result.healthy, result.draining, result.markedUnhealthy, skipped, len(instancesForSSMCheck))
 
-	if len(instancesForSSMCheck) > 0 {
-		log.Printf("[Elastic CI Mode] Checking %d %s instance(s) for dangling agents: %v", len(instancesForSSMCheck), platform, instancesForSSMCheck)
-		markedInCall, checkedInCall, errInCall := a.checkAndMarkUnhealthy(ctx, instancesForSSMCheck, ssmClient, asgClient, platform)
-		totalMarkedUnhealthy += markedInCall
-		totalChecked += checkedInCall
-		if errInCall != nil {
-			firstErrorEncountered = errInCall
-		}
-	}
-
-	skipped := len(instancesForSSMCheck) - totalChecked
-	if totalMarkedUnhealthy > 0 {
-		log.Printf("[Elastic CI Mode] Dangling instance check: marked %d of %d checked instance(s) as unhealthy (%d skipped due to errors)", totalMarkedUnhealthy, totalChecked, skipped)
-	} else if skipped > 0 {
-		log.Printf("[Elastic CI Mode] Dangling instance check complete: %d of %d instance(s) checked and healthy, %d skipped due to errors", totalChecked, len(instancesForSSMCheck), skipped)
-	} else {
-		log.Printf("[Elastic CI Mode] Dangling instance check complete: all %d instance(s) healthy", totalChecked)
-	}
-
-	return firstErrorEncountered
+	return checkErr
 }
 
 // describeInstancesAPI is the subset of ec2.Client used by describeInstancesTolerant.
