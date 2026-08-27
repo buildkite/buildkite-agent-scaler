@@ -353,7 +353,7 @@ printf 'ActiveState=%s\nMainPID=%s\n' "$ACTIVE_STATE" "$MAIN_PID"
 				}
 			}
 
-			script := strings.ReplaceAll((&ASGDriver{}).getCheckCommand("linux"), "/tmp/buildkite-agent-termination-marker", marker)
+			script := strings.ReplaceAll((&ASGDriver{}).getCheckCommand("linux"), terminationMarkerPath, marker)
 			cmd := exec.Command("bash", "-c", script)
 			cmd.Env = append(os.Environ(),
 				"PATH="+binDir+":"+os.Getenv("PATH"),

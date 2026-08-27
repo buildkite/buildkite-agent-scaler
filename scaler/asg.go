@@ -100,6 +100,11 @@ func (a *ASGDriver) getASGPlatform(ctx context.Context, instances []ec2Types.Ins
 	return "linux"
 }
 
+// terminationMarkerPath is created by the graceful-stop script sent from
+// SendSIGTERMToAgents and probed by the dangling-instance check script, so
+// both sides of the drain handshake must agree on it.
+const terminationMarkerPath = "/tmp/buildkite-agent-termination-marker"
+
 // getCheckCommand returns the appropriate check command for the platform
 func (a *ASGDriver) getCheckCommand(platform string) string {
 	if platform == "windows" {
@@ -131,7 +136,7 @@ case "$ACTIVE_STATE:$MAIN_PID" in
 esac
 
 if [ "$MAIN_PID" != "0" ] || [ "$ACTIVE_STATE" = "activating" ]; then
-  if [ -f /tmp/buildkite-agent-termination-marker ]; then
+  if [ -f ` + terminationMarkerPath + ` ]; then
     echo "DRAINING: ActiveState=$ACTIVE_STATE MainPID=$MAIN_PID"
   else
     echo "RUNNING"
@@ -547,11 +552,11 @@ func (a *ASGDriver) SendSIGTERMToAgents(ctx context.Context, instanceID string) 
 	// With consecutive Lambda invocations the same instance selected for scale-in,
 	// only during the first invocation will actually signal the agent to finish current jobs and stop.
 	command := `#!/bin/bash
-if [ -f /tmp/buildkite-agent-termination-marker ]; then
+if [ -f ` + terminationMarkerPath + ` ]; then
   echo "Already marked for termination, skipping"
   exit 0
 fi
-echo "Termination requested at $(date)" > /tmp/buildkite-agent-termination-marker
+echo "Termination requested at $(date)" > ` + terminationMarkerPath + `
 sudo systemctl stop buildkite-agent.service || sudo /opt/buildkite-agent/bin/buildkite-agent stop --signal SIGTERM
 `
 	log.Printf("[Elastic CI Mode] Sending SIGTERM to instance %s", instanceID)
