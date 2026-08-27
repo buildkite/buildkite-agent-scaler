@@ -38,7 +38,7 @@ type AutoscaleGroupDetails struct {
 	DesiredCount int64
 	MinSize      int64
 	MaxSize      int64
-	InstanceIDs  []string // Instance IDs in the ASG
+	InstanceIDs  []string // InService instance IDs eligible for scale-in
 	ActualCount  int64    // Actual number of running instances
 }
 
@@ -58,37 +58,9 @@ type ASGDriver struct {
 	ssmPollDeadline      time.Duration
 }
 
-// waitForSSMReady blocks until the SSM agent on instanceID reports PingStatus="Online",
-// or until timeout elapses.
-func (a *ASGDriver) waitForSSMReady(ctx context.Context, instanceID string, timeout time.Duration) error {
-	ssmSvc := ssm.NewFromConfig(a.Cfg)
-	deadline := time.Now().Add(timeout)
-
-	for time.Now().Before(deadline) {
-		resp, err := ssmSvc.DescribeInstanceInformation(ctx, &ssm.DescribeInstanceInformationInput{
-			Filters: []ssmTypes.InstanceInformationStringFilter{
-				{
-					Key:    aws.String("InstanceIds"),
-					Values: []string{instanceID},
-				},
-			},
-		})
-		if err != nil {
-			log.Printf("[SSM] DescribeInstanceInformation failed for %s: %v", instanceID, err)
-		} else if len(resp.InstanceInformationList) > 0 &&
-			resp.InstanceInformationList[0].PingStatus == ssmTypes.PingStatusOnline {
-			return nil
-		}
-
-		time.Sleep(5 * time.Second)
-	}
-
-	return fmt.Errorf("timed out waiting for SSM agent to become ready on %s", instanceID)
-}
-
 // getASGPlatform detects whether the ASG contains Linux or Windows instances.
 // Since each ASG is single-platform, we only need to check one instance.
-func (a *ASGDriver) getASGPlatform(ctx context.Context, instances []ec2Types.Instance) string {
+func (a *ASGDriver) getASGPlatform(instances []ec2Types.Instance) string {
 	for _, instance := range instances {
 		// The Platform field is only set for Windows instances.
 		// Use case-insensitive comparison because the EC2 API returns "windows" (lowercase)
@@ -101,9 +73,13 @@ func (a *ASGDriver) getASGPlatform(ctx context.Context, instances []ec2Types.Ins
 }
 
 // terminationMarkerPath is created by the graceful-stop script sent from
-// SendSIGTERMToAgents and probed by the dangling-instance check script, so
-// both sides of the drain handshake must agree on it.
+// sendSIGTERMToAgentsBatch and probed by the dangling-instance check script,
+// so both sides of the drain handshake must agree on it.
 const terminationMarkerPath = "/tmp/buildkite-agent-termination-marker"
+
+// SendCommand and DescribeInstanceInformation each accept at most 50 explicit
+// instance IDs. Keep both operations on the same batch boundary.
+const ssmMaxInstanceIDs = 50
 
 // getCheckCommand returns the appropriate check command for the platform
 func (a *ASGDriver) getCheckCommand(platform string) string {
@@ -135,7 +111,7 @@ case "$ACTIVE_STATE:$MAIN_PID" in
     ;;
 esac
 
-if [ "$MAIN_PID" != "0" ] || [ "$ACTIVE_STATE" = "activating" ]; then
+if [ "$MAIN_PID" != "0" ] || [ "$ACTIVE_STATE" = "activating" ] || [ "$ACTIVE_STATE" = "deactivating" ]; then
   if [ -f ` + terminationMarkerPath + ` ]; then
     echo "DRAINING: ActiveState=$ACTIVE_STATE MainPID=$MAIN_PID"
   else
@@ -166,18 +142,29 @@ type asgHealthAPI interface {
 // SendCommand would either fail or sit Pending until it times out.
 // https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_InstanceInformation.html
 func filterOnlineSSMInstances(ctx context.Context, ssmSvc ssmCheckAPI, instanceIDs []string) ([]string, error) {
-	resp, err := ssmSvc.DescribeInstanceInformation(ctx, &ssm.DescribeInstanceInformationInput{
-		Filters: []ssmTypes.InstanceInformationStringFilter{
-			{Key: aws.String("InstanceIds"), Values: instanceIDs},
-		},
-	})
-	if err != nil {
-		return nil, err
-	}
-	online := make([]string, 0, len(resp.InstanceInformationList))
-	for _, info := range resp.InstanceInformationList {
-		if info.PingStatus == ssmTypes.PingStatusOnline && info.InstanceId != nil {
-			online = append(online, *info.InstanceId)
+	var online []string
+	for instanceBatch := range slices.Chunk(instanceIDs, ssmMaxInstanceIDs) {
+		var nextToken *string
+		for {
+			resp, err := ssmSvc.DescribeInstanceInformation(ctx, &ssm.DescribeInstanceInformationInput{
+				Filters: []ssmTypes.InstanceInformationStringFilter{
+					{Key: aws.String("InstanceIds"), Values: instanceBatch},
+				},
+				MaxResults: aws.Int32(ssmMaxInstanceIDs),
+				NextToken:  nextToken,
+			})
+			if err != nil {
+				return nil, err
+			}
+			for _, info := range resp.InstanceInformationList {
+				if info.PingStatus == ssmTypes.PingStatusOnline && info.InstanceId != nil {
+					online = append(online, *info.InstanceId)
+				}
+			}
+			if resp.NextToken == nil || *resp.NextToken == "" {
+				break
+			}
+			nextToken = resp.NextToken
 		}
 	}
 	return online, nil
@@ -306,9 +293,8 @@ func (a *ASGDriver) checkAndMarkUnhealthy(
 	// SendCommand accepts at most 50 instance IDs per call, so fan out one
 	// command per batch and poll them together.
 	// https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_SendCommand.html
-	const sendCommandMaxTargets = 50
 	var commandIDs []string
-	for batch := range slices.Chunk(onlineIDs, sendCommandMaxTargets) {
+	for batch := range slices.Chunk(onlineIDs, ssmMaxInstanceIDs) {
 		sendOut, err := ssmSvc.SendCommand(ctx, &ssm.SendCommandInput{
 			InstanceIds:  batch,
 			DocumentName: aws.String(documentName),
@@ -404,6 +390,32 @@ func (a *ASGDriver) checkAndMarkUnhealthy(
 	return result, firstError
 }
 
+func autoscaleGroupDetails(asg types.AutoScalingGroup) AutoscaleGroupDetails {
+	details := AutoscaleGroupDetails{
+		DesiredCount: int64(*asg.DesiredCapacity),
+		MinSize:      int64(*asg.MinSize),
+		MaxSize:      int64(*asg.MaxSize),
+		InstanceIDs:  make([]string, 0, len(asg.Instances)),
+	}
+
+	for _, instance := range asg.Instances {
+		lifecycleState := string(instance.LifecycleState)
+		if strings.HasPrefix(lifecycleState, "Pending") {
+			details.Pending++
+		}
+		if lifecycleState != "InService" {
+			continue
+		}
+
+		details.ActualCount++
+		if instance.InstanceId != nil {
+			details.InstanceIDs = append(details.InstanceIDs, *instance.InstanceId)
+		}
+	}
+
+	return details
+}
+
 func (a *ASGDriver) Describe(ctx context.Context) (AutoscaleGroupDetails, error) {
 	log.Printf("Collecting AutoScaling details for ASG %q", a.Name)
 
@@ -424,35 +436,7 @@ func (a *ASGDriver) Describe(ctx context.Context) (AutoscaleGroupDetails, error)
 	queryDuration := time.Since(t)
 
 	asg := result.AutoScalingGroups[0]
-
-	var pending int64
-	var running int64
-	for _, instance := range asg.Instances {
-		lifecycleState := string(instance.LifecycleState)
-		if strings.HasPrefix(lifecycleState, "Pending") {
-			pending += 1
-		}
-		// Count instances in InService state
-		if lifecycleState == "InService" {
-			running += 1
-		}
-	}
-
-	instanceIDs := make([]string, 0, len(asg.Instances))
-	for _, instance := range asg.Instances {
-		if instance.InstanceId != nil {
-			instanceIDs = append(instanceIDs, *instance.InstanceId)
-		}
-	}
-
-	details := AutoscaleGroupDetails{
-		Pending:      pending,
-		DesiredCount: int64(*result.AutoScalingGroups[0].DesiredCapacity),
-		MinSize:      int64(*result.AutoScalingGroups[0].MinSize),
-		MaxSize:      int64(*result.AutoScalingGroups[0].MaxSize),
-		InstanceIDs:  instanceIDs,
-		ActualCount:  running,
-	}
+	details := autoscaleGroupDetails(asg)
 
 	log.Printf("↳ Got pending=%d, desired=%d, actual=%d, min=%d, max=%d (took %v)",
 		details.Pending, details.DesiredCount, details.ActualCount, details.MinSize, details.MaxSize, queryDuration)
@@ -536,29 +520,62 @@ func (a *ASGDriver) GetLastScalingInAndOutActivity(ctx context.Context, findScal
 type dryRunASG struct {
 }
 
-func (a *ASGDriver) SendSIGTERMToAgents(ctx context.Context, instanceID string) error {
-	ec2Client := ec2.NewFromConfig(a.Cfg)
-	ssmClient := ssm.NewFromConfig(a.Cfg)
-
-	// Detect platform - graceful SIGTERM is only supported on Linux
-	descResp, err := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
-		InstanceIds: []string{instanceID},
-	})
-	if err == nil && len(descResp.Reservations) > 0 && len(descResp.Reservations[0].Instances) > 0 {
-		instance := descResp.Reservations[0].Instances[0]
-		if strings.EqualFold(string(instance.Platform), "windows") {
-			return ErrWindowsGracefulScaleInNotSupported
-		}
+// SendSIGTERMToAgentsBatch submits the graceful-stop command for all reachable
+// Linux instances without waiting for command completion. Elastic CI Stack
+// agents self-terminate and decrement desired capacity after draining. The
+// returned count is the number of instances included in accepted commands.
+func (a *ASGDriver) SendSIGTERMToAgentsBatch(ctx context.Context, instanceIDs []string) (int, error) {
+	if len(instanceIDs) == 0 {
+		return 0, nil
 	}
 
-	// Wait for SSM agent to be ready before sending command
-	if err := a.waitForSSMReady(ctx, instanceID, 30*time.Second); err != nil {
-		log.Printf("SSM agent not ready on instance %s, cannot send SIGTERM: %v", instanceID, err)
-		return err
+	platform, err := a.detectPlatform(ctx, ec2.NewFromConfig(a.Cfg), instanceIDs)
+	if err != nil {
+		// The instance owns the capacity decrement on Linux while Windows
+		// needs the SetDesiredCapacity fallback, so guessing the platform
+		// wrong loses the decrement. Fail closed and retry next run.
+		return 0, fmt.Errorf("detect platform for graceful scale-in: %w", err)
 	}
 
-	// With consecutive Lambda invocations the same instance selected for scale-in,
-	// only during the first invocation will actually signal the agent to finish current jobs and stop.
+	return a.sendSIGTERMToAgentsBatch(ctx, ssm.NewFromConfig(a.Cfg), instanceIDs, platform)
+}
+
+// detectPlatform inspects one scale-in candidate to choose the SSM document
+// platform. ASGs are single-platform, so one instance is enough.
+func (a *ASGDriver) detectPlatform(ctx context.Context, client describeInstancesAPI, instanceIDs []string) (string, error) {
+	describeResult, err := describeInstancesTolerant(ctx, client, instanceIDs[:1], a.Name)
+	if err != nil {
+		return "", err
+	}
+	var instances []ec2Types.Instance
+	for _, reservation := range describeResult.Reservations {
+		instances = append(instances, reservation.Instances...)
+	}
+	if len(instances) == 0 {
+		return "", fmt.Errorf("instance %s not found", instanceIDs[0])
+	}
+	return a.getASGPlatform(instances), nil
+}
+
+func (a *ASGDriver) sendSIGTERMToAgentsBatch(ctx context.Context, ssmSvc ssmCheckAPI, instanceIDs []string, platform string) (int, error) {
+	if strings.EqualFold(platform, "windows") {
+		return 0, ErrWindowsGracefulScaleInNotSupported
+	}
+
+	onlineIDs, err := filterOnlineSSMInstances(ctx, ssmSvc, instanceIDs)
+	if err != nil {
+		return 0, fmt.Errorf("describe SSM instance information: %w", err)
+	}
+	if offline := len(instanceIDs) - len(onlineIDs); offline > 0 {
+		log.Printf("[Elastic CI Mode] SSM agent not online for %d of %d graceful scale-in candidate(s); skipping those", offline, len(instanceIDs))
+	}
+	if len(onlineIDs) == 0 {
+		return 0, nil
+	}
+
+	// With consecutive Lambda invocations selecting the same instance, only
+	// the first command stops the agent. Later commands observe the marker and
+	// exit without disrupting the drain already in progress.
 	command := `#!/bin/bash
 if [ -f ` + terminationMarkerPath + ` ]; then
   echo "Already marked for termination, skipping"
@@ -567,21 +584,27 @@ fi
 echo "Termination requested at $(date)" > ` + terminationMarkerPath + `
 sudo systemctl stop buildkite-agent.service || sudo /opt/buildkite-agent/bin/buildkite-agent stop --signal SIGTERM
 `
-	log.Printf("[Elastic CI Mode] Sending SIGTERM to instance %s", instanceID)
 
-	_, err = ssmClient.SendCommand(ctx, &ssm.SendCommandInput{
-		InstanceIds:  []string{instanceID},
-		DocumentName: aws.String("AWS-RunShellScript"),
-		Parameters:   map[string][]string{"commands": {command}},
-		Comment:      aws.String("Gracefully stop Buildkite agent"),
-	})
-
-	if err != nil {
-		log.Printf("[Elastic CI Mode] Error sending SIGTERM to instance %s: %v", instanceID, err)
-		return err
+	var sendErrors []error
+	batchNumber := 0
+	dispatched := 0
+	for instanceBatch := range slices.Chunk(onlineIDs, ssmMaxInstanceIDs) {
+		batchNumber++
+		_, err := ssmSvc.SendCommand(ctx, &ssm.SendCommandInput{
+			InstanceIds:  instanceBatch,
+			DocumentName: aws.String("AWS-RunShellScript"),
+			Parameters:   map[string][]string{"commands": {command}},
+			Comment:      aws.String("Gracefully stop Buildkite agent"),
+		})
+		if err != nil {
+			sendErrors = append(sendErrors, fmt.Errorf("batch %d: %w", batchNumber, err))
+			continue
+		}
+		dispatched += len(instanceBatch)
+		log.Printf("[Elastic CI Mode] Submitted graceful-stop command to %d instance(s)", len(instanceBatch))
 	}
-	log.Printf("[Elastic CI Mode] Successfully sent SIGTERM command to instance %s", instanceID)
-	return nil
+
+	return dispatched, errors.Join(sendErrors...)
 }
 
 // CleanupDanglingInstances finds and marks unhealthy any "zombie" instances where the
@@ -630,7 +653,7 @@ func (a *ASGDriver) CleanupDanglingInstances(ctx context.Context, minimumInstanc
 	}
 
 	// Detect platform from instances (each ASG is single-platform)
-	platform := a.getASGPlatform(ctx, instancesToConsiderChecking)
+	platform := a.getASGPlatform(instancesToConsiderChecking)
 
 	// Sort instances by launch time (oldest first) to prioritize checking older ones
 	sort.SliceStable(instancesToConsiderChecking, func(i, j int) bool {
@@ -739,9 +762,9 @@ func (a *dryRunASG) SetDesiredCapacity(ctx context.Context, count int64) error {
 	return nil
 }
 
-func (a *dryRunASG) SendSIGTERMToAgents(ctx context.Context, instanceID string) error {
-	log.Printf("[DryRun] Would send SIGTERM to instance %s", instanceID)
-	return nil
+func (a *dryRunASG) SendSIGTERMToAgentsBatch(ctx context.Context, instanceIDs []string) (int, error) {
+	log.Printf("[DryRun] Would send SIGTERM to instances %v", instanceIDs)
+	return len(instanceIDs), nil
 }
 
 func (a *dryRunASG) CleanupDanglingInstances(ctx context.Context, minimumInstanceUptime time.Duration, maxDanglingInstancesToCheck int) error {
