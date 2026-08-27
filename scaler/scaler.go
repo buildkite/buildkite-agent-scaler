@@ -48,7 +48,7 @@ type Scaler struct {
 	autoscaling interface {
 		Describe(ctx context.Context) (AutoscaleGroupDetails, error)
 		SetDesiredCapacity(ctx context.Context, count int64) error
-		SendSIGTERMToAgents(ctx context.Context, instanceID string) error
+		SendSIGTERMToAgentsBatch(ctx context.Context, instanceIDs []string) (int, error)
 		CleanupDanglingInstances(ctx context.Context, minimumInstanceUptime time.Duration, maxDanglingInstancesToCheck int) error
 	}
 	bk interface {
@@ -393,7 +393,7 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 	instancesToTerminate := current.DesiredCount - desired
 
 	// In Elastic CI Mode, use graceful termination if we have instance IDs
-	if _, ok := s.autoscaling.(*ASGDriver); ok && s.elasticCIMode && len(current.InstanceIDs) > 0 && instancesToTerminate > 0 {
+	if asgDriver, ok := s.autoscaling.(*ASGDriver); ok && s.elasticCIMode && len(current.InstanceIDs) > 0 && instancesToTerminate > 0 {
 		log.Printf("[Elastic CI Mode] Using graceful termination for %d instances", instancesToTerminate)
 
 		// Determine instances to terminate by sorting by launch time (oldest first)
@@ -411,9 +411,7 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 			ec2Svc := ec2.NewFromConfig(s.cfg)
 
 			instances := make([]instanceInfo, 0, len(current.InstanceIDs))
-			describeResult, err := ec2Svc.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
-				InstanceIds: current.InstanceIDs,
-			})
+			describeResult, err := describeInstancesTolerant(ctx, ec2Svc, current.InstanceIDs, asgDriver.Name)
 
 			if err != nil {
 				log.Printf("[Elastic CI Mode] Warning: Could not get instance launch times: %v", err)
@@ -460,41 +458,7 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 		}
 
 		log.Printf("[Elastic CI Mode] Attempting graceful termination for %d instance(s): %v", len(instancesForTermination), instancesForTermination)
-
-		sigTermErrors := 0
-		sigTermSkipped := 0
-		sigTermSuccess := 0
-		for _, instanceID := range instancesForTermination {
-			if err := s.autoscaling.SendSIGTERMToAgents(ctx, instanceID); err != nil {
-				if errors.Is(err, ErrWindowsGracefulScaleInNotSupported) {
-					sigTermSkipped++
-				} else {
-					log.Printf("⚠️  Failed to send SIGTERM to instance %s: %v", instanceID, err)
-					sigTermErrors++
-				}
-			} else {
-				log.Printf("✅ Successfully sent SIGTERM to instance %s", instanceID)
-				sigTermSuccess++
-			}
-		}
-
-		if sigTermErrors > 0 {
-			log.Printf("⚠️  Failed to send SIGTERM to %d/%d instances",
-				sigTermErrors, len(instancesForTermination))
-		}
-		if sigTermSkipped > 0 {
-			log.Printf("ℹ️  Skipped %d Windows instance(s) - graceful scale-in not supported, will be terminated directly by ASG",
-				sigTermSkipped)
-		}
-		if sigTermSuccess > 0 {
-			log.Printf("✅ Successfully sent SIGTERM to %d instance(s)", sigTermSuccess)
-		}
-
-		log.Printf("[Elastic CI Mode] Updating ASG desired capacity to %d", desired)
-		if err := s.setDesiredCapacity(ctx, desired); err != nil {
-			log.Printf("CRITICAL: [Elastic CI Mode] Failed to set desired capacity to %d after sending SIGTERMs: %v. ASG might replace terminated instances.", desired, err)
-
-		}
+		s.gracefullyScaleIn(ctx, instancesForTermination, desired)
 
 		if current.DesiredCount <= 1 && len(current.InstanceIDs) == 1 {
 			instanceID := current.InstanceIDs[0]
@@ -544,7 +508,6 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 				log.Printf("[Elastic CI Mode] Instance appears responsive, not terminating directly")
 			}
 		}
-		s.scaleInParams.LastEvent = time.Now()
 		return nil
 	} else {
 		log.Printf("Using standard scale-in (Elastic CI Mode disabled or no instances to terminate)")
@@ -553,6 +516,29 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 		}
 		s.scaleInParams.LastEvent = time.Now()
 		return nil
+	}
+}
+
+func (s *Scaler) gracefullyScaleIn(ctx context.Context, instanceIDs []string, desired int64) {
+	// Elastic CI Stack agents self-terminate and decrement desired capacity
+	// after draining. Setting desired capacity here for Linux would decrement
+	// twice when those targeted terminations complete.
+	dispatched, err := s.autoscaling.SendSIGTERMToAgentsBatch(ctx, instanceIDs)
+	if err != nil {
+		if errors.Is(err, ErrWindowsGracefulScaleInNotSupported) {
+			log.Printf("ℹ️  Skipped %d Windows instance(s) - graceful scale-in not supported, will be terminated directly by ASG", len(instanceIDs))
+			if err := s.setDesiredCapacity(ctx, desired); err != nil {
+				log.Printf("CRITICAL: [Elastic CI Mode] Failed to set desired capacity to %d for Windows instances: %v", desired, err)
+			} else {
+				s.scaleInParams.LastEvent = time.Now()
+			}
+			return
+		}
+
+		log.Printf("⚠️  Failed to send graceful-stop command to one or more instances: %v", err)
+	}
+	if dispatched > 0 {
+		s.scaleInParams.LastEvent = time.Now()
 	}
 }
 

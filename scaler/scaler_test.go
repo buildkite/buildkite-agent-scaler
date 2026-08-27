@@ -2,6 +2,7 @@ package scaler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -455,9 +456,12 @@ type asgTestDriver struct {
 	pendingCapacity         int64
 	maxSize                 int64 // If 0, defaults to 100
 	sigTermsSent            []string
+	sigTermsDispatched      int
+	sigTermErr              error
 	setDesiredCapacityCalls int
 	elasticCIMode           bool
 	danglingInstancesFound  int
+	events                  []string
 }
 
 func (d *asgTestDriver) Describe(ctx context.Context) (AutoscaleGroupDetails, error) {
@@ -490,20 +494,88 @@ func (d *asgTestDriver) Describe(ctx context.Context) (AutoscaleGroupDetails, er
 func (d *asgTestDriver) SetDesiredCapacity(ctx context.Context, count int64) error {
 	d.setDesiredCapacityCalls++
 	d.desiredCapacity = count
+	d.events = append(d.events, "set desired capacity")
 	return d.err
 }
 
-func (d *asgTestDriver) SendSIGTERMToAgents(ctx context.Context, instanceID string) error {
-	if d.sigTermsSent == nil {
-		d.sigTermsSent = []string{}
+func (d *asgTestDriver) SendSIGTERMToAgentsBatch(ctx context.Context, instanceIDs []string) (int, error) {
+	d.events = append(d.events, "send graceful stop")
+	d.sigTermsSent = append(d.sigTermsSent, instanceIDs...)
+	if d.sigTermErr != nil {
+		return d.sigTermsDispatched, d.sigTermErr
 	}
-	d.sigTermsSent = append(d.sigTermsSent, instanceID)
-	return d.err
+	return len(instanceIDs), d.err
 }
 
 func (d *asgTestDriver) CleanupDanglingInstances(ctx context.Context, minimumInstanceUptime time.Duration, maxDanglingInstancesToCheck int) error {
 	d.danglingInstancesFound++
 	return d.err
+}
+
+func TestGracefullyScaleInLetsLinuxAgentsDecrementCapacity(t *testing.T) {
+	testCases := []struct {
+		name                   string
+		dispatched             int
+		dispatchErr            error
+		wantEvents             string
+		wantDesiredCapacity    int64
+		wantSetDesiredCapacity int
+		wantLastEvent          bool
+	}{
+		{
+			name:                "successful Linux dispatch",
+			wantEvents:          "[send graceful stop]",
+			wantDesiredCapacity: 3,
+			wantLastEvent:       true,
+		},
+		{
+			name:                "failed Linux dispatch",
+			dispatchErr:         errors.New("send command"),
+			wantEvents:          "[send graceful stop]",
+			wantDesiredCapacity: 3,
+		},
+		{
+			name:                "partially successful Linux dispatch",
+			dispatched:          1,
+			dispatchErr:         errors.New("send command to later batch"),
+			wantEvents:          "[send graceful stop]",
+			wantDesiredCapacity: 3,
+			wantLastEvent:       true,
+		},
+		{
+			name:                   "Windows dispatch skipped",
+			dispatchErr:            ErrWindowsGracefulScaleInNotSupported,
+			wantEvents:             "[send graceful stop set desired capacity]",
+			wantDesiredCapacity:    1,
+			wantSetDesiredCapacity: 1,
+			wantLastEvent:          true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			asg := &asgTestDriver{desiredCapacity: 3, sigTermsDispatched: tc.dispatched, sigTermErr: tc.dispatchErr}
+			s := Scaler{autoscaling: asg}
+
+			s.gracefullyScaleIn(t.Context(), []string{"i-a", "i-b"}, 1)
+
+			if got := fmt.Sprint(asg.events); got != tc.wantEvents {
+				t.Errorf("calls = %s, want %s", got, tc.wantEvents)
+			}
+			if got, want := fmt.Sprint(asg.sigTermsSent), "[i-a i-b]"; got != want {
+				t.Errorf("graceful-stop targets = %s, want %s", got, want)
+			}
+			if got := asg.desiredCapacity; got != tc.wantDesiredCapacity {
+				t.Errorf("desired capacity = %d, want %d", got, tc.wantDesiredCapacity)
+			}
+			if got := asg.setDesiredCapacityCalls; got != tc.wantSetDesiredCapacity {
+				t.Errorf("SetDesiredCapacity calls = %d, want %d", got, tc.wantSetDesiredCapacity)
+			}
+			if got := !s.scaleInParams.LastEvent.IsZero(); got != tc.wantLastEvent {
+				t.Errorf("LastEvent recorded = %t, want %t", got, tc.wantLastEvent)
+			}
+		})
+	}
 }
 
 // TestScaleInWhileASGConverging pins the early return in Run that suppresses

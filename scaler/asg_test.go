@@ -15,6 +15,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/autoscaling"
+	"github.com/aws/aws-sdk-go-v2/service/autoscaling/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2Types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
@@ -24,7 +25,6 @@ import (
 
 func TestGetASGPlatform(t *testing.T) {
 	driver := &ASGDriver{}
-	ctx := context.Background()
 
 	testCases := []struct {
 		name             string
@@ -77,11 +77,36 @@ func TestGetASGPlatform(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			platform := driver.getASGPlatform(ctx, tc.instances)
+			platform := driver.getASGPlatform(tc.instances)
 			if platform != tc.expectedPlatform {
 				t.Errorf("expected platform %q, got %q", tc.expectedPlatform, platform)
 			}
 		})
+	}
+}
+
+func TestAutoscaleGroupDetailsUsesOnlyInServiceInstancesAsCandidates(t *testing.T) {
+	details := autoscaleGroupDetails(types.AutoScalingGroup{
+		DesiredCapacity: aws.Int32(4),
+		MinSize:         aws.Int32(1),
+		MaxSize:         aws.Int32(10),
+		Instances: []types.Instance{
+			{InstanceId: aws.String("i-pending"), LifecycleState: types.LifecycleStatePending},
+			{InstanceId: aws.String("i-pending-wait"), LifecycleState: types.LifecycleStatePendingWait},
+			{InstanceId: aws.String("i-in-service"), LifecycleState: types.LifecycleStateInService},
+			{InstanceId: aws.String("i-terminating"), LifecycleState: types.LifecycleStateTerminating},
+			{InstanceId: aws.String("i-standby"), LifecycleState: types.LifecycleStateStandby},
+		},
+	})
+
+	if got, want := details.Pending, int64(2); got != want {
+		t.Errorf("pending count = %d, want %d", got, want)
+	}
+	if got, want := details.ActualCount, int64(1); got != want {
+		t.Errorf("actual count = %d, want %d", got, want)
+	}
+	if got, want := details.InstanceIDs, []string{"i-in-service"}; !slices.Equal(got, want) {
+		t.Errorf("scale-in candidates = %v, want %v", got, want)
 	}
 }
 
@@ -256,6 +281,73 @@ func TestDescribeInstancesTolerant(t *testing.T) {
 	})
 }
 
+func TestDetectPlatform(t *testing.T) {
+	ctx := context.Background()
+	driver := &ASGDriver{Name: "asg-1"}
+	describeErr := errors.New("describe failed")
+
+	reservations := func(platforms ...ec2Types.PlatformValues) []ec2Types.Reservation {
+		var instances []ec2Types.Instance
+		for _, p := range platforms {
+			instances = append(instances, ec2Types.Instance{Platform: p})
+		}
+		return []ec2Types.Reservation{{Instances: instances}}
+	}
+
+	tests := []struct {
+		name         string
+		response     stubDescribeResponse
+		wantPlatform string
+		wantErr      bool
+	}{
+		{
+			name:         "linux instance",
+			response:     stubDescribeResponse{out: &ec2.DescribeInstancesOutput{Reservations: reservations("")}},
+			wantPlatform: "linux",
+		},
+		{
+			name:         "windows instance",
+			response:     stubDescribeResponse{out: &ec2.DescribeInstancesOutput{Reservations: reservations("windows")}},
+			wantPlatform: "windows",
+		},
+		{
+			name:     "describe error fails closed",
+			response: stubDescribeResponse{err: describeErr},
+			wantErr:  true,
+		},
+		{
+			// The sampled candidate can disappear between candidate selection
+			// and the describe call. Guessing Linux for a Windows ASG here
+			// would skip the SetDesiredCapacity fallback, so fail closed.
+			name:     "missing instance fails closed",
+			response: stubDescribeResponse{out: &ec2.DescribeInstancesOutput{}},
+			wantErr:  true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &stubDescribeInstancesClient{responses: []stubDescribeResponse{tc.response}}
+			platform, err := driver.detectPlatform(ctx, stub, []string{"i-a", "i-b"})
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("detectPlatform() error = nil, want error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("detectPlatform() error = %v", err)
+			}
+			if platform != tc.wantPlatform {
+				t.Errorf("detectPlatform() = %q, want %q", platform, tc.wantPlatform)
+			}
+			if got := stub.calls[0].InstanceIds; !slices.Equal(got, []string{"i-a"}) {
+				t.Errorf("described %v, want only the first candidate", got)
+			}
+		})
+	}
+}
+
 func TestGetCheckCommand(t *testing.T) {
 	driver := &ASGDriver{}
 
@@ -346,6 +438,12 @@ printf 'ActiveState=%s\nMainPID=%s\n' "$ACTIVE_STATE" "$MAIN_PID"
 		// The normal graceful scale-in window: marker written, systemd
 		// stopping the unit, agent finishing its last job.
 		{name: "deactivating with marker", activeState: "deactivating", mainPID: "123", marker: true, want: "DRAINING: ActiveState=deactivating MainPID=123"},
+		// After the agent exits, ExecStopPost (the stack's terminate-instance
+		// script) runs with MainPID=0 while the unit stays deactivating. The
+		// instance is about to decrement desired capacity and terminate
+		// itself, so marking it unhealthy here would race that handoff.
+		{name: "deactivating in ExecStopPost with marker", activeState: "deactivating", mainPID: "0", marker: true, want: "DRAINING: ActiveState=deactivating MainPID=0"},
+		{name: "deactivating in ExecStopPost without marker", activeState: "deactivating", mainPID: "0", want: "RUNNING"},
 		{name: "failed unit", activeState: "failed", mainPID: "0", want: "NOT_RUNNING: ActiveState=failed"},
 		// Type=simple assumption: active with MainPID=0 means the process is
 		// gone even though systemd still reports the unit active.
@@ -466,15 +564,25 @@ func makeInstancesForRotation(n int) []ec2Types.Instance {
 // stubSSMClient implements ssmCheckAPI for unit tests. Each
 // ListCommandInvocations call returns the next listResponses entry, or repeats
 // the last one if exhausted (so deadline-driven tests don't have to enumerate
-// every poll).
+// every poll). DescribeInstanceInformation resolves in priority order:
+// describeResponses (one entry per call), then describeErr, then describeOut
+// filtered down to the instance IDs requested in that call.
 type stubSSMClient struct {
-	describeOut   *ssm.DescribeInstanceInformationOutput
-	describeErr   error
-	listResponses []stubListResponse
-	listCalls     int
+	describeOut       *ssm.DescribeInstanceInformationOutput
+	describeErr       error
+	describeResponses []stubSSMDescribeResponse
+	describeCalls     []ssm.DescribeInstanceInformationInput
+	listResponses     []stubListResponse
+	listCalls         int
 
 	sendErr     error
+	sendErrors  []error
 	sendBatches [][]string // InstanceIds passed to each SendCommand call
+}
+
+type stubSSMDescribeResponse struct {
+	out *ssm.DescribeInstanceInformationOutput
+	err error
 }
 
 type stubListResponse struct {
@@ -483,11 +591,40 @@ type stubListResponse struct {
 }
 
 func (s *stubSSMClient) DescribeInstanceInformation(ctx context.Context, params *ssm.DescribeInstanceInformationInput, _ ...func(*ssm.Options)) (*ssm.DescribeInstanceInformationOutput, error) {
-	return s.describeOut, s.describeErr
+	s.describeCalls = append(s.describeCalls, *params)
+	if len(s.describeResponses) > 0 {
+		response := s.describeResponses[len(s.describeCalls)-1]
+		return response.out, response.err
+	}
+	if s.describeErr != nil {
+		return nil, s.describeErr
+	}
+	if s.describeOut == nil {
+		return &ssm.DescribeInstanceInformationOutput{}, nil
+	}
+
+	requested := make(map[string]bool)
+	for _, filter := range params.Filters {
+		if aws.ToString(filter.Key) == "InstanceIds" {
+			for _, instanceID := range filter.Values {
+				requested[instanceID] = true
+			}
+		}
+	}
+	output := &ssm.DescribeInstanceInformationOutput{}
+	for _, info := range s.describeOut.InstanceInformationList {
+		if requested[aws.ToString(info.InstanceId)] {
+			output.InstanceInformationList = append(output.InstanceInformationList, info)
+		}
+	}
+	return output, nil
 }
 
 func (s *stubSSMClient) SendCommand(ctx context.Context, params *ssm.SendCommandInput, _ ...func(*ssm.Options)) (*ssm.SendCommandOutput, error) {
-	s.sendBatches = append(s.sendBatches, params.InstanceIds)
+	s.sendBatches = append(s.sendBatches, slices.Clone(params.InstanceIds))
+	if index := len(s.sendBatches) - 1; index < len(s.sendErrors) && s.sendErrors[index] != nil {
+		return nil, s.sendErrors[index]
+	}
 	if s.sendErr != nil {
 		return nil, s.sendErr
 	}
@@ -541,6 +678,158 @@ func TestFilterOnlineSSMInstances(t *testing.T) {
 	if !slices.Equal(got, []string{"i-a", "i-c"}) {
 		t.Errorf("got %v, want [i-a i-c]", got)
 	}
+	if got := aws.ToInt32(stub.describeCalls[0].MaxResults); got != ssmMaxInstanceIDs {
+		t.Errorf("MaxResults = %d, want %d", got, ssmMaxInstanceIDs)
+	}
+}
+
+func TestFilterOnlineSSMInstancesChunksAndPaginates(t *testing.T) {
+	instanceIDs := make([]string, 51)
+	for i := range instanceIDs {
+		instanceIDs[i] = fmt.Sprintf("i-%03d", i)
+	}
+	stub := &stubSSMClient{
+		describeResponses: []stubSSMDescribeResponse{
+			{out: &ssm.DescribeInstanceInformationOutput{
+				InstanceInformationList: []ssmTypes.InstanceInformation{{InstanceId: aws.String("i-000"), PingStatus: ssmTypes.PingStatusOnline}},
+				NextToken:               aws.String("page-2"),
+			}},
+			{out: &ssm.DescribeInstanceInformationOutput{
+				InstanceInformationList: []ssmTypes.InstanceInformation{{InstanceId: aws.String("i-001"), PingStatus: ssmTypes.PingStatusOnline}},
+			}},
+			{out: &ssm.DescribeInstanceInformationOutput{
+				InstanceInformationList: []ssmTypes.InstanceInformation{{InstanceId: aws.String("i-050"), PingStatus: ssmTypes.PingStatusOnline}},
+			}},
+		},
+	}
+
+	got, err := filterOnlineSSMInstances(t.Context(), stub, instanceIDs)
+	if err != nil {
+		t.Fatalf("filterOnlineSSMInstances() error = %v", err)
+	}
+	if want := []string{"i-000", "i-001", "i-050"}; !slices.Equal(got, want) {
+		t.Errorf("online instances = %v, want %v", got, want)
+	}
+	if got, want := len(stub.describeCalls), 3; got != want {
+		t.Fatalf("DescribeInstanceInformation calls = %d, want %d", got, want)
+	}
+	if got, want := len(stub.describeCalls[0].Filters[0].Values), ssmMaxInstanceIDs; got != want {
+		t.Errorf("first instance filter size = %d, want %d", got, want)
+	}
+	if got, want := aws.ToString(stub.describeCalls[1].NextToken), "page-2"; got != want {
+		t.Errorf("second NextToken = %q, want %q", got, want)
+	}
+	if got, want := len(stub.describeCalls[2].Filters[0].Values), 1; got != want {
+		t.Errorf("last instance filter size = %d, want %d", got, want)
+	}
+}
+
+func TestSendSIGTERMToAgentsBatch(t *testing.T) {
+	onlineOutput := func(instanceIDs ...string) *ssm.DescribeInstanceInformationOutput {
+		output := &ssm.DescribeInstanceInformationOutput{}
+		for _, instanceID := range instanceIDs {
+			output.InstanceInformationList = append(output.InstanceInformationList, ssmTypes.InstanceInformation{
+				InstanceId: aws.String(instanceID),
+				PingStatus: ssmTypes.PingStatusOnline,
+			})
+		}
+		return output
+	}
+
+	t.Run("chunks more than 50 targets without polling completion", func(t *testing.T) {
+		instanceIDs := make([]string, 120)
+		for i := range instanceIDs {
+			instanceIDs[i] = fmt.Sprintf("i-%03d", i)
+		}
+		stub := &stubSSMClient{describeOut: onlineOutput(instanceIDs...)}
+
+		dispatched, err := (&ASGDriver{}).sendSIGTERMToAgentsBatch(t.Context(), stub, instanceIDs, "linux")
+		if err != nil {
+			t.Fatalf("sendSIGTERMToAgentsBatch() error = %v", err)
+		}
+		if dispatched != 120 {
+			t.Errorf("dispatched instances = %d, want 120", dispatched)
+		}
+		gotBatchSizes := make([]int, len(stub.sendBatches))
+		for i, batch := range stub.sendBatches {
+			gotBatchSizes[i] = len(batch)
+		}
+		if want := []int{50, 50, 20}; !slices.Equal(gotBatchSizes, want) {
+			t.Errorf("SendCommand batch sizes = %v, want %v", gotBatchSizes, want)
+		}
+		if stub.listCalls != 0 {
+			t.Errorf("ListCommandInvocations calls = %d, want 0", stub.listCalls)
+		}
+	})
+
+	t.Run("skips targets whose SSM agent is offline", func(t *testing.T) {
+		stub := &stubSSMClient{describeOut: onlineOutput("i-a", "i-c")}
+
+		dispatched, err := (&ASGDriver{}).sendSIGTERMToAgentsBatch(t.Context(), stub, []string{"i-a", "i-b", "i-c"}, "linux")
+		if err != nil {
+			t.Fatalf("sendSIGTERMToAgentsBatch() error = %v", err)
+		}
+		if dispatched != 2 {
+			t.Errorf("dispatched instances = %d, want 2", dispatched)
+		}
+		if len(stub.sendBatches) != 1 || !slices.Equal(stub.sendBatches[0], []string{"i-a", "i-c"}) {
+			t.Errorf("SendCommand targets = %v, want [[i-a i-c]]", stub.sendBatches)
+		}
+	})
+
+	t.Run("reports no dispatch when every SSM agent is offline", func(t *testing.T) {
+		stub := &stubSSMClient{}
+
+		dispatched, err := (&ASGDriver{}).sendSIGTERMToAgentsBatch(t.Context(), stub, []string{"i-a", "i-b"}, "linux")
+		if err != nil {
+			t.Fatalf("sendSIGTERMToAgentsBatch() error = %v", err)
+		}
+		if dispatched != 0 {
+			t.Errorf("dispatched instances = %d, want 0", dispatched)
+		}
+		if len(stub.sendBatches) != 0 {
+			t.Errorf("SendCommand calls = %d, want 0", len(stub.sendBatches))
+		}
+	})
+
+	t.Run("attempts later batches after partial failures", func(t *testing.T) {
+		instanceIDs := make([]string, 120)
+		for i := range instanceIDs {
+			instanceIDs[i] = fmt.Sprintf("i-%03d", i)
+		}
+		firstErr := errors.New("first batch failed")
+		lastErr := errors.New("last batch failed")
+		stub := &stubSSMClient{
+			describeOut: onlineOutput(instanceIDs...),
+			sendErrors:  []error{firstErr, nil, lastErr},
+		}
+
+		dispatched, err := (&ASGDriver{}).sendSIGTERMToAgentsBatch(t.Context(), stub, instanceIDs, "linux")
+		if !errors.Is(err, firstErr) || !errors.Is(err, lastErr) {
+			t.Errorf("sendSIGTERMToAgentsBatch() error = %v, want both batch errors", err)
+		}
+		if dispatched != 50 {
+			t.Errorf("dispatched instances = %d, want 50", dispatched)
+		}
+		if got, want := len(stub.sendBatches), 3; got != want {
+			t.Errorf("SendCommand calls = %d, want %d", got, want)
+		}
+	})
+
+	t.Run("rejects Windows before contacting SSM", func(t *testing.T) {
+		stub := &stubSSMClient{}
+
+		dispatched, err := (&ASGDriver{}).sendSIGTERMToAgentsBatch(t.Context(), stub, []string{"i-windows"}, "windows")
+		if !errors.Is(err, ErrWindowsGracefulScaleInNotSupported) {
+			t.Errorf("sendSIGTERMToAgentsBatch() error = %v, want %v", err, ErrWindowsGracefulScaleInNotSupported)
+		}
+		if dispatched != 0 {
+			t.Errorf("dispatched instances = %d, want 0", dispatched)
+		}
+		if len(stub.describeCalls) != 0 || len(stub.sendBatches) != 0 {
+			t.Errorf("SSM calls made for Windows: describe=%d send=%d, want none", len(stub.describeCalls), len(stub.sendBatches))
+		}
+	})
 }
 
 func TestPollCommandInvocations(t *testing.T) {
