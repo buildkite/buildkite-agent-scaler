@@ -452,6 +452,7 @@ type asgTestDriver struct {
 	err                     error
 	desiredCapacity         int64
 	actualCapacity          int64 // If 0, will default to desiredCapacity
+	pendingCapacity         int64
 	maxSize                 int64 // If 0, defaults to 100
 	sigTermsSent            []string
 	setDesiredCapacityCalls int
@@ -477,6 +478,7 @@ func (d *asgTestDriver) Describe(ctx context.Context) (AutoscaleGroupDetails, er
 	}
 
 	return AutoscaleGroupDetails{
+		Pending:      d.pendingCapacity,
 		DesiredCount: d.desiredCapacity,
 		ActualCount:  actualCount,
 		MinSize:      0,
@@ -577,6 +579,69 @@ func TestScaleInWhileASGConverging(t *testing.T) {
 				t.Errorf("SIGTERMs sent to %v, want none", asg.sigTermsSent)
 			}
 		})
+	}
+}
+
+func TestScalerRunScalesOutWhenTargetExceedsASGDesired(t *testing.T) {
+	lastScaleIn := time.Now()
+	asg := &asgTestDriver{
+		desiredCapacity: 2,
+		actualCapacity:  5,
+	}
+	s := Scaler{
+		autoscaling: asg,
+		// Three scheduled jobs with one agent per instance require three
+		// instances: above ASG desired capacity, but below actual capacity.
+		bk: &buildkiteTestDriver{metrics: buildkite.AgentMetrics{
+			ScheduledJobs: 3,
+		}},
+		scaling: ScalingCalculator{agentsPerInstance: 1},
+		scaleInParams: ScaleParams{
+			CooldownPeriod: time.Hour,
+			LastEvent:      lastScaleIn,
+		},
+	}
+
+	if _, err := s.Run(t.Context()); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if asg.setDesiredCapacityCalls != 1 {
+		t.Errorf("SetDesiredCapacity calls = %d, want 1", asg.setDesiredCapacityCalls)
+	}
+	if asg.desiredCapacity != 3 {
+		t.Errorf("desired capacity = %d, want 3", asg.desiredCapacity)
+	}
+	if !s.LastScaleIn().Equal(lastScaleIn) {
+		t.Errorf("last scale-in = %s, want unchanged at %s", s.LastScaleIn(), lastScaleIn)
+	}
+	if s.LastScaleOut().IsZero() {
+		t.Error("last scale-out is zero, want scale-out recorded")
+	}
+}
+
+func TestScalerRunWaitsToScaleInWhileInstancesArePending(t *testing.T) {
+	asg := &asgTestDriver{
+		desiredCapacity: 5,
+		actualCapacity:  5,
+		pendingCapacity: 1,
+	}
+	s := Scaler{
+		autoscaling: asg,
+		bk: &buildkiteTestDriver{metrics: buildkite.AgentMetrics{
+			ScheduledJobs: 3,
+		}},
+		scaling:       ScalingCalculator{agentsPerInstance: 1},
+		elasticCIMode: true,
+	}
+
+	if _, err := s.Run(t.Context()); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if asg.setDesiredCapacityCalls != 0 {
+		t.Errorf("SetDesiredCapacity calls = %d, want 0", asg.setDesiredCapacityCalls)
+	}
+	if asg.desiredCapacity != 5 {
+		t.Errorf("desired capacity = %d, want 5", asg.desiredCapacity)
 	}
 }
 
