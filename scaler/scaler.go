@@ -245,23 +245,14 @@ func (s *Scaler) Run(ctx context.Context) (time.Duration, error) {
 		return metrics.PollDuration, nil
 	}
 
-	if desired > instanceCount {
+	if desired > asg.DesiredCount {
 		log.Printf("Scaling decision: calculated desired %d instances. ASG current desired: %d, ASG actual running: %d (approx %d agents), Buildkite scheduled: %d, running: %d, waiting: %d",
 			desired, asg.DesiredCount, instanceCount, instanceCount*int64(s.scaling.agentsPerInstance), metrics.ScheduledJobs, metrics.RunningJobs, metrics.WaitingJobs)
-
-		if desired > asg.DesiredCount {
-			log.Printf(" Action: Scale out from %d to %d", asg.DesiredCount, desired)
-			return metrics.PollDuration, s.scaleOut(ctx, desired, asg)
-		}
-		log.Printf(" Action: Scale in from %d to %d", asg.DesiredCount, desired)
-		return metrics.PollDuration, s.scaleIn(ctx, desired, asg)
+		log.Printf(" Action: Scale out from %d to %d", asg.DesiredCount, desired)
+		return metrics.PollDuration, s.scaleOut(ctx, desired, asg)
 	}
 
 	if asg.DesiredCount > desired {
-		return metrics.PollDuration, s.scaleIn(ctx, desired, asg)
-	}
-
-	if instanceCount > desired {
 		// In Elastic CI mode, check for pending instances before scaling down
 		// If there are pending instances, it means ASG is already scaling, so we should wait
 		if s.elasticCIMode && asg.Pending > 0 {
@@ -269,8 +260,7 @@ func (s *Scaler) Run(ctx context.Context) (time.Duration, error) {
 			return metrics.PollDuration, nil
 		}
 
-		log.Printf("Scaling decision: need %d instances, have %d actual running instances (desired set to %d)",
-			desired, instanceCount, asg.DesiredCount)
+		log.Printf(" Action: Scale in from %d to %d", asg.DesiredCount, desired)
 		return metrics.PollDuration, s.scaleIn(ctx, desired, asg)
 	}
 
