@@ -690,7 +690,7 @@ func TestScalerRunWaitsToScaleInWhileInstancesArePending(t *testing.T) {
 	}
 }
 
-func TestElasticCIScaleInClearsProtectionOnlyWhenAgentsCannotSelfTerminate(t *testing.T) {
+func TestElasticCIScaleInAssignsDesiredCapacityOwnership(t *testing.T) {
 	const (
 		id0 = "i-000000000000"
 		id1 = "i-000000000001"
@@ -701,20 +701,35 @@ func TestElasticCIScaleInClearsProtectionOnlyWhenAgentsCannotSelfTerminate(t *te
 		sigTermErr      error
 		sigTermErrs     map[string]error
 		wantUnprotected []string
+		wantDesired     int64
+		wantSetCalls    int
 	}{
 		{
-			name:            "successful SIGTERM leaves protection in place",
+			name:            "successful graceful stops own the desired capacity decrement",
 			wantUnprotected: nil,
+			wantDesired:     5,
+			wantSetCalls:    0,
 		},
 		{
-			name:            "failed SIGTERM unprotects those instances so the ASG can terminate them",
+			name:            "scaler decrements desired capacity when every SIGTERM fails",
 			sigTermErr:      errors.New("ssm failed"),
 			wantUnprotected: []string{id0, id1},
+			wantDesired:     3,
+			wantSetCalls:    1,
 		},
 		{
-			name:            "Windows skip unprotects only that instance",
+			name:            "mixed batch waits for successful graceful stop before retrying fallback",
 			sigTermErrs:     map[string]error{id0: ErrWindowsGracefulScaleInNotSupported},
 			wantUnprotected: []string{id0},
+			wantDesired:     5,
+			wantSetCalls:    0,
+		},
+		{
+			name:            "scaler decrements desired capacity for an all-Windows batch",
+			sigTermErr:      ErrWindowsGracefulScaleInNotSupported,
+			wantUnprotected: []string{id0, id1},
+			wantDesired:     3,
+			wantSetCalls:    1,
 		},
 	}
 
@@ -739,8 +754,11 @@ func TestElasticCIScaleInClearsProtectionOnlyWhenAgentsCannotSelfTerminate(t *te
 			if _, err := s.Run(t.Context()); err != nil {
 				t.Fatalf("Run() error = %v", err)
 			}
-			if asg.desiredCapacity != 3 {
-				t.Errorf("desired capacity = %d, want 3", asg.desiredCapacity)
+			if asg.desiredCapacity != tc.wantDesired {
+				t.Errorf("desired capacity = %d, want %d", asg.desiredCapacity, tc.wantDesired)
+			}
+			if asg.setDesiredCapacityCalls != tc.wantSetCalls {
+				t.Errorf("SetDesiredCapacity calls = %d, want %d", asg.setDesiredCapacityCalls, tc.wantSetCalls)
 			}
 			if !slices.Equal(asg.sigTermsSent, []string{id0, id1}) {
 				t.Errorf("SIGTERMs = %v, want [%s %s]", asg.sigTermsSent, id0, id1)
@@ -981,7 +999,7 @@ func TestDanglingInstanceDetection(t *testing.T) {
 			maxSize:                 1,
 			agentsPerInstance:       6,
 			elasticCIMode:           true,
-			expectedDesiredCapacity: 0, // scales in to 0 (idle agents, no jobs)
+			expectedDesiredCapacity: 1, // graceful PostStop owns the decrement to 0
 			expectedDanglingChecks:  0,
 		},
 		// Multiple instances with zero agents — should still trigger dangling check.

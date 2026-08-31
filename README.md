@@ -94,8 +94,8 @@ additionally requires:
 
 * `autoscaling:SetInstanceHealth`
 * `autoscaling:SetInstanceProtection` — Elastic CI Stack instances are launched protected from
-  scale-in; dangling (agentless) instances and scale-in candidates that cannot self-terminate after
-  SIGTERM must have protection cleared before the ASG will terminate or replace them
+  scale-in; dangling (agentless) instances and all-fallback scale-in batches that cannot
+  self-terminate must have protection cleared before the ASG will terminate or replace them
 * `ssm:SendCommand`, `ssm:ListCommandInvocations`, `ssm:DescribeInstanceInformation`
 * `ec2:DescribeInstances`, `ec2:DescribeInstanceStatus`, `ec2:TerminateInstances`
 

@@ -436,8 +436,8 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 
 		// Keep scale-in protection on instances that accepted SIGTERM so the
 		// ASG cannot yank them while jobs drain; they leave via the stack
-		// PostStop terminate-instance call. Unprotect only hosts that cannot
-		// self-terminate, otherwise SetDesiredCapacity is cancelled.
+		// PostStop terminate-instance call, which also decrements desired
+		// capacity. Unprotect only hosts that cannot self-terminate.
 		if len(cannotSelfTerminate) > 0 {
 			log.Printf("[Elastic CI Mode] Clearing scale-in protection for %d instance(s) that cannot self-terminate: %v",
 				len(cannotSelfTerminate), cannotSelfTerminate)
@@ -458,10 +458,23 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 			log.Printf("✅ Successfully sent SIGTERM to %d instance(s)", sigTermSuccess)
 		}
 
-		log.Printf("[Elastic CI Mode] Updating ASG desired capacity to %d", desired)
-		if err := s.setDesiredCapacity(ctx, desired); err != nil {
-			log.Printf("CRITICAL: [Elastic CI Mode] Failed to set desired capacity to %d after sending SIGTERMs: %v. ASG might replace terminated instances.", desired, err)
-
+		if sigTermSuccess == 0 {
+			// No selected instance can self-terminate, so the scaler owns the
+			// desired-capacity decrement for this batch.
+			log.Printf("[Elastic CI Mode] No instances can self-terminate; updating ASG desired capacity to %d", desired)
+			if err := s.setDesiredCapacity(ctx, desired); err != nil {
+				log.Printf("CRITICAL: [Elastic CI Mode] Failed to set desired capacity to %d: %v", desired, err)
+			}
+		} else {
+			// Elastic CI Stack PostStop calls TerminateInstanceInAutoScalingGroup
+			// with ShouldDecrementDesiredCapacity=true. Pre-decrementing here
+			// makes that call fail once desired capacity reaches MinSize.
+			log.Printf("[Elastic CI Mode] Leaving ASG desired capacity at %d; %d gracefully stopping instance(s) will decrement it via PostStop",
+				current.DesiredCount, sigTermSuccess)
+			if len(cannotSelfTerminate) > 0 {
+				log.Printf("[Elastic CI Mode] Deferring %d instance(s) that cannot self-terminate until graceful terminations complete",
+					len(cannotSelfTerminate))
+			}
 		}
 
 		if _, ok := s.autoscaling.(*ASGDriver); ok && current.DesiredCount <= 1 && len(current.InstanceIDs) == 1 {

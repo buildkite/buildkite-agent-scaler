@@ -22,24 +22,32 @@ Job dispatch delays, other issues related to job processing.
 ### Scale-in protection
 
 The Elastic CI Stack launches instances with `NewInstancesProtectedFromScaleIn: true` (CloudFormation
-parameter `InstanceScaleInProtection`, default `true`). Protection stops the ASG from picking its
-own victims after `SetDesiredCapacity` drops: draining agents are supposed to leave via the stack
-`PostStop` `terminate-instance` call, which is not blocked by protection.
+parameter `InstanceScaleInProtection`, default `true`). Draining agents are supposed to leave via
+the stack `PostStop` `terminate-instance` call, which decrements desired capacity and is not blocked
+by protection.
 
-A dead agent cannot self-terminate. The ASG then sits with `ActualCount > DesiredCount`, the scaler
-treats that as "converging" and used to skip further reclaim, and the queue can starve with no
-scale-out.
+Elastic CI Mode previously also lowered desired capacity immediately after sending SIGTERM. This
+gave both the scaler and each instance ownership of the same decrement. Once the scaler had lowered
+desired capacity to `MinSize`, `PostStop` failed with `ValidationError` because another decrement
+would violate the group's minimum. Protected instances then remained `InService` after their agents
+had stopped.
 
-Elastic CI Mode therefore clears protection (`autoscaling:SetInstanceProtection`) only on instances
-that cannot drain themselves:
+Elastic CI Mode now leaves desired capacity unchanged when at least one selected instance accepted
+SIGTERM. Those instances decrement it through `PostStop` after their jobs drain. If none can
+self-terminate (for example, an all-Windows batch or complete SSM failure), the scaler clears their
+protection and owns the desired-capacity decrement. A mixed batch waits for successful graceful
+terminations to complete and retries the remaining instances on a later poll.
+
+The scaler also clears protection (`autoscaling:SetInstanceProtection`) before reclaiming a dangling
+instance whose agent is already stopped:
 
 - Dangling instances (`buildkite-agent` not running), immediately before `SetInstanceHealth`
-- Scale-in candidates that failed SIGTERM or skipped it (Windows), so the ASG can complete the
-  desired-capacity drop for those hosts
+- Scale-in candidates that cannot self-terminate, before the scaler lowers desired capacity for an
+  all-fallback batch
 
-Instances that accepted SIGTERM stay protected. When the ASG is already at the computed desired
-count but still has extra running instances and **zero** agents, the scaler also runs the shorter
-(10-minute uptime) dangling scan instead of returning at the converging guard.
+Instances that accepted SIGTERM stay protected while they drain. When the ASG is already at the
+computed desired count but still has extra running instances and **zero** agents, the scaler also
+runs the shorter (10-minute uptime) dangling scan instead of returning at the converging guard.
 
 
 ```
