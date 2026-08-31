@@ -455,6 +455,7 @@ type asgTestDriver struct {
 	pendingCapacity         int64
 	maxSize                 int64 // If 0, defaults to 100
 	sigTermsSent            []string
+	unprotected             [][]string // InstanceIds passed to each ClearScaleInProtection call
 	setDesiredCapacityCalls int
 	elasticCIMode           bool
 	danglingInstancesFound  int
@@ -498,6 +499,11 @@ func (d *asgTestDriver) SendSIGTERMToAgents(ctx context.Context, instanceID stri
 		d.sigTermsSent = []string{}
 	}
 	d.sigTermsSent = append(d.sigTermsSent, instanceID)
+	return d.err
+}
+
+func (d *asgTestDriver) ClearScaleInProtection(ctx context.Context, instanceIDs []string) error {
+	d.unprotected = append(d.unprotected, instanceIDs)
 	return d.err
 }
 

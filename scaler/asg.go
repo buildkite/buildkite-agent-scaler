@@ -158,7 +158,75 @@ type ssmCheckAPI interface {
 // asgHealthAPI is the subset of autoscaling.Client used by checkAndMarkUnhealthy,
 // extracted so tests can stub it.
 type asgHealthAPI interface {
+	asgProtectionAPI
 	SetInstanceHealth(ctx context.Context, params *autoscaling.SetInstanceHealthInput, optFns ...func(*autoscaling.Options)) (*autoscaling.SetInstanceHealthOutput, error)
+}
+
+// asgProtectionAPI is the subset of autoscaling.Client used by
+// clearScaleInProtection, extracted so tests can stub it.
+type asgProtectionAPI interface {
+	SetInstanceProtection(ctx context.Context, params *autoscaling.SetInstanceProtectionInput, optFns ...func(*autoscaling.Options)) (*autoscaling.SetInstanceProtectionOutput, error)
+}
+
+// setInstanceProtectionMaxInstanceIDs is the per-call InstanceIds limit for
+// SetInstanceProtection.
+// https://docs.aws.amazon.com/autoscaling/ec2/APIReference/API_SetInstanceProtection.html
+const setInstanceProtectionMaxInstanceIDs = 50
+
+// clearScaleInProtection removes scale-in protection from the given instances so
+// the ASG is allowed to terminate or replace them. The Elastic CI Stack launches
+// instances with NewInstancesProtectedFromScaleIn=true, which makes the ASG
+// cancel scale-in activities and defer replacement of instances marked unhealthy
+// while they remain protected.
+//
+// SetInstanceProtection rejects the whole batch if any one instance has left
+// InService, so a failed batch is retried one instance at a time to keep a
+// single stale ID from blocking the rest.
+func clearScaleInProtection(ctx context.Context, asgSvc asgProtectionAPI, asgName string, instanceIDs []string) error {
+	if len(instanceIDs) == 0 {
+		return nil
+	}
+
+	unprotect := func(ids []string) error {
+		_, err := asgSvc.SetInstanceProtection(ctx, &autoscaling.SetInstanceProtectionInput{
+			AutoScalingGroupName: aws.String(asgName),
+			InstanceIds:          ids,
+			ProtectedFromScaleIn: aws.Bool(false),
+		})
+		return err
+	}
+
+	var errs []error
+	for batch := range slices.Chunk(instanceIDs, setInstanceProtectionMaxInstanceIDs) {
+		err := unprotect(batch)
+		if err == nil {
+			continue
+		}
+		if len(batch) == 1 {
+			errs = append(errs, fmt.Errorf("SetInstanceProtection failed for %s: %w", batch[0], err))
+			continue
+		}
+
+		log.Printf("[Elastic CI Mode] SetInstanceProtection failed for %d instance(s) (%v); retrying individually", len(batch), err)
+		for _, instanceID := range batch {
+			if err := unprotect([]string{instanceID}); err != nil {
+				errs = append(errs, fmt.Errorf("SetInstanceProtection failed for %s: %w", instanceID, err))
+			}
+		}
+	}
+
+	return errors.Join(errs...)
+}
+
+// ClearScaleInProtection removes scale-in protection from the given instances so
+// the ASG can terminate or replace them.
+func (a *ASGDriver) ClearScaleInProtection(ctx context.Context, instanceIDs []string) error {
+	if len(instanceIDs) == 0 {
+		return nil
+	}
+
+	log.Printf("[Elastic CI Mode] Clearing scale-in protection for %d instance(s): %v", len(instanceIDs), instanceIDs)
+	return clearScaleInProtection(ctx, autoscaling.NewFromConfig(a.Cfg), a.Name, instanceIDs)
 }
 
 // filterOnlineSSMInstances returns the subset of instanceIDs whose SSM agent
@@ -337,8 +405,9 @@ func (a *ASGDriver) checkAndMarkUnhealthy(
 
 	// Healthy and draining instances are the common, non-actionable
 	// cases; collect them and log one summary line each instead of one line
-	// per instance.
-	var healthy, draining []string
+	// per instance. Dangling instances are collected so their scale-in
+	// protection can be cleared in one call before they are marked unhealthy.
+	var healthy, draining, dangling []string
 
 	for _, instanceID := range onlineIDs {
 		inv, ok := results[instanceID]
@@ -362,22 +431,34 @@ func (a *ASGDriver) checkAndMarkUnhealthy(
 		switch {
 		case output == "RUNNING":
 			healthy = append(healthy, instanceID)
-			continue
 		case output == "DRAINING" || strings.HasPrefix(output, "DRAINING:"):
 			draining = append(draining, instanceID)
-			continue
 		case output == "NOT_RUNNING" || strings.HasPrefix(output, "NOT_RUNNING:"):
 			// A successful probe found no agent process, so there are no jobs
 			// to drain before the ASG replaces this instance.
+			log.Printf("[Elastic CI Mode] 🧟 Found dangling instance %s; output: %s", instanceID, output)
+			dangling = append(dangling, instanceID)
 		default:
 			log.Printf("[Elastic CI Mode] Invocation for %s returned inconclusive output %q; skipping", instanceID, output)
 			if firstError == nil {
 				firstError = fmt.Errorf("invocation for %s returned inconclusive output %q", instanceID, output)
 			}
-			continue
 		}
+	}
 
-		log.Printf("[Elastic CI Mode] 🧟 Found dangling instance %s; output: %s", instanceID, output)
+	// The ASG defers replacing an unhealthy instance while it is protected from
+	// scale-in, which is the Elastic CI Stack default, so drop protection first.
+	// A failure here is not fatal: unprotected instances are still marked below.
+	if len(dangling) > 0 {
+		if err := clearScaleInProtection(ctx, asgSvc, a.Name, dangling); err != nil {
+			log.Printf("[Elastic CI Mode] Failed to clear scale-in protection before marking instances unhealthy: %v", err)
+			if firstError == nil {
+				firstError = err
+			}
+		}
+	}
+
+	for _, instanceID := range dangling {
 		if _, err := asgSvc.SetInstanceHealth(ctx, &autoscaling.SetInstanceHealthInput{
 			InstanceId:   aws.String(instanceID),
 			HealthStatus: aws.String("Unhealthy"),
@@ -592,7 +673,8 @@ sudo systemctl stop buildkite-agent.service || sudo /opt/buildkite-agent/bin/bui
 // - This function: agent service is stopped, no jobs can be running -> safe to mark as unhealthy
 //
 // Marking instances unhealthy (via autoscaling:SetInstanceHealth) causes the ASG to terminate
-// and replace them according to its configured policies.
+// and replace them according to its configured policies. Scale-in protection is cleared first
+// (via autoscaling:SetInstanceProtection), because the ASG will not replace a protected instance.
 func (a *ASGDriver) CleanupDanglingInstances(ctx context.Context, minimumInstanceUptime time.Duration, maxDanglingInstancesToCheck int) error {
 	ec2Client := ec2.NewFromConfig(a.Cfg)
 	ssmClient := ssm.NewFromConfig(a.Cfg)
@@ -741,6 +823,11 @@ func (a *dryRunASG) SetDesiredCapacity(ctx context.Context, count int64) error {
 
 func (a *dryRunASG) SendSIGTERMToAgents(ctx context.Context, instanceID string) error {
 	log.Printf("[DryRun] Would send SIGTERM to instance %s", instanceID)
+	return nil
+}
+
+func (a *dryRunASG) ClearScaleInProtection(ctx context.Context, instanceIDs []string) error {
+	log.Printf("[DryRun] Would clear scale-in protection for instances %v", instanceIDs)
 	return nil
 }
 

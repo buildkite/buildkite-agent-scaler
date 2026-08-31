@@ -49,6 +49,7 @@ type Scaler struct {
 		Describe(ctx context.Context) (AutoscaleGroupDetails, error)
 		SetDesiredCapacity(ctx context.Context, count int64) error
 		SendSIGTERMToAgents(ctx context.Context, instanceID string) error
+		ClearScaleInProtection(ctx context.Context, instanceIDs []string) error
 		CleanupDanglingInstances(ctx context.Context, minimumInstanceUptime time.Duration, maxDanglingInstancesToCheck int) error
 	}
 	bk interface {
@@ -460,6 +461,15 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 		}
 
 		log.Printf("[Elastic CI Mode] Attempting graceful termination for %d instance(s): %v", len(instancesForTermination), instancesForTermination)
+
+		// The Elastic CI Stack launches instances with scale-in protection
+		// enabled by default, and the ASG cancels a scale-in activity when
+		// every candidate instance is protected. Agents that self-terminate
+		// after SIGTERM are unaffected, but an instance whose agent is already
+		// dead can only leave the group if the ASG is allowed to terminate it.
+		if err := s.autoscaling.ClearScaleInProtection(ctx, instancesForTermination); err != nil {
+			log.Printf("⚠️  [Elastic CI Mode] Failed to clear scale-in protection: %v. ASG may cancel the scale-in activity.", err)
+		}
 
 		sigTermErrors := 0
 		sigTermSkipped := 0
