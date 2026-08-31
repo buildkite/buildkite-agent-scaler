@@ -454,13 +454,11 @@ type asgTestDriver struct {
 	err                     error
 	sigTermErr              error            // returned from SendSIGTERMToAgents unless overridden per ID
 	sigTermErrs             map[string]error // per-instance SIGTERM result
-	unprotectErr            error            // returned from ClearScaleInProtection
 	desiredCapacity         int64
 	actualCapacity          int64 // If 0, will default to desiredCapacity
 	pendingCapacity         int64
 	maxSize                 int64 // If 0, defaults to 100
 	sigTermsSent            []string
-	unprotected             [][]string // InstanceIds passed to each ClearScaleInProtection call
 	setDesiredCapacityCalls int
 	elasticCIMode           bool
 	danglingInstancesFound  int
@@ -505,11 +503,6 @@ func (d *asgTestDriver) SendSIGTERMToAgents(ctx context.Context, instanceID stri
 		return err
 	}
 	return d.sigTermErr
-}
-
-func (d *asgTestDriver) ClearScaleInProtection(ctx context.Context, instanceIDs []string) error {
-	d.unprotected = append(d.unprotected, instanceIDs)
-	return d.unprotectErr
 }
 
 func (d *asgTestDriver) CleanupDanglingInstances(ctx context.Context, minimumInstanceUptime time.Duration, maxDanglingInstancesToCheck int) error {
@@ -663,48 +656,34 @@ func TestElasticCIScaleInAssignsDesiredCapacityOwnership(t *testing.T) {
 	)
 
 	testCases := []struct {
-		name            string
-		sigTermErr      error
-		sigTermErrs     map[string]error
-		unprotectErr    error
-		wantUnprotected []string
-		wantDesired     int64
-		wantSetCalls    int
+		name         string
+		sigTermErr   error
+		sigTermErrs  map[string]error
+		wantDesired  int64
+		wantSetCalls int
 	}{
 		{
-			name:            "successful graceful stops own the desired capacity decrement",
-			wantUnprotected: nil,
-			wantDesired:     5,
-			wantSetCalls:    0,
+			name:         "successful graceful stops own the desired capacity decrement",
+			wantDesired:  5,
+			wantSetCalls: 0,
 		},
 		{
-			name:            "scaler decrements desired capacity when every SIGTERM fails",
-			sigTermErr:      errors.New("ssm failed"),
-			wantUnprotected: []string{id0, id1},
-			wantDesired:     3,
-			wantSetCalls:    1,
+			name:         "scaler decrements desired capacity when every SIGTERM fails",
+			sigTermErr:   errors.New("ssm failed"),
+			wantDesired:  3,
+			wantSetCalls: 1,
 		},
 		{
-			name:            "mixed batch waits for successful graceful stop before retrying fallback",
-			sigTermErrs:     map[string]error{id0: ErrWindowsGracefulScaleInNotSupported},
-			wantUnprotected: []string{id0},
-			wantDesired:     5,
-			wantSetCalls:    0,
+			name:         "mixed batch waits for successful graceful stop before retrying fallback",
+			sigTermErrs:  map[string]error{id0: ErrWindowsGracefulScaleInNotSupported},
+			wantDesired:  5,
+			wantSetCalls: 0,
 		},
 		{
-			name:            "scaler decrements desired capacity for an all-Windows batch",
-			sigTermErr:      ErrWindowsGracefulScaleInNotSupported,
-			wantUnprotected: []string{id0, id1},
-			wantDesired:     3,
-			wantSetCalls:    1,
-		},
-		{
-			name:            "scaler does not lower desired capacity when unprotect fails",
-			sigTermErr:      errors.New("ssm failed"),
-			unprotectErr:    errors.New("AccessDenied"),
-			wantUnprotected: []string{id0, id1},
-			wantDesired:     5,
-			wantSetCalls:    0,
+			name:         "scaler decrements desired capacity for an all-Windows batch",
+			sigTermErr:   ErrWindowsGracefulScaleInNotSupported,
+			wantDesired:  3,
+			wantSetCalls: 1,
 		},
 	}
 
@@ -715,7 +694,6 @@ func TestElasticCIScaleInAssignsDesiredCapacityOwnership(t *testing.T) {
 				actualCapacity:  5,
 				sigTermErr:      tc.sigTermErr,
 				sigTermErrs:     tc.sigTermErrs,
-				unprotectErr:    tc.unprotectErr,
 			}
 			s := Scaler{
 				autoscaling: asg,
@@ -738,13 +716,6 @@ func TestElasticCIScaleInAssignsDesiredCapacityOwnership(t *testing.T) {
 			}
 			if !slices.Equal(asg.sigTermsSent, []string{id0, id1}) {
 				t.Errorf("SIGTERMs = %v, want [%s %s]", asg.sigTermsSent, id0, id1)
-			}
-			var got []string
-			for _, batch := range asg.unprotected {
-				got = append(got, batch...)
-			}
-			if !slices.Equal(got, tc.wantUnprotected) {
-				t.Errorf("unprotected = %v, want %v", got, tc.wantUnprotected)
 			}
 		})
 	}

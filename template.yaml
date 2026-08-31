@@ -318,13 +318,6 @@ Resources:
                     StringEquals:
                       "ec2:ResourceTag/Role": "buildkite-agent"
                       "ec2:ResourceTag/aws:autoscaling:groupName": !Ref AgentAutoScaleGroup
-                # Dangling and non-self-terminating instances launched with
-                # NewInstancesProtectedFromScaleIn can only be reclaimed once
-                # their protection is cleared.
-                - Effect: Allow
-                  Action:
-                    - autoscaling:SetInstanceProtection
-                  Resource: !Sub "arn:aws:autoscaling:${AWS::Region}:${AWS::AccountId}:autoScalingGroup:*:autoScalingGroupName/${AgentAutoScaleGroup}"
           - !Ref 'AWS::NoValue'
 
   AutoscalingFunction:

@@ -89,15 +89,6 @@ the following IAM permissions:
 * `autoscaling:DescribeScalingActivities`
 * `autoscaling:SetDesiredCapacity`
 
-With `ELASTIC_CI_MODE` enabled, the lambda reclaims instances whose agent has stopped, which
-additionally requires:
-
-* `autoscaling:SetInstanceHealth`
-* `autoscaling:SetInstanceProtection` — required before the ASG will terminate or replace a
-  protected Elastic CI instance (dangling reclaim, and scale-in batches that cannot self-terminate)
-* `ssm:SendCommand`, `ssm:ListCommandInvocations`, `ssm:DescribeInstanceInformation`
-* `ec2:DescribeInstances`, `ec2:DescribeInstanceStatus`, `ec2:TerminateInstances`
-
 Its handler is `bootstrap`, it uses a `provided.al2023` runtime and requires the following env vars:
 
 * `BUILDKITE_AGENT_TOKEN` or `BUILDKITE_AGENT_TOKEN_SSM_KEY`

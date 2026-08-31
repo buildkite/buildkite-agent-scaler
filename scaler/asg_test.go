@@ -495,38 +495,18 @@ func (s *stubSSMClient) SendCommand(ctx context.Context, params *ssm.SendCommand
 	return &ssm.SendCommandOutput{Command: &ssmTypes.Command{CommandId: aws.String(id)}}, nil
 }
 
-// stubASGClient implements asgHealthAPI, recording SetInstanceHealth and
-// SetInstanceProtection calls. calls records every call in order so tests can
-// assert protection is cleared before an instance is marked unhealthy.
+// stubASGClient implements asgHealthAPI, recording SetInstanceHealth calls.
 type stubASGClient struct {
-	setHealthErr     error
-	setProtectionErr func(instanceIDs []string) error
-	markedUnhealthy  []string
-	unprotected      [][]string
-	calls            []string
+	setHealthErr    error
+	markedUnhealthy []string
 }
 
 func (s *stubASGClient) SetInstanceHealth(ctx context.Context, params *autoscaling.SetInstanceHealthInput, _ ...func(*autoscaling.Options)) (*autoscaling.SetInstanceHealthOutput, error) {
-	s.calls = append(s.calls, "SetInstanceHealth:"+aws.ToString(params.InstanceId))
 	if s.setHealthErr != nil {
 		return nil, s.setHealthErr
 	}
 	s.markedUnhealthy = append(s.markedUnhealthy, aws.ToString(params.InstanceId))
 	return &autoscaling.SetInstanceHealthOutput{}, nil
-}
-
-func (s *stubASGClient) SetInstanceProtection(ctx context.Context, params *autoscaling.SetInstanceProtectionInput, _ ...func(*autoscaling.Options)) (*autoscaling.SetInstanceProtectionOutput, error) {
-	s.calls = append(s.calls, "SetInstanceProtection:"+strings.Join(params.InstanceIds, ","))
-	if s.setProtectionErr != nil {
-		if err := s.setProtectionErr(params.InstanceIds); err != nil {
-			return nil, err
-		}
-	}
-	if aws.ToBool(params.ProtectedFromScaleIn) {
-		return nil, fmt.Errorf("unexpected ProtectedFromScaleIn=true for %v", params.InstanceIds)
-	}
-	s.unprotected = append(s.unprotected, params.InstanceIds)
-	return &autoscaling.SetInstanceProtectionOutput{}, nil
 }
 
 func (s *stubSSMClient) ListCommandInvocations(ctx context.Context, params *ssm.ListCommandInvocationsInput, _ ...func(*ssm.Options)) (*ssm.ListCommandInvocationsOutput, error) {
@@ -689,34 +669,6 @@ func TestCheckAndMarkUnhealthy(t *testing.T) {
 		if !slices.Equal(asgStub.markedUnhealthy, []string{"i-dangling"}) {
 			t.Errorf("marked unhealthy = %v, want [i-dangling]", asgStub.markedUnhealthy)
 		}
-		// The ASG will not replace a protected instance, so protection must be
-		// cleared for the dangling instance only, before it is marked unhealthy.
-		wantCalls := []string{"SetInstanceProtection:i-dangling", "SetInstanceHealth:i-dangling"}
-		if !slices.Equal(asgStub.calls, wantCalls) {
-			t.Errorf("calls = %v, want %v", asgStub.calls, wantCalls)
-		}
-	})
-
-	t.Run("still marks unhealthy when clearing protection fails", func(t *testing.T) {
-		ssmStub := &stubSSMClient{
-			describeOut: online("i-dangling"),
-			listResponses: []stubListResponse{{out: &ssm.ListCommandInvocationsOutput{
-				CommandInvocations: []ssmTypes.CommandInvocation{
-					invOut("i-dangling", ssmTypes.CommandInvocationStatusSuccess, "NOT_RUNNING: dead"),
-				},
-			}}},
-		}
-		asgStub := &stubASGClient{
-			setProtectionErr: func([]string) error { return errors.New("AccessDenied") },
-		}
-
-		result, err := driver.checkAndMarkUnhealthy(ctx, []string{"i-dangling"}, ssmStub, asgStub, "linux")
-		if err == nil || !strings.Contains(err.Error(), "AccessDenied") {
-			t.Fatalf("error = %v, want an AccessDenied error", err)
-		}
-		if want := (danglingCheckResult{markedUnhealthy: 1}); result != want {
-			t.Errorf("result = %+v, want %+v", result, want)
-		}
 	})
 
 	t.Run("treats failed or ambiguous results as inconclusive", func(t *testing.T) {
@@ -794,62 +746,6 @@ func TestCheckAndMarkUnhealthy(t *testing.T) {
 		}
 		if result.healthy != 51 {
 			t.Errorf("healthy = %d, want 51", result.healthy)
-		}
-	})
-}
-
-func TestClearScaleInProtection(t *testing.T) {
-	ctx := context.Background()
-	ids := func(n int) []string {
-		out := make([]string, n)
-		for i := range out {
-			out[i] = fmt.Sprintf("i-%03d", i)
-		}
-		return out
-	}
-
-	t.Run("no instances makes no call", func(t *testing.T) {
-		stub := &stubASGClient{}
-		if err := clearScaleInProtection(ctx, stub, "asg", nil); err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if len(stub.calls) != 0 {
-			t.Errorf("calls = %v, want none", stub.calls)
-		}
-	})
-
-	t.Run("chunks over the 50-instance limit", func(t *testing.T) {
-		stub := &stubASGClient{}
-		if err := clearScaleInProtection(ctx, stub, "asg", ids(51)); err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		gotSizes := make([]int, len(stub.unprotected))
-		for i, b := range stub.unprotected {
-			gotSizes[i] = len(b)
-		}
-		if !slices.Equal(gotSizes, []int{50, 1}) {
-			t.Errorf("batch sizes = %v, want [50 1]", gotSizes)
-		}
-	})
-
-	// SetInstanceProtection rejects the whole batch when one instance has left
-	// InService, so the remaining instances must still be unprotected.
-	t.Run("retries individually when a batch fails", func(t *testing.T) {
-		stub := &stubASGClient{
-			setProtectionErr: func(instanceIDs []string) error {
-				if slices.Contains(instanceIDs, "i-gone") {
-					return errors.New("ValidationError: instance i-gone is not InService")
-				}
-				return nil
-			},
-		}
-
-		err := clearScaleInProtection(ctx, stub, "asg", []string{"i-a", "i-gone", "i-b"})
-		if err == nil || !strings.Contains(err.Error(), "i-gone") {
-			t.Fatalf("error = %v, want an error naming i-gone", err)
-		}
-		if !slices.Equal(slices.Concat(stub.unprotected...), []string{"i-a", "i-b"}) {
-			t.Errorf("unprotected = %v, want [[i-a] [i-b]]", stub.unprotected)
 		}
 	})
 }

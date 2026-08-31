@@ -49,7 +49,6 @@ type Scaler struct {
 		Describe(ctx context.Context) (AutoscaleGroupDetails, error)
 		SetDesiredCapacity(ctx context.Context, count int64) error
 		SendSIGTERMToAgents(ctx context.Context, instanceID string) error
-		ClearScaleInProtection(ctx context.Context, instanceIDs []string) error
 		CleanupDanglingInstances(ctx context.Context, minimumInstanceUptime time.Duration, maxDanglingInstancesToCheck int) error
 	}
 	bk interface {
@@ -420,20 +419,6 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 			}
 		}
 
-		// Keep scale-in protection on instances that accepted SIGTERM so the
-		// ASG cannot yank them while jobs drain; they leave via the stack
-		// PostStop terminate-instance call, which also decrements desired
-		// capacity. Unprotect only hosts that cannot self-terminate.
-		var unprotectErr error
-		if len(cannotSelfTerminate) > 0 {
-			log.Printf("[Elastic CI Mode] Clearing scale-in protection for %d instance(s) that cannot self-terminate: %v",
-				len(cannotSelfTerminate), cannotSelfTerminate)
-			unprotectErr = s.autoscaling.ClearScaleInProtection(ctx, cannotSelfTerminate)
-			if unprotectErr != nil {
-				log.Printf("⚠️  [Elastic CI Mode] Failed to clear scale-in protection: %v", unprotectErr)
-			}
-		}
-
 		if sigTermErrors > 0 {
 			log.Printf("⚠️  Failed to send SIGTERM to %d/%d instances",
 				sigTermErrors, len(instancesForTermination))
@@ -448,16 +433,10 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 
 		if sigTermSuccess == 0 {
 			// No selected instance can self-terminate, so the scaler owns the
-			// desired-capacity decrement for this batch. Do not lower desired
-			// capacity while instances are still protected: the ASG cannot
-			// terminate them, and the group would stick above desired.
-			if unprotectErr != nil {
-				log.Printf("⚠️  [Elastic CI Mode] Skipping desired-capacity update; instances remain protected")
-			} else {
-				log.Printf("[Elastic CI Mode] No instances can self-terminate; updating ASG desired capacity to %d", desired)
-				if err := s.setDesiredCapacity(ctx, desired); err != nil {
-					log.Printf("CRITICAL: [Elastic CI Mode] Failed to set desired capacity to %d: %v", desired, err)
-				}
+			// desired-capacity decrement for this batch.
+			log.Printf("[Elastic CI Mode] No instances can self-terminate; updating ASG desired capacity to %d", desired)
+			if err := s.setDesiredCapacity(ctx, desired); err != nil {
+				log.Printf("CRITICAL: [Elastic CI Mode] Failed to set desired capacity to %d: %v", desired, err)
 			}
 		} else {
 			// Elastic CI Stack PostStop calls TerminateInstanceInAutoScalingGroup

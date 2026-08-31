@@ -19,14 +19,9 @@ Job dispatch delays, other issues related to job processing.
 - Adds support for the [Elastic CI Stack's](https://github.com/buildkite/elastic-ci-stack-for-aws) `/usr/local/bin/stop-agent-gracefully` script
 - More predictable scale-in behavior with `MinimumInstanceUptime` and `MaxDanglingInstancesToCheck`
 
-### Scale-in protection
-
-Elastic CI Stack instances launch with scale-in protection. Successful graceful stops stay
-protected and decrement desired capacity themselves via stack `PostStop`
-(`TerminateInstanceInAutoScalingGroup`). The scaler only lowers desired capacity when no selected
-instance can self-terminate, and only after clearing protection. Dangling reclaim also clears
-protection before `SetInstanceHealth`, because the ASG will not replace a protected instance.
-
+Successful graceful stops leave ASG desired capacity unchanged. Those instances decrement it
+themselves via stack `PostStop` (`TerminateInstanceInAutoScalingGroup`). The scaler only calls
+`SetDesiredCapacity` when none of the selected instances accepted SIGTERM.
 
 ```
                          ┌────────────────────────┐
