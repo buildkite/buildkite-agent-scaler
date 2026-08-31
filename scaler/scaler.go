@@ -2,7 +2,6 @@ package scaler
 
 import (
 	"context"
-	"errors"
 	"log"
 	"math"
 	"sort"
@@ -48,7 +47,7 @@ type Scaler struct {
 	autoscaling interface {
 		Describe(ctx context.Context) (AutoscaleGroupDetails, error)
 		SetDesiredCapacity(ctx context.Context, count int64) error
-		SendSIGTERMToAgents(ctx context.Context, instanceID string) error
+		SetInstanceHealth(ctx context.Context, instanceID string) error
 		CleanupDanglingInstances(ctx context.Context, minimumInstanceUptime time.Duration, maxDanglingInstancesToCheck int) error
 	}
 	bk interface {
@@ -241,6 +240,14 @@ func (s *Scaler) Run(ctx context.Context) (time.Duration, error) {
 		instanceCount = asg.DesiredCount
 	}
 	if asg.DesiredCount == desired && instanceCount != desired {
+		// Elastic CI instances are scale-in protected, so extras can remain InService
+		// after desired is already correct. Keep marking them unhealthy so the ASG
+		// can terminate them. Converging up (actual < desired) still waits.
+		if s.elasticCIMode && instanceCount > desired && asg.Pending == 0 {
+			log.Printf("[Elastic CI Mode] Desired capacity already %d but %d instances still running; marking extras unhealthy",
+				desired, instanceCount)
+			return metrics.PollDuration, s.scaleIn(ctx, desired, asg)
+		}
 		log.Printf("ASG is converging to desired capacity %d (currently %d running instances)", desired, instanceCount)
 		return metrics.PollDuration, nil
 	}
@@ -298,8 +305,16 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 		log.Printf("ℹ️ [Elastic CI Mode] Ignoring DISABLE_SCALE_IN=true since ElasticCIMode has safer scaling mechanisms")
 	}
 
+	instanceCount := current.ActualCount
+	if instanceCount == 0 {
+		instanceCount = current.DesiredCount
+	}
+	// Desired is already correct but protected extras are still InService.
+	// Skip cooldowns so we can keep marking them unhealthy.
+	markOnly := s.elasticCIMode && current.DesiredCount == desired && instanceCount > desired
+
 	// If we've scaled down before, check if a cooldown should be enforced
-	if !s.scaleInParams.LastEvent.IsZero() {
+	if !markOnly && !s.scaleInParams.LastEvent.IsZero() {
 		lastScaleInEvent := s.scaleInParams.LastEvent
 		lastScaleOutEvent := s.scaleOutParams.LastEvent
 		lastEvent := lastScaleInEvent
@@ -315,7 +330,7 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 	}
 
 	// Special Elastic CI Stack mode with additional safety checks
-	if s.elasticCIMode {
+	if !markOnly && s.elasticCIMode {
 		// Check for recent ASG scale-down activity to avoid scaling down too quickly
 		// Only do this check if we have access to the ASG activities
 		if driver, ok := s.autoscaling.(*ASGDriver); ok {
@@ -357,7 +372,7 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 	change := desired - current.DesiredCount
 
 	// Apply scaling factor if one is given
-	if factor := s.scaleInParams.Factor; factor != 0 {
+	if factor := s.scaleInParams.Factor; !markOnly && factor != 0 {
 		// Use Floor to avoid never reaching upper bound
 		factoredChange := int64(math.Floor(float64(change) * factor))
 
@@ -390,64 +405,53 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 
 	log.Printf("Scaling IN 📉 to %d instances (currently %d)", desired, current.DesiredCount)
 
-	instancesToTerminate := current.DesiredCount - desired
+	instancesToTerminate := instanceCount - desired
+	if instancesToTerminate < 0 {
+		instancesToTerminate = 0
+	}
 
-	// In Elastic CI Mode, use graceful termination if we have instance IDs
+	// Elastic CI instances are launched with scale-in protection, so lowering
+	// desired capacity alone will not remove them. Marking them Unhealthy
+	// bypasses protection. Desired must be set first: Unhealthy while desired
+	// is still high makes the ASG launch replacements.
+	//
+	// Do not systemctl-stop the agent from here. That runs ExecStopPost
+	// (terminate-instance --should-decrement-desired-capacity) and double-decrements.
+	// The stack lifecycle hook (stop-agent-gracefully) drains jobs when the ASG
+	// terminates the unhealthy instances.
 	if s.elasticCIMode && len(current.InstanceIDs) > 0 && instancesToTerminate > 0 {
-		log.Printf("[Elastic CI Mode] Using graceful termination for %d instances", instancesToTerminate)
+		log.Printf("[Elastic CI Mode] Scaling in by marking %d instance(s) unhealthy after setting desired capacity to %d",
+			instancesToTerminate, desired)
 
-		instancesForTermination := s.instancesForGracefulScaleIn(ctx, current, instancesToTerminate)
+		instancesForTermination := s.instancesForScaleIn(ctx, current, instancesToTerminate)
 
-		log.Printf("[Elastic CI Mode] Attempting graceful termination for %d instance(s): %v", len(instancesForTermination), instancesForTermination)
+		if !markOnly {
+			log.Printf("[Elastic CI Mode] Setting desired capacity to %d before marking %d instance(s) unhealthy: %v",
+				desired, len(instancesForTermination), instancesForTermination)
 
-		sigTermErrors := 0
-		sigTermSkipped := 0
-		sigTermSuccess := 0
-		var cannotSelfTerminate []string
-		for _, instanceID := range instancesForTermination {
-			if err := s.autoscaling.SendSIGTERMToAgents(ctx, instanceID); err != nil {
-				cannotSelfTerminate = append(cannotSelfTerminate, instanceID)
-				if errors.Is(err, ErrWindowsGracefulScaleInNotSupported) {
-					sigTermSkipped++
-				} else {
-					log.Printf("⚠️  Failed to send SIGTERM to instance %s: %v", instanceID, err)
-					sigTermErrors++
-				}
-			} else {
-				log.Printf("✅ Successfully sent SIGTERM to instance %s", instanceID)
-				sigTermSuccess++
-			}
-		}
-
-		if sigTermErrors > 0 {
-			log.Printf("⚠️  Failed to send SIGTERM to %d/%d instances",
-				sigTermErrors, len(instancesForTermination))
-		}
-		if sigTermSkipped > 0 {
-			log.Printf("ℹ️  Skipped %d Windows instance(s) - graceful scale-in not supported, will be terminated directly by ASG",
-				sigTermSkipped)
-		}
-		if sigTermSuccess > 0 {
-			log.Printf("✅ Successfully sent SIGTERM to %d instance(s)", sigTermSuccess)
-		}
-
-		if sigTermSuccess == 0 {
-			// No selected instance can self-terminate, so the scaler owns the
-			// desired-capacity decrement for this batch.
-			log.Printf("[Elastic CI Mode] No instances can self-terminate; updating ASG desired capacity to %d", desired)
 			if err := s.setDesiredCapacity(ctx, desired); err != nil {
-				log.Printf("CRITICAL: [Elastic CI Mode] Failed to set desired capacity to %d: %v", desired, err)
+				log.Printf("CRITICAL: [Elastic CI Mode] Failed to set desired capacity to %d; not marking instances unhealthy (that would launch replacements): %v",
+					desired, err)
+				return err
 			}
 		} else {
-			// Elastic CI Stack PostStop calls TerminateInstanceInAutoScalingGroup
-			// with ShouldDecrementDesiredCapacity=true. Pre-decrementing here
-			// makes that call fail once desired capacity reaches MinSize.
-			log.Printf("[Elastic CI Mode] Leaving ASG desired capacity at %d; %d gracefully stopping instance(s) will decrement it via PostStop",
-				current.DesiredCount, sigTermSuccess)
-			if len(cannotSelfTerminate) > 0 {
-				log.Printf("[Elastic CI Mode] Deferring %d instance(s) that cannot self-terminate until graceful terminations complete",
-					len(cannotSelfTerminate))
+			log.Printf("[Elastic CI Mode] Desired capacity already %d; marking %d extra instance(s) unhealthy: %v",
+				desired, len(instancesForTermination), instancesForTermination)
+		}
+
+		marked := 0
+		for _, instanceID := range instancesForTermination {
+			if err := s.autoscaling.SetInstanceHealth(ctx, instanceID); err != nil {
+				log.Printf("⚠️  Failed to mark instance %s unhealthy: %v", instanceID, err)
+				continue
 			}
+			log.Printf("[Elastic CI Mode] Marked instance %s unhealthy", instanceID)
+			marked++
+		}
+		if marked < len(instancesForTermination) {
+			log.Printf("⚠️  Marked %d/%d instance(s) unhealthy", marked, len(instancesForTermination))
+		} else {
+			log.Printf("✅ Marked %d instance(s) unhealthy; ASG will terminate them to the new desired capacity", marked)
 		}
 
 		if _, ok := s.autoscaling.(*ASGDriver); ok && current.DesiredCount <= 1 && len(current.InstanceIDs) == 1 {
@@ -510,10 +514,10 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 	}
 }
 
-// instancesForGracefulScaleIn picks the oldest current.InstanceIDs, up to
+// instancesForScaleIn picks the oldest current.InstanceIDs, up to
 // maxToTerminate. Launch-time sorting needs EC2 DescribeInstances, so tests
 // using a fake ASG driver get a stable prefix of the ID list instead.
-func (s *Scaler) instancesForGracefulScaleIn(ctx context.Context, current AutoscaleGroupDetails, maxToTerminate int64) []string {
+func (s *Scaler) instancesForScaleIn(ctx context.Context, current AutoscaleGroupDetails, maxToTerminate int64) []string {
 	fallback := func() []string {
 		ids := current.InstanceIDs
 		if int64(len(ids)) > maxToTerminate {

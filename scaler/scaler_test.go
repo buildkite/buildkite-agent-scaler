@@ -452,13 +452,13 @@ func (d *buildkiteTestDriver) GetAgentMetrics(ctx context.Context) (buildkite.Ag
 
 type asgTestDriver struct {
 	err                     error
-	sigTermErr              error            // returned from SendSIGTERMToAgents unless overridden per ID
-	sigTermErrs             map[string]error // per-instance SIGTERM result
+	setDesiredErr           error // returned from SetDesiredCapacity without failing Describe
+	setInstanceHealthErr    error
 	desiredCapacity         int64
 	actualCapacity          int64 // If 0, will default to desiredCapacity
 	pendingCapacity         int64
 	maxSize                 int64 // If 0, defaults to 100
-	sigTermsSent            []string
+	markedUnhealthy         []string
 	setDesiredCapacityCalls int
 	elasticCIMode           bool
 	danglingInstancesFound  int
@@ -466,14 +466,19 @@ type asgTestDriver struct {
 
 func (d *asgTestDriver) Describe(ctx context.Context) (AutoscaleGroupDetails, error) {
 	d.elasticCIMode = false
-	instanceIDs := make([]string, d.desiredCapacity)
-	for i := int64(0); i < d.desiredCapacity; i++ {
-		instanceIDs[i] = fmt.Sprintf("i-%012d", i)
-	}
 
 	actualCount := d.actualCapacity
 	if actualCount == 0 {
 		actualCount = d.desiredCapacity
+	}
+
+	idCount := actualCount
+	if d.desiredCapacity > idCount {
+		idCount = d.desiredCapacity
+	}
+	instanceIDs := make([]string, idCount)
+	for i := int64(0); i < idCount; i++ {
+		instanceIDs[i] = fmt.Sprintf("i-%012d", i)
 	}
 
 	maxSize := d.maxSize
@@ -493,16 +498,19 @@ func (d *asgTestDriver) Describe(ctx context.Context) (AutoscaleGroupDetails, er
 
 func (d *asgTestDriver) SetDesiredCapacity(ctx context.Context, count int64) error {
 	d.setDesiredCapacityCalls++
+	if d.setDesiredErr != nil {
+		return d.setDesiredErr
+	}
 	d.desiredCapacity = count
 	return d.err
 }
 
-func (d *asgTestDriver) SendSIGTERMToAgents(ctx context.Context, instanceID string) error {
-	d.sigTermsSent = append(d.sigTermsSent, instanceID)
-	if err, ok := d.sigTermErrs[instanceID]; ok {
-		return err
+func (d *asgTestDriver) SetInstanceHealth(ctx context.Context, instanceID string) error {
+	if d.setInstanceHealthErr != nil {
+		return d.setInstanceHealthErr
 	}
-	return d.sigTermErr
+	d.markedUnhealthy = append(d.markedUnhealthy, instanceID)
+	return nil
 }
 
 func (d *asgTestDriver) CleanupDanglingInstances(ctx context.Context, minimumInstanceUptime time.Duration, maxDanglingInstancesToCheck int) error {
@@ -579,8 +587,8 @@ func TestScaleInWhileASGConverging(t *testing.T) {
 				t.Errorf("desired capacity = %d, want %d",
 					asg.desiredCapacity, tc.expectedDesiredCapacity)
 			}
-			if len(asg.sigTermsSent) != 0 {
-				t.Errorf("SIGTERMs sent to %v, want none", asg.sigTermsSent)
+			if len(asg.markedUnhealthy) != 0 {
+				t.Errorf("marked unhealthy %v, want none", asg.markedUnhealthy)
 			}
 		})
 	}
@@ -649,76 +657,96 @@ func TestScalerRunWaitsToScaleInWhileInstancesArePending(t *testing.T) {
 	}
 }
 
-func TestElasticCIScaleInAssignsDesiredCapacityOwnership(t *testing.T) {
+func TestElasticCIScaleInSetsDesiredThenMarksUnhealthy(t *testing.T) {
 	const (
 		id0 = "i-000000000000"
 		id1 = "i-000000000001"
 	)
 
-	testCases := []struct {
-		name         string
-		sigTermErr   error
-		sigTermErrs  map[string]error
-		wantDesired  int64
-		wantSetCalls int
-	}{
-		{
-			name:         "successful graceful stops own the desired capacity decrement",
-			wantDesired:  5,
-			wantSetCalls: 0,
-		},
-		{
-			name:         "scaler decrements desired capacity when every SIGTERM fails",
-			sigTermErr:   errors.New("ssm failed"),
-			wantDesired:  3,
-			wantSetCalls: 1,
-		},
-		{
-			name:         "mixed batch waits for successful graceful stop before retrying fallback",
-			sigTermErrs:  map[string]error{id0: ErrWindowsGracefulScaleInNotSupported},
-			wantDesired:  5,
-			wantSetCalls: 0,
-		},
-		{
-			name:         "scaler decrements desired capacity for an all-Windows batch",
-			sigTermErr:   ErrWindowsGracefulScaleInNotSupported,
-			wantDesired:  3,
-			wantSetCalls: 1,
-		},
-	}
+	t.Run("sets desired capacity then marks oldest extras unhealthy", func(t *testing.T) {
+		asg := &asgTestDriver{
+			desiredCapacity: 5,
+			actualCapacity:  5,
+		}
+		s := Scaler{
+			autoscaling: asg,
+			bk: &buildkiteTestDriver{metrics: buildkite.AgentMetrics{
+				ScheduledJobs: 3,
+				TotalAgents:   5,
+			}},
+			scaling:       ScalingCalculator{agentsPerInstance: 1},
+			elasticCIMode: true,
+		}
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			asg := &asgTestDriver{
-				desiredCapacity: 5,
-				actualCapacity:  5,
-				sigTermErr:      tc.sigTermErr,
-				sigTermErrs:     tc.sigTermErrs,
-			}
-			s := Scaler{
-				autoscaling: asg,
-				bk: &buildkiteTestDriver{metrics: buildkite.AgentMetrics{
-					ScheduledJobs: 3,
-					TotalAgents:   5,
-				}},
-				scaling:       ScalingCalculator{agentsPerInstance: 1},
-				elasticCIMode: true,
-			}
+		if _, err := s.Run(t.Context()); err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+		if asg.desiredCapacity != 3 {
+			t.Errorf("desired capacity = %d, want 3", asg.desiredCapacity)
+		}
+		if asg.setDesiredCapacityCalls != 1 {
+			t.Errorf("SetDesiredCapacity calls = %d, want 1", asg.setDesiredCapacityCalls)
+		}
+		if !slices.Equal(asg.markedUnhealthy, []string{id0, id1}) {
+			t.Errorf("marked unhealthy = %v, want [%s %s]", asg.markedUnhealthy, id0, id1)
+		}
+	})
 
-			if _, err := s.Run(t.Context()); err != nil {
-				t.Fatalf("Run() error = %v", err)
-			}
-			if asg.desiredCapacity != tc.wantDesired {
-				t.Errorf("desired capacity = %d, want %d", asg.desiredCapacity, tc.wantDesired)
-			}
-			if asg.setDesiredCapacityCalls != tc.wantSetCalls {
-				t.Errorf("SetDesiredCapacity calls = %d, want %d", asg.setDesiredCapacityCalls, tc.wantSetCalls)
-			}
-			if !slices.Equal(asg.sigTermsSent, []string{id0, id1}) {
-				t.Errorf("SIGTERMs = %v, want [%s %s]", asg.sigTermsSent, id0, id1)
-			}
-		})
-	}
+	t.Run("does not mark unhealthy if SetDesiredCapacity fails", func(t *testing.T) {
+		asg := &asgTestDriver{
+			desiredCapacity: 5,
+			actualCapacity:  5,
+			setDesiredErr:   errors.New("asg denied"),
+		}
+		s := Scaler{
+			autoscaling: asg,
+			bk: &buildkiteTestDriver{metrics: buildkite.AgentMetrics{
+				ScheduledJobs: 3,
+				TotalAgents:   5,
+			}},
+			scaling:       ScalingCalculator{agentsPerInstance: 1},
+			elasticCIMode: true,
+		}
+
+		if _, err := s.Run(t.Context()); err == nil {
+			t.Fatal("Run() error = nil, want SetDesiredCapacity error")
+		}
+		if asg.desiredCapacity != 5 {
+			t.Errorf("desired capacity = %d, want 5 (unchanged)", asg.desiredCapacity)
+		}
+		if len(asg.markedUnhealthy) != 0 {
+			t.Errorf("marked unhealthy = %v, want none", asg.markedUnhealthy)
+		}
+	})
+
+	t.Run("marks extras when desired is already at target but actual is high", func(t *testing.T) {
+		asg := &asgTestDriver{
+			desiredCapacity: 3,
+			actualCapacity:  5,
+		}
+		s := Scaler{
+			autoscaling: asg,
+			bk: &buildkiteTestDriver{metrics: buildkite.AgentMetrics{
+				ScheduledJobs: 3,
+				TotalAgents:   5,
+			}},
+			scaling:       ScalingCalculator{agentsPerInstance: 1},
+			elasticCIMode: true,
+		}
+
+		if _, err := s.Run(t.Context()); err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+		if asg.desiredCapacity != 3 {
+			t.Errorf("desired capacity = %d, want 3", asg.desiredCapacity)
+		}
+		if asg.setDesiredCapacityCalls != 0 {
+			t.Errorf("SetDesiredCapacity calls = %d, want 0", asg.setDesiredCapacityCalls)
+		}
+		if !slices.Equal(asg.markedUnhealthy, []string{id0, id1}) {
+			t.Errorf("marked unhealthy = %v, want [%s %s]", asg.markedUnhealthy, id0, id1)
+		}
+	})
 }
 
 func TestAvailabilityBasedScaling(t *testing.T) {
@@ -946,7 +974,7 @@ func TestDanglingInstanceDetection(t *testing.T) {
 			maxSize:                 1,
 			agentsPerInstance:       6,
 			elasticCIMode:           true,
-			expectedDesiredCapacity: 1, // graceful PostStop owns the decrement to 0
+			expectedDesiredCapacity: 0, // scales in to 0 (idle agents, no jobs)
 			expectedDanglingChecks:  0,
 		},
 		// Multiple instances with zero agents — should still trigger dangling check.

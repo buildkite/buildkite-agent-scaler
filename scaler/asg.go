@@ -22,10 +22,6 @@ import (
 	"github.com/aws/smithy-go"
 )
 
-// ErrWindowsGracefulScaleInNotSupported is returned when attempting graceful scale-in on Windows instances.
-// Windows instances don't support SIGTERM-based graceful shutdown; they rely on lifecycle hooks instead.
-var ErrWindowsGracefulScaleInNotSupported = errors.New("graceful scale-in not supported on Windows")
-
 const (
 	activitySucessfulStatusCode           = "Successful"
 	userRequestForChangingDesiredCapacity = "a user request explicitly set group desired capacity changing the desired capacity"
@@ -58,34 +54,6 @@ type ASGDriver struct {
 	ssmPollDeadline      time.Duration
 }
 
-// waitForSSMReady blocks until the SSM agent on instanceID reports PingStatus="Online",
-// or until timeout elapses.
-func (a *ASGDriver) waitForSSMReady(ctx context.Context, instanceID string, timeout time.Duration) error {
-	ssmSvc := ssm.NewFromConfig(a.Cfg)
-	deadline := time.Now().Add(timeout)
-
-	for time.Now().Before(deadline) {
-		resp, err := ssmSvc.DescribeInstanceInformation(ctx, &ssm.DescribeInstanceInformationInput{
-			Filters: []ssmTypes.InstanceInformationStringFilter{
-				{
-					Key:    aws.String("InstanceIds"),
-					Values: []string{instanceID},
-				},
-			},
-		})
-		if err != nil {
-			log.Printf("[SSM] DescribeInstanceInformation failed for %s: %v", instanceID, err)
-		} else if len(resp.InstanceInformationList) > 0 &&
-			resp.InstanceInformationList[0].PingStatus == ssmTypes.PingStatusOnline {
-			return nil
-		}
-
-		time.Sleep(5 * time.Second)
-	}
-
-	return fmt.Errorf("timed out waiting for SSM agent to become ready on %s", instanceID)
-}
-
 // getASGPlatform detects whether the ASG contains Linux or Windows instances.
 // Since each ASG is single-platform, we only need to check one instance.
 func (a *ASGDriver) getASGPlatform(ctx context.Context, instances []ec2Types.Instance) string {
@@ -100,9 +68,9 @@ func (a *ASGDriver) getASGPlatform(ctx context.Context, instances []ec2Types.Ins
 	return "linux"
 }
 
-// terminationMarkerPath is created by the graceful-stop script sent from
-// SendSIGTERMToAgents and probed by the dangling-instance check script, so
-// both sides of the drain handshake must agree on it.
+// terminationMarkerPath is left by older scaler versions that SSM-stopped the
+// agent, and is probed by the dangling-instance check so those instances are
+// not treated as still running.
 const terminationMarkerPath = "/tmp/buildkite-agent-termination-marker"
 
 // getCheckCommand returns the appropriate check command for the platform
@@ -476,6 +444,15 @@ func (a *ASGDriver) SetDesiredCapacity(ctx context.Context, count int64) error {
 	return nil
 }
 
+func (a *ASGDriver) SetInstanceHealth(ctx context.Context, instanceID string) error {
+	svc := autoscaling.NewFromConfig(a.Cfg)
+	_, err := svc.SetInstanceHealth(ctx, &autoscaling.SetInstanceHealthInput{
+		InstanceId:   aws.String(instanceID),
+		HealthStatus: aws.String("Unhealthy"),
+	})
+	return err
+}
+
 func (a *ASGDriver) GetAutoscalingActivities(ctx context.Context, nextToken *string) (*autoscaling.DescribeScalingActivitiesOutput, error) {
 	svc := autoscaling.NewFromConfig(a.Cfg)
 	input := &autoscaling.DescribeScalingActivitiesInput{
@@ -536,60 +513,13 @@ func (a *ASGDriver) GetLastScalingInAndOutActivity(ctx context.Context, findScal
 type dryRunASG struct {
 }
 
-func (a *ASGDriver) SendSIGTERMToAgents(ctx context.Context, instanceID string) error {
-	ec2Client := ec2.NewFromConfig(a.Cfg)
-	ssmClient := ssm.NewFromConfig(a.Cfg)
-
-	// Detect platform - graceful SIGTERM is only supported on Linux
-	descResp, err := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
-		InstanceIds: []string{instanceID},
-	})
-	if err == nil && len(descResp.Reservations) > 0 && len(descResp.Reservations[0].Instances) > 0 {
-		instance := descResp.Reservations[0].Instances[0]
-		if strings.EqualFold(string(instance.Platform), "windows") {
-			return ErrWindowsGracefulScaleInNotSupported
-		}
-	}
-
-	// Wait for SSM agent to be ready before sending command
-	if err := a.waitForSSMReady(ctx, instanceID, 30*time.Second); err != nil {
-		log.Printf("SSM agent not ready on instance %s, cannot send SIGTERM: %v", instanceID, err)
-		return err
-	}
-
-	// With consecutive Lambda invocations the same instance selected for scale-in,
-	// only during the first invocation will actually signal the agent to finish current jobs and stop.
-	command := `#!/bin/bash
-if [ -f ` + terminationMarkerPath + ` ]; then
-  echo "Already marked for termination, skipping"
-  exit 0
-fi
-echo "Termination requested at $(date)" > ` + terminationMarkerPath + `
-sudo systemctl stop buildkite-agent.service || sudo /opt/buildkite-agent/bin/buildkite-agent stop --signal SIGTERM
-`
-	log.Printf("[Elastic CI Mode] Sending SIGTERM to instance %s", instanceID)
-
-	_, err = ssmClient.SendCommand(ctx, &ssm.SendCommandInput{
-		InstanceIds:  []string{instanceID},
-		DocumentName: aws.String("AWS-RunShellScript"),
-		Parameters:   map[string][]string{"commands": {command}},
-		Comment:      aws.String("Gracefully stop Buildkite agent"),
-	})
-
-	if err != nil {
-		log.Printf("[Elastic CI Mode] Error sending SIGTERM to instance %s: %v", instanceID, err)
-		return err
-	}
-	log.Printf("[Elastic CI Mode] Successfully sent SIGTERM command to instance %s", instanceID)
-	return nil
-}
-
 // CleanupDanglingInstances finds and marks unhealthy any "zombie" instances where the
 // buildkite-agent service has stopped running but the EC2 instance is still alive.
 //
 // This is different from normal scale-in:
-// - Normal scale-in: instances are healthy, jobs may be running -> uses SIGTERM for graceful shutdown
-// - This function: agent service is stopped, no jobs can be running -> safe to mark as unhealthy
+//   - Normal scale-in: SetDesiredCapacity then SetInstanceHealth so the ASG
+//     terminates protected instances down to the new desired count
+//   - This function: agent service is already stopped, no jobs can be running -> safe to mark as unhealthy
 //
 // Marking instances unhealthy (via autoscaling:SetInstanceHealth) causes the ASG to terminate
 // and replace them according to its configured policies.
@@ -739,8 +669,8 @@ func (a *dryRunASG) SetDesiredCapacity(ctx context.Context, count int64) error {
 	return nil
 }
 
-func (a *dryRunASG) SendSIGTERMToAgents(ctx context.Context, instanceID string) error {
-	log.Printf("[DryRun] Would send SIGTERM to instance %s", instanceID)
+func (a *dryRunASG) SetInstanceHealth(ctx context.Context, instanceID string) error {
+	log.Printf("[DryRun] Would mark instance %s unhealthy", instanceID)
 	return nil
 }
 

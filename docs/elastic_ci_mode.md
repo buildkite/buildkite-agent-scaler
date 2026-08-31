@@ -11,17 +11,15 @@ Job dispatch delays, other issues related to job processing.
 ## Summary of the solution
 - Introduces a new **experimental** `ELASTIC_CI_MODE=true` setting that enables graceful scale-in for Elastic CI Stack
 - Scaling calculation now takes into account number of online agents in the queue
-- Instead of directly reducing ASG capacity, sends `SIGTERM` to `buildkite-agent` processes allowing jobs to complete before instance termination
-- Add scan for dangling instances (in case if `buildkite-agent` is not running, and post-exit action doesn't terminate EC2 instance
+- Scale-in sets ASG desired capacity, then marks the extra instances `Unhealthy` so the ASG can terminate them despite scale-in protection
+- The stack lifecycle hook (`stop-agent-gracefully`) drains jobs; the scaler does **not** `systemctl stop` the agent (that would run `ExecStopPost` / `terminate-instance` and double-decrement desired capacity)
+- Add scan for dangling instances (in case if `buildkite-agent` is not running, and post-exit action doesn't terminate EC2 instance)
 
 ## Technical Details
-- Graceful termination uses SSM to send `SIGTERM` to `buildkite-agent`
-- Adds support for the [Elastic CI Stack's](https://github.com/buildkite/elastic-ci-stack-for-aws) `/usr/local/bin/stop-agent-gracefully` script
+- Elastic CI instances launch with `NewInstancesProtectedFromScaleIn`. `SetInstanceHealth(Unhealthy)` bypasses that protection; lowering desired capacity alone does not.
+- Desired capacity is set **before** instances are marked unhealthy. Marking unhealthy first would make the ASG launch replacements.
+- Adds support for the [Elastic CI Stack's](https://github.com/buildkite/elastic-ci-stack-for-aws) `/usr/local/bin/stop-agent-gracefully` lifecycle handler
 - More predictable scale-in behavior with `MinimumInstanceUptime` and `MaxDanglingInstancesToCheck`
-
-Successful graceful stops leave ASG desired capacity unchanged. Those instances decrement it
-themselves via stack `PostStop` (`TerminateInstanceInAutoScalingGroup`). The scaler only calls
-`SetDesiredCapacity` when none of the selected instances accepted SIGTERM.
 
 ```
                          ┌────────────────────────┐
@@ -75,21 +73,21 @@ themselves via stack `PostStop` (`TerminateInstanceInAutoScalingGroup`). The sca
                 ▼                                         ▼
 ┌────────────────────────────────┐       ┌────────────────────────────────┐
 │           Scale-in:            │       │       Graceful scale-in:       │
-│     * Reduce desired capacity  │       │      * Connect to EC2 via SSM  │
-│     * ASG terminates instances │       │         * Send SIGTERM to      │
-│       * Running jobs may be    │       │   buildkite-agent, informing   │
-│ interrupted when running more  │       │buildkite-agent to shutdown once│
-│          than 1 agent          │       │    it finishes current jobs    │
+│     * Reduce desired capacity  │       │    * SetDesiredCapacity first  │
+│     * ASG terminates instances │       │    * Mark N oldest Unhealthy   │
+│       * Running jobs may be    │       │      (bypasses scale-in        │
+│ interrupted when running more  │       │       protection)              │
+│          than 1 agent          │       │    * ASG terminates extras;    │
+│                                │       │      no replacements           │
 └────────────────────────────────┘       └────────────────────────────────┘
                 │                                         │
                 ▼                                         ▼
 ┌────────────────────────────────┐       ┌────────────────────────────────┐
 │                                │       │        On EC2 instance:        │
-│        On EC2 instance:        │       │    * Agent disconnects all but │
-│               * Use            │       │        active sessions         │
-│--disconnect-after-idle-timeout │       │      * Finishes current jobs   │
-│                                │       │    * Self-terminates when jobs │
-│                                │       │             finish             │
+│        On EC2 instance:        │       │    * Lifecycle hook runs       │
+│               * Use            │       │      stop-agent-gracefully     │
+│--disconnect-after-idle-timeout │       │    * Agent finishes jobs       │
+│                                │       │    * ASG completes terminate   │
 └────────────────────────────────┘       └────────────────────────────────┘
 ```
 
