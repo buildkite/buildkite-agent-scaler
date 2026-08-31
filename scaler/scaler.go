@@ -243,10 +243,6 @@ func (s *Scaler) Run(ctx context.Context) (time.Duration, error) {
 	}
 	if asg.DesiredCount == desired && instanceCount != desired {
 		log.Printf("ASG is converging to desired capacity %d (currently %d running instances)", desired, instanceCount)
-		// Protected agentless instances never converge on their own: the ASG
-		// will not terminate them, and returning here used to skip the
-		// 10-minute dangling reclaim at the bottom of Run.
-		s.reclaimAgentlessInstances(ctx, instanceCount, metrics.TotalAgents)
 		return metrics.PollDuration, nil
 	}
 
@@ -274,32 +270,22 @@ func (s *Scaler) Run(ctx context.Context) (time.Duration, error) {
 	// the EC2 instance itself remains healthy. In this case, the normal CleanupDanglingInstances check
 	// at the top of Run() may not fire due to the minimumInstanceUptime filter, and neither scaleIn()
 	// nor scaleOut() is called because desired == instanceCount after MaxSize capping.
+	// We use a 10-minute uptime threshold here to ensure we don't check instances that are still
+	// booting (typical boot-to-agent-registration takes 3-5 minutes for Elastic CI Stack instances).
+	// This is shorter than the default 1-hour minimumInstanceUptime but long enough to avoid
+	// prematurely killing instances that haven't finished starting up.
 	if s.elasticCIMode && instanceCount > 0 && metrics.TotalAgents == 0 {
-		s.reclaimAgentlessInstances(ctx, instanceCount, metrics.TotalAgents)
+		log.Printf("🔍 [Elastic CI Mode] Detected %d running instance(s) but 0 agents reporting — checking for dangling instances", instanceCount)
+		danglingCheckUptime := 10 * time.Minute
+		if err := s.autoscaling.CleanupDanglingInstances(ctx, danglingCheckUptime, s.maxDanglingInstancesToCheck); err != nil {
+			log.Printf("⚠️  [Elastic CI Mode] Failed to cleanup dangling instances: %v", err)
+		}
 		return metrics.PollDuration, nil
 	}
 
 	log.Printf("No scaling required, currently %d actual instances (desired set to %d)",
 		instanceCount, asg.DesiredCount)
 	return metrics.PollDuration, nil
-}
-
-// agentlessDanglingCheckUptime is shorter than the default 1-hour
-// minimumInstanceUptime but long enough to avoid killing instances that are
-// still booting (typical Elastic CI Stack boot-to-agent-registration is 3-5
-// minutes).
-const agentlessDanglingCheckUptime = 10 * time.Minute
-
-// reclaimAgentlessInstances runs a dangling-instance scan when Elastic CI Mode
-// sees running EC2 instances but zero Buildkite agents. No-op otherwise.
-func (s *Scaler) reclaimAgentlessInstances(ctx context.Context, instanceCount, totalAgents int64) {
-	if !s.elasticCIMode || instanceCount <= 0 || totalAgents != 0 {
-		return
-	}
-	log.Printf("🔍 [Elastic CI Mode] Detected %d running instance(s) but 0 agents reporting — checking for dangling instances", instanceCount)
-	if err := s.autoscaling.CleanupDanglingInstances(ctx, agentlessDanglingCheckUptime, s.maxDanglingInstancesToCheck); err != nil {
-		log.Printf("⚠️  [Elastic CI Mode] Failed to cleanup dangling instances: %v", err)
-	}
 }
 
 func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGroupDetails) error {
@@ -438,11 +424,13 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 		// ASG cannot yank them while jobs drain; they leave via the stack
 		// PostStop terminate-instance call, which also decrements desired
 		// capacity. Unprotect only hosts that cannot self-terminate.
+		var unprotectErr error
 		if len(cannotSelfTerminate) > 0 {
 			log.Printf("[Elastic CI Mode] Clearing scale-in protection for %d instance(s) that cannot self-terminate: %v",
 				len(cannotSelfTerminate), cannotSelfTerminate)
-			if err := s.autoscaling.ClearScaleInProtection(ctx, cannotSelfTerminate); err != nil {
-				log.Printf("⚠️  [Elastic CI Mode] Failed to clear scale-in protection: %v. ASG may cancel the scale-in activity.", err)
+			unprotectErr = s.autoscaling.ClearScaleInProtection(ctx, cannotSelfTerminate)
+			if unprotectErr != nil {
+				log.Printf("⚠️  [Elastic CI Mode] Failed to clear scale-in protection: %v", unprotectErr)
 			}
 		}
 
@@ -460,10 +448,16 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 
 		if sigTermSuccess == 0 {
 			// No selected instance can self-terminate, so the scaler owns the
-			// desired-capacity decrement for this batch.
-			log.Printf("[Elastic CI Mode] No instances can self-terminate; updating ASG desired capacity to %d", desired)
-			if err := s.setDesiredCapacity(ctx, desired); err != nil {
-				log.Printf("CRITICAL: [Elastic CI Mode] Failed to set desired capacity to %d: %v", desired, err)
+			// desired-capacity decrement for this batch. Do not lower desired
+			// capacity while instances are still protected: the ASG cannot
+			// terminate them, and the group would stick above desired.
+			if unprotectErr != nil {
+				log.Printf("⚠️  [Elastic CI Mode] Skipping desired-capacity update; instances remain protected")
+			} else {
+				log.Printf("[Elastic CI Mode] No instances can self-terminate; updating ASG desired capacity to %d", desired)
+				if err := s.setDesiredCapacity(ctx, desired); err != nil {
+					log.Printf("CRITICAL: [Elastic CI Mode] Failed to set desired capacity to %d: %v", desired, err)
+				}
 			}
 		} else {
 			// Elastic CI Stack PostStop calls TerminateInstanceInAutoScalingGroup

@@ -454,6 +454,7 @@ type asgTestDriver struct {
 	err                     error
 	sigTermErr              error            // returned from SendSIGTERMToAgents unless overridden per ID
 	sigTermErrs             map[string]error // per-instance SIGTERM result
+	unprotectErr            error            // returned from ClearScaleInProtection
 	desiredCapacity         int64
 	actualCapacity          int64 // If 0, will default to desiredCapacity
 	pendingCapacity         int64
@@ -508,7 +509,7 @@ func (d *asgTestDriver) SendSIGTERMToAgents(ctx context.Context, instanceID stri
 
 func (d *asgTestDriver) ClearScaleInProtection(ctx context.Context, instanceIDs []string) error {
 	d.unprotected = append(d.unprotected, instanceIDs)
-	return d.err
+	return d.unprotectErr
 }
 
 func (d *asgTestDriver) CleanupDanglingInstances(ctx context.Context, minimumInstanceUptime time.Duration, maxDanglingInstancesToCheck int) error {
@@ -525,11 +526,8 @@ func TestScaleInWhileASGConverging(t *testing.T) {
 		name                     string
 		asgDesired               int64
 		asgActual                int64
-		totalAgents              int64
-		elasticCIMode            bool
 		expectedDesiredCapacity  int64
 		expectedSetCapacityCalls int
-		expectedDanglingChecks   int
 	}{
 		// The ASG was already told to shrink to 3 and 5 instances are still
 		// running: the scaler must wait, not issue another scale-in.
@@ -537,7 +535,6 @@ func TestScaleInWhileASGConverging(t *testing.T) {
 			name:                     "no scale-in while converging down",
 			asgDesired:               3,
 			asgActual:                5,
-			totalAgents:              3,
 			expectedDesiredCapacity:  3,
 			expectedSetCapacityCalls: 0,
 		},
@@ -548,7 +545,6 @@ func TestScaleInWhileASGConverging(t *testing.T) {
 			name:                     "no scale-in while converging up",
 			asgDesired:               3,
 			asgActual:                2,
-			totalAgents:              2,
 			expectedDesiredCapacity:  3,
 			expectedSetCapacityCalls: 0,
 		},
@@ -558,32 +554,8 @@ func TestScaleInWhileASGConverging(t *testing.T) {
 			name:                     "scale-in fires when ASG desired exceeds computed desired",
 			asgDesired:               5,
 			asgActual:                3,
-			totalAgents:              3,
 			expectedDesiredCapacity:  3,
 			expectedSetCapacityCalls: 1,
-		},
-		// Protected agentless instances never converge: desired is already at
-		// the job-based target but extra VMs remain. Elastic CI Mode must still
-		// run the short dangling reclaim instead of returning immediately.
-		{
-			name:                     "elastic CI reclaims agentless instances while converging down",
-			asgDesired:               3,
-			asgActual:                5,
-			totalAgents:              0,
-			elasticCIMode:            true,
-			expectedDesiredCapacity:  3,
-			expectedSetCapacityCalls: 0,
-			expectedDanglingChecks:   1,
-		},
-		{
-			name:                     "elastic CI does not reclaim while converging if agents are online",
-			asgDesired:               3,
-			asgActual:                5,
-			totalAgents:              3,
-			elasticCIMode:            true,
-			expectedDesiredCapacity:  3,
-			expectedSetCapacityCalls: 0,
-			expectedDanglingChecks:   0,
 		},
 	}
 
@@ -599,10 +571,8 @@ func TestScaleInWhileASGConverging(t *testing.T) {
 				// desired count of 3 in every case.
 				bk: &buildkiteTestDriver{metrics: buildkite.AgentMetrics{
 					ScheduledJobs: 3,
-					TotalAgents:   tc.totalAgents,
 				}},
-				scaling:       ScalingCalculator{agentsPerInstance: 1},
-				elasticCIMode: tc.elasticCIMode,
+				scaling: ScalingCalculator{agentsPerInstance: 1},
 			}
 
 			if _, err := s.Run(context.Background()); err != nil {
@@ -616,11 +586,7 @@ func TestScaleInWhileASGConverging(t *testing.T) {
 				t.Errorf("desired capacity = %d, want %d",
 					asg.desiredCapacity, tc.expectedDesiredCapacity)
 			}
-			if asg.danglingInstancesFound != tc.expectedDanglingChecks {
-				t.Errorf("dangling checks = %d, want %d",
-					asg.danglingInstancesFound, tc.expectedDanglingChecks)
-			}
-			if tc.expectedSetCapacityCalls == 0 && len(asg.sigTermsSent) != 0 {
+			if len(asg.sigTermsSent) != 0 {
 				t.Errorf("SIGTERMs sent to %v, want none", asg.sigTermsSent)
 			}
 		})
@@ -700,6 +666,7 @@ func TestElasticCIScaleInAssignsDesiredCapacityOwnership(t *testing.T) {
 		name            string
 		sigTermErr      error
 		sigTermErrs     map[string]error
+		unprotectErr    error
 		wantUnprotected []string
 		wantDesired     int64
 		wantSetCalls    int
@@ -731,6 +698,14 @@ func TestElasticCIScaleInAssignsDesiredCapacityOwnership(t *testing.T) {
 			wantDesired:     3,
 			wantSetCalls:    1,
 		},
+		{
+			name:            "scaler does not lower desired capacity when unprotect fails",
+			sigTermErr:      errors.New("ssm failed"),
+			unprotectErr:    errors.New("AccessDenied"),
+			wantUnprotected: []string{id0, id1},
+			wantDesired:     5,
+			wantSetCalls:    0,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -740,6 +715,7 @@ func TestElasticCIScaleInAssignsDesiredCapacityOwnership(t *testing.T) {
 				actualCapacity:  5,
 				sigTermErr:      tc.sigTermErr,
 				sigTermErrs:     tc.sigTermErrs,
+				unprotectErr:    tc.unprotectErr,
 			}
 			s := Scaler{
 				autoscaling: asg,

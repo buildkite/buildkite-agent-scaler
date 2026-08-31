@@ -93,9 +93,8 @@ With `ELASTIC_CI_MODE` enabled, the lambda reclaims instances whose agent has st
 additionally requires:
 
 * `autoscaling:SetInstanceHealth`
-* `autoscaling:SetInstanceProtection` — Elastic CI Stack instances are launched protected from
-  scale-in; dangling (agentless) instances and all-fallback scale-in batches that cannot
-  self-terminate must have protection cleared before the ASG will terminate or replace them
+* `autoscaling:SetInstanceProtection` — required before the ASG will terminate or replace a
+  protected Elastic CI instance (dangling reclaim, and scale-in batches that cannot self-terminate)
 * `ssm:SendCommand`, `ssm:ListCommandInvocations`, `ssm:DescribeInstanceInformation`
 * `ec2:DescribeInstances`, `ec2:DescribeInstanceStatus`, `ec2:TerminateInstances`
 
