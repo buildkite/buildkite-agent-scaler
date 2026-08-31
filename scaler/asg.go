@@ -34,8 +34,8 @@ type AutoscaleGroupDetails struct {
 	DesiredCount int64
 	MinSize      int64
 	MaxSize      int64
-	InstanceIDs  []string // Instance IDs in the ASG
-	ActualCount  int64    // Actual number of running instances
+	InstanceIDs  []string // InService instance IDs (excludes Pending/Terminating)
+	ActualCount  int64    // Number of InService instances
 }
 
 type ASGDriver struct {
@@ -392,40 +392,40 @@ func (a *ASGDriver) Describe(ctx context.Context) (AutoscaleGroupDetails, error)
 	queryDuration := time.Since(t)
 
 	asg := result.AutoScalingGroups[0]
-
-	var pending int64
-	var running int64
-	for _, instance := range asg.Instances {
-		lifecycleState := string(instance.LifecycleState)
-		if strings.HasPrefix(lifecycleState, "Pending") {
-			pending += 1
-		}
-		// Count instances in InService state
-		if lifecycleState == "InService" {
-			running += 1
-		}
-	}
-
-	instanceIDs := make([]string, 0, len(asg.Instances))
-	for _, instance := range asg.Instances {
-		if instance.InstanceId != nil {
-			instanceIDs = append(instanceIDs, *instance.InstanceId)
-		}
-	}
+	pending, inService, inServiceIDs := summarizeASGInstances(asg.Instances)
 
 	details := AutoscaleGroupDetails{
 		Pending:      pending,
 		DesiredCount: int64(*result.AutoScalingGroups[0].DesiredCapacity),
 		MinSize:      int64(*result.AutoScalingGroups[0].MinSize),
 		MaxSize:      int64(*result.AutoScalingGroups[0].MaxSize),
-		InstanceIDs:  instanceIDs,
-		ActualCount:  running,
+		InstanceIDs:  inServiceIDs,
+		ActualCount:  inService,
 	}
 
 	log.Printf("↳ Got pending=%d, desired=%d, actual=%d, min=%d, max=%d (took %v)",
 		details.Pending, details.DesiredCount, details.ActualCount, details.MinSize, details.MaxSize, queryDuration)
 
 	return details, nil
+}
+
+// summarizeASGInstances counts pending vs InService members and returns only
+// InService IDs. Scale-in and dangling cleanup must not act on Pending or
+// Terminating instances: marking those unhealthy on a retry can skip remaining
+// InService extras.
+func summarizeASGInstances(instances []types.Instance) (pending, inService int64, inServiceIDs []string) {
+	inServiceIDs = make([]string, 0, len(instances))
+	for _, instance := range instances {
+		lifecycleState := string(instance.LifecycleState)
+		if strings.HasPrefix(lifecycleState, "Pending") {
+			pending++
+		}
+		if lifecycleState == "InService" && instance.InstanceId != nil {
+			inService++
+			inServiceIDs = append(inServiceIDs, *instance.InstanceId)
+		}
+	}
+	return pending, inService, inServiceIDs
 }
 
 func (a *ASGDriver) SetDesiredCapacity(ctx context.Context, count int64) error {

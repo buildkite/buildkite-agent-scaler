@@ -11,7 +11,7 @@ Job dispatch delays, other issues related to job processing.
 ## Summary of the solution
 - Introduces a new **experimental** `ELASTIC_CI_MODE=true` setting that enables graceful scale-in for Elastic CI Stack
 - Scaling calculation now takes into account number of online agents in the queue
-- Scale-in sets ASG desired capacity, then marks the extra instances `Unhealthy` so the ASG can terminate them despite scale-in protection
+- Scale-in sets ASG desired capacity, then marks the extra InService instances `Unhealthy` so the ASG can terminate them despite scale-in protection
 - The stack lifecycle hook (`stop-agent-gracefully`) drains jobs; the scaler does **not** `systemctl stop` the agent (that would run `ExecStopPost` / `terminate-instance` and double-decrement desired capacity)
 - Add scan for dangling instances (in case if `buildkite-agent` is not running, and post-exit action doesn't terminate EC2 instance)
 
@@ -57,8 +57,9 @@ Job dispatch delays, other issues related to job processing.
                  ┌────────────────────────────────────────┐
                  │                                        │
                  │    Select instances for termination    │
+                 │    * InService only (not Terminating)  │
                  │    * Sort by launch time (oldest first)│
-                 │        * Select n oldest instances     │
+                 │     * Select n oldest InService        │
                  │                                        │
                  └───────────────────┬────────────────────┘
                                      │
@@ -74,7 +75,8 @@ Job dispatch delays, other issues related to job processing.
 ┌────────────────────────────────┐       ┌────────────────────────────────┐
 │           Scale-in:            │       │       Graceful scale-in:       │
 │     * Reduce desired capacity  │       │    * SetDesiredCapacity first  │
-│     * ASG terminates instances │       │    * Mark N oldest Unhealthy   │
+│     * ASG terminates instances │       │    * Mark N oldest InService   │
+│                                │       │      instances Unhealthy       │
 │       * Running jobs may be    │       │      (bypasses scale-in        │
 │ interrupted when running more  │       │       protection)              │
 │          than 1 agent          │       │    * ASG terminates extras;    │

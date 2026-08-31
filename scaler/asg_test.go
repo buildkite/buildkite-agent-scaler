@@ -15,6 +15,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/autoscaling"
+	"github.com/aws/aws-sdk-go-v2/service/autoscaling/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2Types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
@@ -82,6 +83,32 @@ func TestGetASGPlatform(t *testing.T) {
 				t.Errorf("expected platform %q, got %q", tc.expectedPlatform, platform)
 			}
 		})
+	}
+}
+
+func TestSummarizeASGInstances(t *testing.T) {
+	inst := func(id string, state types.LifecycleState) types.Instance {
+		return types.Instance{InstanceId: aws.String(id), LifecycleState: state}
+	}
+
+	pending, inService, ids := summarizeASGInstances([]types.Instance{
+		inst("i-pending", types.LifecycleStatePending),
+		inst("i-pending-wait", types.LifecycleStatePendingWait),
+		inst("i-inservice-a", types.LifecycleStateInService),
+		inst("i-terminating", types.LifecycleStateTerminating),
+		inst("i-terminating-wait", types.LifecycleStateTerminatingWait),
+		inst("i-inservice-b", types.LifecycleStateInService),
+		{LifecycleState: types.LifecycleStateInService}, // nil ID ignored
+	})
+
+	if pending != 2 {
+		t.Errorf("pending = %d, want 2", pending)
+	}
+	if inService != 2 {
+		t.Errorf("inService = %d, want 2", inService)
+	}
+	if !slices.Equal(ids, []string{"i-inservice-a", "i-inservice-b"}) {
+		t.Errorf("inService IDs = %v, want [i-inservice-a i-inservice-b]", ids)
 	}
 }
 

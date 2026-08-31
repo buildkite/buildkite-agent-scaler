@@ -514,8 +514,8 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 	}
 }
 
-// instancesForScaleIn picks the oldest current.InstanceIDs, up to
-// maxToTerminate. Launch-time sorting needs EC2 DescribeInstances, so tests
+// instancesForScaleIn picks the oldest InService instances (current.InstanceIDs),
+// up to maxToTerminate. Launch-time sorting needs EC2 DescribeInstances, so tests
 // using a fake ASG driver get a stable prefix of the ID list instead.
 func (s *Scaler) instancesForScaleIn(ctx context.Context, current AutoscaleGroupDetails, maxToTerminate int64) []string {
 	fallback := func() []string {
