@@ -243,6 +243,10 @@ func (s *Scaler) Run(ctx context.Context) (time.Duration, error) {
 	}
 	if asg.DesiredCount == desired && instanceCount != desired {
 		log.Printf("ASG is converging to desired capacity %d (currently %d running instances)", desired, instanceCount)
+		// Protected agentless instances never converge on their own: the ASG
+		// will not terminate them, and returning here used to skip the
+		// 10-minute dangling reclaim at the bottom of Run.
+		s.reclaimAgentlessInstances(ctx, instanceCount, metrics.TotalAgents)
 		return metrics.PollDuration, nil
 	}
 
@@ -270,22 +274,32 @@ func (s *Scaler) Run(ctx context.Context) (time.Duration, error) {
 	// the EC2 instance itself remains healthy. In this case, the normal CleanupDanglingInstances check
 	// at the top of Run() may not fire due to the minimumInstanceUptime filter, and neither scaleIn()
 	// nor scaleOut() is called because desired == instanceCount after MaxSize capping.
-	// We use a 10-minute uptime threshold here to ensure we don't check instances that are still
-	// booting (typical boot-to-agent-registration takes 3-5 minutes for Elastic CI Stack instances).
-	// This is shorter than the default 1-hour minimumInstanceUptime but long enough to avoid
-	// prematurely killing instances that haven't finished starting up.
 	if s.elasticCIMode && instanceCount > 0 && metrics.TotalAgents == 0 {
-		log.Printf("🔍 [Elastic CI Mode] Detected %d running instance(s) but 0 agents reporting — checking for dangling instances", instanceCount)
-		danglingCheckUptime := 10 * time.Minute
-		if err := s.autoscaling.CleanupDanglingInstances(ctx, danglingCheckUptime, s.maxDanglingInstancesToCheck); err != nil {
-			log.Printf("⚠️  [Elastic CI Mode] Failed to cleanup dangling instances: %v", err)
-		}
+		s.reclaimAgentlessInstances(ctx, instanceCount, metrics.TotalAgents)
 		return metrics.PollDuration, nil
 	}
 
 	log.Printf("No scaling required, currently %d actual instances (desired set to %d)",
 		instanceCount, asg.DesiredCount)
 	return metrics.PollDuration, nil
+}
+
+// agentlessDanglingCheckUptime is shorter than the default 1-hour
+// minimumInstanceUptime but long enough to avoid killing instances that are
+// still booting (typical Elastic CI Stack boot-to-agent-registration is 3-5
+// minutes).
+const agentlessDanglingCheckUptime = 10 * time.Minute
+
+// reclaimAgentlessInstances runs a dangling-instance scan when Elastic CI Mode
+// sees running EC2 instances but zero Buildkite agents. No-op otherwise.
+func (s *Scaler) reclaimAgentlessInstances(ctx context.Context, instanceCount, totalAgents int64) {
+	if !s.elasticCIMode || instanceCount <= 0 || totalAgents != 0 {
+		return
+	}
+	log.Printf("🔍 [Elastic CI Mode] Detected %d running instance(s) but 0 agents reporting — checking for dangling instances", instanceCount)
+	if err := s.autoscaling.CleanupDanglingInstances(ctx, agentlessDanglingCheckUptime, s.maxDanglingInstancesToCheck); err != nil {
+		log.Printf("⚠️  [Elastic CI Mode] Failed to cleanup dangling instances: %v", err)
+	}
 }
 
 func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGroupDetails) error {
@@ -394,88 +408,20 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 	instancesToTerminate := current.DesiredCount - desired
 
 	// In Elastic CI Mode, use graceful termination if we have instance IDs
-	if _, ok := s.autoscaling.(*ASGDriver); ok && s.elasticCIMode && len(current.InstanceIDs) > 0 && instancesToTerminate > 0 {
+	if s.elasticCIMode && len(current.InstanceIDs) > 0 && instancesToTerminate > 0 {
 		log.Printf("[Elastic CI Mode] Using graceful termination for %d instances", instancesToTerminate)
 
-		// Determine instances to terminate by sorting by launch time (oldest first)
-		maxToTerminate := instancesToTerminate
-
-		instancesForTermination := make([]string, 0, maxToTerminate)
-
-		if len(current.InstanceIDs) > 0 {
-			// Define a struct to hold instance info for sorting
-			type instanceInfo struct {
-				ID         string
-				LaunchTime time.Time
-			}
-
-			ec2Svc := ec2.NewFromConfig(s.cfg)
-
-			instances := make([]instanceInfo, 0, len(current.InstanceIDs))
-			describeResult, err := ec2Svc.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
-				InstanceIds: current.InstanceIDs,
-			})
-
-			if err != nil {
-				log.Printf("[Elastic CI Mode] Warning: Could not get instance launch times: %v", err)
-				// Fall back to unsorted if we can't get launch times
-				instancesForTermination = current.InstanceIDs
-				if int64(len(instancesForTermination)) > maxToTerminate {
-					instancesForTermination = instancesForTermination[:maxToTerminate]
-				}
-			} else {
-				// Process results and build list of instances with launch times
-				// We need to iterate through reservations as that's how AWS groups the instances
-				for _, reservation := range describeResult.Reservations {
-					for _, instance := range reservation.Instances {
-						if instance.InstanceId != nil && instance.LaunchTime != nil {
-							instances = append(instances, instanceInfo{
-								ID:         *instance.InstanceId,
-								LaunchTime: *instance.LaunchTime,
-							})
-						}
-					}
-				}
-
-				// Sort instances by launch time (oldest first)
-				sort.Slice(instances, func(i, j int) bool {
-					return instances[i].LaunchTime.Before(instances[j].LaunchTime)
-				})
-
-				limit := int(maxToTerminate)
-				if len(instances) < limit {
-					limit = len(instances)
-				}
-
-				instancesForTermination = make([]string, limit)
-				for i := 0; i < limit; i++ {
-					instancesForTermination[i] = instances[i].ID
-				}
-
-				if len(instances) > 0 {
-					oldestTime := instances[0].LaunchTime.Format(time.RFC3339)
-					log.Printf("[Elastic CI Mode] Selecting %d oldest instances by launch time for termination (oldest from %s)",
-						len(instancesForTermination), oldestTime)
-				}
-			}
-		}
+		instancesForTermination := s.instancesForGracefulScaleIn(ctx, current, instancesToTerminate)
 
 		log.Printf("[Elastic CI Mode] Attempting graceful termination for %d instance(s): %v", len(instancesForTermination), instancesForTermination)
-
-		// The Elastic CI Stack launches instances with scale-in protection
-		// enabled by default, and the ASG cancels a scale-in activity when
-		// every candidate instance is protected. Agents that self-terminate
-		// after SIGTERM are unaffected, but an instance whose agent is already
-		// dead can only leave the group if the ASG is allowed to terminate it.
-		if err := s.autoscaling.ClearScaleInProtection(ctx, instancesForTermination); err != nil {
-			log.Printf("⚠️  [Elastic CI Mode] Failed to clear scale-in protection: %v. ASG may cancel the scale-in activity.", err)
-		}
 
 		sigTermErrors := 0
 		sigTermSkipped := 0
 		sigTermSuccess := 0
+		var cannotSelfTerminate []string
 		for _, instanceID := range instancesForTermination {
 			if err := s.autoscaling.SendSIGTERMToAgents(ctx, instanceID); err != nil {
+				cannotSelfTerminate = append(cannotSelfTerminate, instanceID)
 				if errors.Is(err, ErrWindowsGracefulScaleInNotSupported) {
 					sigTermSkipped++
 				} else {
@@ -485,6 +431,18 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 			} else {
 				log.Printf("✅ Successfully sent SIGTERM to instance %s", instanceID)
 				sigTermSuccess++
+			}
+		}
+
+		// Keep scale-in protection on instances that accepted SIGTERM so the
+		// ASG cannot yank them while jobs drain; they leave via the stack
+		// PostStop terminate-instance call. Unprotect only hosts that cannot
+		// self-terminate, otherwise SetDesiredCapacity is cancelled.
+		if len(cannotSelfTerminate) > 0 {
+			log.Printf("[Elastic CI Mode] Clearing scale-in protection for %d instance(s) that cannot self-terminate: %v",
+				len(cannotSelfTerminate), cannotSelfTerminate)
+			if err := s.autoscaling.ClearScaleInProtection(ctx, cannotSelfTerminate); err != nil {
+				log.Printf("⚠️  [Elastic CI Mode] Failed to clear scale-in protection: %v. ASG may cancel the scale-in activity.", err)
 			}
 		}
 
@@ -506,7 +464,7 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 
 		}
 
-		if current.DesiredCount <= 1 && len(current.InstanceIDs) == 1 {
+		if _, ok := s.autoscaling.(*ASGDriver); ok && current.DesiredCount <= 1 && len(current.InstanceIDs) == 1 {
 			instanceID := current.InstanceIDs[0]
 			log.Printf("[Elastic CI Mode] Single-instance ASG detected - checking if instance %s is a dangling instance", instanceID)
 
@@ -564,6 +522,67 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 		s.scaleInParams.LastEvent = time.Now()
 		return nil
 	}
+}
+
+// instancesForGracefulScaleIn picks the oldest current.InstanceIDs, up to
+// maxToTerminate. Launch-time sorting needs EC2 DescribeInstances, so tests
+// using a fake ASG driver get a stable prefix of the ID list instead.
+func (s *Scaler) instancesForGracefulScaleIn(ctx context.Context, current AutoscaleGroupDetails, maxToTerminate int64) []string {
+	fallback := func() []string {
+		ids := current.InstanceIDs
+		if int64(len(ids)) > maxToTerminate {
+			ids = ids[:maxToTerminate]
+		}
+		return ids
+	}
+
+	if _, ok := s.autoscaling.(*ASGDriver); !ok {
+		return fallback()
+	}
+
+	type instanceInfo struct {
+		ID         string
+		LaunchTime time.Time
+	}
+
+	ec2Svc := ec2.NewFromConfig(s.cfg)
+	describeResult, err := ec2Svc.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+		InstanceIds: current.InstanceIDs,
+	})
+	if err != nil {
+		log.Printf("[Elastic CI Mode] Warning: Could not get instance launch times: %v", err)
+		return fallback()
+	}
+
+	instances := make([]instanceInfo, 0, len(current.InstanceIDs))
+	for _, reservation := range describeResult.Reservations {
+		for _, instance := range reservation.Instances {
+			if instance.InstanceId != nil && instance.LaunchTime != nil {
+				instances = append(instances, instanceInfo{
+					ID:         *instance.InstanceId,
+					LaunchTime: *instance.LaunchTime,
+				})
+			}
+		}
+	}
+
+	sort.Slice(instances, func(i, j int) bool {
+		return instances[i].LaunchTime.Before(instances[j].LaunchTime)
+	})
+
+	limit := int(maxToTerminate)
+	if len(instances) < limit {
+		limit = len(instances)
+	}
+	ids := make([]string, limit)
+	for i := 0; i < limit; i++ {
+		ids[i] = instances[i].ID
+	}
+	if len(instances) > 0 {
+		log.Printf("[Elastic CI Mode] Selecting %d oldest instances by launch time for termination (oldest from %s)",
+			len(ids), instances[0].LaunchTime.Format(time.RFC3339))
+	}
+	return ids
 }
 
 func (s *Scaler) scaleOut(ctx context.Context, desired int64, current AutoscaleGroupDetails) error {

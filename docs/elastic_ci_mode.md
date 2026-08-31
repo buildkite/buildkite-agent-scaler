@@ -22,17 +22,24 @@ Job dispatch delays, other issues related to job processing.
 ### Scale-in protection
 
 The Elastic CI Stack launches instances with `NewInstancesProtectedFromScaleIn: true` (CloudFormation
-parameter `InstanceScaleInProtection`, default `true`). Protection is what keeps the ASG from picking
-its own victims in the classic self-terminate flow, but the ASG also refuses to act on instances the
-scaler wants to reclaim: it cancels a scale-in activity when every candidate is protected, and it
-defers replacing an instance marked unhealthy while that instance stays protected.
+parameter `InstanceScaleInProtection`, default `true`). Protection stops the ASG from picking its
+own victims after `SetDesiredCapacity` drops: draining agents are supposed to leave via the stack
+`PostStop` `terminate-instance` call, which is not blocked by protection.
 
-Elastic CI Mode therefore clears protection (`autoscaling:SetInstanceProtection`) on the specific
-instances it is about to reclaim, immediately before it lowers desired capacity for a graceful
-scale-in and before it marks a dangling instance unhealthy. Protection is left in place on every
-other instance, so instances that self-terminate after `SIGTERM` still do so without the ASG
-interfering. Without this, an agentless but protected instance stays `InService` indefinitely and,
-once actual capacity sits above desired capacity, the queue can starve with no scale-out.
+A dead agent cannot self-terminate. The ASG then sits with `ActualCount > DesiredCount`, the scaler
+treats that as "converging" and used to skip further reclaim, and the queue can starve with no
+scale-out.
+
+Elastic CI Mode therefore clears protection (`autoscaling:SetInstanceProtection`) only on instances
+that cannot drain themselves:
+
+- Dangling instances (`buildkite-agent` not running), immediately before `SetInstanceHealth`
+- Scale-in candidates that failed SIGTERM or skipped it (Windows), so the ASG can complete the
+  desired-capacity drop for those hosts
+
+Instances that accepted SIGTERM stay protected. When the ASG is already at the computed desired
+count but still has extra running instances and **zero** agents, the scaler also runs the shorter
+(10-minute uptime) dangling scan instead of returning at the converging guard.
 
 
 ```

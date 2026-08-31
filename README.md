@@ -89,12 +89,13 @@ the following IAM permissions:
 * `autoscaling:DescribeScalingActivities`
 * `autoscaling:SetDesiredCapacity`
 
-With `ELASTIC_CI_MODE` enabled, the lambda reclaims instances whose agent has stopped and gracefully
-scales in the ones it selects for termination, which additionally requires:
+With `ELASTIC_CI_MODE` enabled, the lambda reclaims instances whose agent has stopped, which
+additionally requires:
 
 * `autoscaling:SetInstanceHealth`
 * `autoscaling:SetInstanceProtection` — Elastic CI Stack instances are launched protected from
-  scale-in, and the ASG will not terminate or replace them until that protection is cleared
+  scale-in; dangling (agentless) instances and scale-in candidates that cannot self-terminate after
+  SIGTERM must have protection cleared before the ASG will terminate or replace them
 * `ssm:SendCommand`, `ssm:ListCommandInvocations`, `ssm:DescribeInstanceInformation`
 * `ec2:DescribeInstances`, `ec2:DescribeInstanceStatus`, `ec2:TerminateInstances`
 

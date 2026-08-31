@@ -174,10 +174,10 @@ type asgProtectionAPI interface {
 const setInstanceProtectionMaxInstanceIDs = 50
 
 // clearScaleInProtection removes scale-in protection from the given instances so
-// the ASG is allowed to terminate or replace them. The Elastic CI Stack launches
-// instances with NewInstancesProtectedFromScaleIn=true, which makes the ASG
-// cancel scale-in activities and defer replacement of instances marked unhealthy
-// while they remain protected.
+// the ASG is allowed to terminate or replace them. Used for dangling reclaim
+// (SetInstanceHealth) and for scale-in candidates that cannot self-terminate
+// after SIGTERM (Windows, or SSM failure). Instances that accepted SIGTERM stay
+// protected so the ASG cannot interrupt draining jobs.
 //
 // SetInstanceProtection rejects the whole batch if any one instance has left
 // InService, so a failed batch is retried one instance at a time to keep a

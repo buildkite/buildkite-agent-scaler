@@ -2,7 +2,9 @@ package scaler
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -450,6 +452,8 @@ func (d *buildkiteTestDriver) GetAgentMetrics(ctx context.Context) (buildkite.Ag
 
 type asgTestDriver struct {
 	err                     error
+	sigTermErr              error            // returned from SendSIGTERMToAgents unless overridden per ID
+	sigTermErrs             map[string]error // per-instance SIGTERM result
 	desiredCapacity         int64
 	actualCapacity          int64 // If 0, will default to desiredCapacity
 	pendingCapacity         int64
@@ -495,11 +499,11 @@ func (d *asgTestDriver) SetDesiredCapacity(ctx context.Context, count int64) err
 }
 
 func (d *asgTestDriver) SendSIGTERMToAgents(ctx context.Context, instanceID string) error {
-	if d.sigTermsSent == nil {
-		d.sigTermsSent = []string{}
-	}
 	d.sigTermsSent = append(d.sigTermsSent, instanceID)
-	return d.err
+	if err, ok := d.sigTermErrs[instanceID]; ok {
+		return err
+	}
+	return d.sigTermErr
 }
 
 func (d *asgTestDriver) ClearScaleInProtection(ctx context.Context, instanceIDs []string) error {
@@ -521,8 +525,11 @@ func TestScaleInWhileASGConverging(t *testing.T) {
 		name                     string
 		asgDesired               int64
 		asgActual                int64
+		totalAgents              int64
+		elasticCIMode            bool
 		expectedDesiredCapacity  int64
 		expectedSetCapacityCalls int
+		expectedDanglingChecks   int
 	}{
 		// The ASG was already told to shrink to 3 and 5 instances are still
 		// running: the scaler must wait, not issue another scale-in.
@@ -530,6 +537,7 @@ func TestScaleInWhileASGConverging(t *testing.T) {
 			name:                     "no scale-in while converging down",
 			asgDesired:               3,
 			asgActual:                5,
+			totalAgents:              3,
 			expectedDesiredCapacity:  3,
 			expectedSetCapacityCalls: 0,
 		},
@@ -540,6 +548,7 @@ func TestScaleInWhileASGConverging(t *testing.T) {
 			name:                     "no scale-in while converging up",
 			asgDesired:               3,
 			asgActual:                2,
+			totalAgents:              2,
 			expectedDesiredCapacity:  3,
 			expectedSetCapacityCalls: 0,
 		},
@@ -549,8 +558,32 @@ func TestScaleInWhileASGConverging(t *testing.T) {
 			name:                     "scale-in fires when ASG desired exceeds computed desired",
 			asgDesired:               5,
 			asgActual:                3,
+			totalAgents:              3,
 			expectedDesiredCapacity:  3,
 			expectedSetCapacityCalls: 1,
+		},
+		// Protected agentless instances never converge: desired is already at
+		// the job-based target but extra VMs remain. Elastic CI Mode must still
+		// run the short dangling reclaim instead of returning immediately.
+		{
+			name:                     "elastic CI reclaims agentless instances while converging down",
+			asgDesired:               3,
+			asgActual:                5,
+			totalAgents:              0,
+			elasticCIMode:            true,
+			expectedDesiredCapacity:  3,
+			expectedSetCapacityCalls: 0,
+			expectedDanglingChecks:   1,
+		},
+		{
+			name:                     "elastic CI does not reclaim while converging if agents are online",
+			asgDesired:               3,
+			asgActual:                5,
+			totalAgents:              3,
+			elasticCIMode:            true,
+			expectedDesiredCapacity:  3,
+			expectedSetCapacityCalls: 0,
+			expectedDanglingChecks:   0,
 		},
 	}
 
@@ -566,8 +599,10 @@ func TestScaleInWhileASGConverging(t *testing.T) {
 				// desired count of 3 in every case.
 				bk: &buildkiteTestDriver{metrics: buildkite.AgentMetrics{
 					ScheduledJobs: 3,
+					TotalAgents:   tc.totalAgents,
 				}},
-				scaling: ScalingCalculator{agentsPerInstance: 1},
+				scaling:       ScalingCalculator{agentsPerInstance: 1},
+				elasticCIMode: tc.elasticCIMode,
 			}
 
 			if _, err := s.Run(context.Background()); err != nil {
@@ -581,7 +616,11 @@ func TestScaleInWhileASGConverging(t *testing.T) {
 				t.Errorf("desired capacity = %d, want %d",
 					asg.desiredCapacity, tc.expectedDesiredCapacity)
 			}
-			if len(asg.sigTermsSent) != 0 {
+			if asg.danglingInstancesFound != tc.expectedDanglingChecks {
+				t.Errorf("dangling checks = %d, want %d",
+					asg.danglingInstancesFound, tc.expectedDanglingChecks)
+			}
+			if tc.expectedSetCapacityCalls == 0 && len(asg.sigTermsSent) != 0 {
 				t.Errorf("SIGTERMs sent to %v, want none", asg.sigTermsSent)
 			}
 		})
@@ -648,6 +687,72 @@ func TestScalerRunWaitsToScaleInWhileInstancesArePending(t *testing.T) {
 	}
 	if asg.desiredCapacity != 5 {
 		t.Errorf("desired capacity = %d, want 5", asg.desiredCapacity)
+	}
+}
+
+func TestElasticCIScaleInClearsProtectionOnlyWhenAgentsCannotSelfTerminate(t *testing.T) {
+	const (
+		id0 = "i-000000000000"
+		id1 = "i-000000000001"
+	)
+
+	testCases := []struct {
+		name            string
+		sigTermErr      error
+		sigTermErrs     map[string]error
+		wantUnprotected []string
+	}{
+		{
+			name:            "successful SIGTERM leaves protection in place",
+			wantUnprotected: nil,
+		},
+		{
+			name:            "failed SIGTERM unprotects those instances so the ASG can terminate them",
+			sigTermErr:      errors.New("ssm failed"),
+			wantUnprotected: []string{id0, id1},
+		},
+		{
+			name:            "Windows skip unprotects only that instance",
+			sigTermErrs:     map[string]error{id0: ErrWindowsGracefulScaleInNotSupported},
+			wantUnprotected: []string{id0},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			asg := &asgTestDriver{
+				desiredCapacity: 5,
+				actualCapacity:  5,
+				sigTermErr:      tc.sigTermErr,
+				sigTermErrs:     tc.sigTermErrs,
+			}
+			s := Scaler{
+				autoscaling: asg,
+				bk: &buildkiteTestDriver{metrics: buildkite.AgentMetrics{
+					ScheduledJobs: 3,
+					TotalAgents:   5,
+				}},
+				scaling:       ScalingCalculator{agentsPerInstance: 1},
+				elasticCIMode: true,
+			}
+
+			if _, err := s.Run(t.Context()); err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+			if asg.desiredCapacity != 3 {
+				t.Errorf("desired capacity = %d, want 3", asg.desiredCapacity)
+			}
+			if !slices.Equal(asg.sigTermsSent, []string{id0, id1}) {
+				t.Errorf("SIGTERMs = %v, want [%s %s]", asg.sigTermsSent, id0, id1)
+			}
+			var got []string
+			for _, batch := range asg.unprotected {
+				got = append(got, batch...)
+			}
+			if !slices.Equal(got, tc.wantUnprotected) {
+				t.Errorf("unprotected = %v, want %v", got, tc.wantUnprotected)
+			}
+		})
 	}
 }
 
