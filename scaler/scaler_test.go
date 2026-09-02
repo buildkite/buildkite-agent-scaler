@@ -13,6 +13,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/autoscaling/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2Types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	ssmTypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/buildkite/buildkite-agent-scaler/buildkite"
 )
 
@@ -608,9 +610,18 @@ func TestOldestInstancesFailsClosedOnDescribeError(t *testing.T) {
 }
 
 func TestTerminateIfDangling(t *testing.T) {
+	probeResult := func(status ssmTypes.CommandInvocationStatus) []stubListResponse {
+		return []stubListResponse{{out: &ssm.ListCommandInvocationsOutput{
+			CommandInvocations: []ssmTypes.CommandInvocation{{InstanceId: aws.String("i-a"), Status: status}},
+		}}}
+	}
+	listErr := errors.New("ListCommandInvocations throttled")
+
 	for _, tc := range []struct {
 		name           string
 		sendErr        error
+		listResponses  []stubListResponse
+		wantErr        error
 		wantTerminated bool
 		wantEvents     string
 	}{
@@ -621,8 +632,29 @@ func TestTerminateIfDangling(t *testing.T) {
 			wantEvents:     "[set desired capacity terminate instance]",
 		},
 		{
-			name:       "responsive instance is left alone",
-			wantEvents: "[]",
+			name:          "instance with an active agent service is left alone",
+			listResponses: probeResult(ssmTypes.CommandInvocationStatusSuccess),
+			wantEvents:    "[]",
+		},
+		{
+			// SendCommand accepts commands for ConnectionLost instances and
+			// leaves them Pending; accepted is not the same as executed.
+			name:           "probe that never executes is terminated",
+			listResponses:  probeResult(ssmTypes.CommandInvocationStatusPending),
+			wantTerminated: true,
+			wantEvents:     "[set desired capacity terminate instance]",
+		},
+		{
+			name:           "probe reporting a stopped agent service is terminated",
+			listResponses:  probeResult(ssmTypes.CommandInvocationStatusFailed),
+			wantTerminated: true,
+			wantEvents:     "[set desired capacity terminate instance]",
+		},
+		{
+			name:          "polling failure leaves the instance alone and reports the error",
+			listResponses: []stubListResponse{{err: listErr}},
+			wantErr:       listErr,
+			wantEvents:    "[]",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -631,11 +663,12 @@ func TestTerminateIfDangling(t *testing.T) {
 				stubDescribeInstancesClient:  &stubDescribeInstancesClient{},
 				terminateInstancesTestClient: &terminateInstancesTestClient{events: &asg.events},
 			}
+			ssmClient := &stubSSMClient{sendErr: tc.sendErr, listResponses: tc.listResponses}
 			s := Scaler{autoscaling: asg}
 
-			terminated, err := s.terminateIfDangling(t.Context(), ec2Client, &stubSSMClient{sendErr: tc.sendErr}, "i-a", 0)
-			if err != nil {
-				t.Fatalf("terminateIfDangling() error = %v", err)
+			terminated, err := s.terminateIfDangling(t.Context(), ec2Client, ssmClient, "i-a", 0, time.Millisecond, time.Millisecond)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("terminateIfDangling() error = %v, want %v", err, tc.wantErr)
 			}
 			if terminated != tc.wantTerminated {
 				t.Errorf("terminated = %v, want %v", terminated, tc.wantTerminated)

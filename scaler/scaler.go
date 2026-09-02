@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	ssmTypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/buildkite/buildkite-agent-scaler/buildkite"
 )
 
@@ -420,7 +421,8 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 		failedGracefulHandoff := errors.Is(gracefulScaleInErr, errNoReachableScaleInCandidates)
 		singleInstanceASG := current.DesiredCount <= 1 && current.TotalCount == 1 && len(current.InstanceIDs) == 1
 		if failedGracefulHandoff && singleInstanceASG {
-			terminated, err := s.terminateIfDangling(ctx, ec2Client, ssm.NewFromConfig(s.cfg), current.InstanceIDs[0], desired)
+			pollInterval, pollDeadline := asgDriver.ssmPollTimings()
+			terminated, err := s.terminateIfDangling(ctx, ec2Client, ssm.NewFromConfig(s.cfg), current.InstanceIDs[0], desired, pollInterval, pollDeadline)
 			if err != nil {
 				return errors.Join(gracefulScaleInErr, err)
 			}
@@ -626,15 +628,14 @@ type dangleProbeEC2API interface {
 	terminateInstancesAPI
 }
 
-type sendCommandAPI interface {
-	SendCommand(ctx context.Context, params *ssm.SendCommandInput, optFns ...func(*ssm.Options)) (*ssm.SendCommandOutput, error)
-}
-
 // terminateIfDangling handles the last instance in an ASG that no graceful
-// stop could reach. It asks SSM to run a service check; if SSM cannot even
-// accept the command the instance most likely never registered an agent, so we
-// terminate it directly. Returns true when the instance was terminated.
-func (s *Scaler) terminateIfDangling(ctx context.Context, ec2Client dangleProbeEC2API, ssmClient sendCommandAPI, instanceID string, desired int64) (bool, error) {
+// stop could reach. SSM already reported it as not Online, so we run a service
+// check and wait for the result: SendCommand only confirms the command was
+// accepted, and on a ConnectionLost instance it sits in Pending forever. Only a
+// Success result spares the instance; anything else, including a probe that
+// never runs, means we terminate it directly. Returns true when the instance
+// was terminated.
+func (s *Scaler) terminateIfDangling(ctx context.Context, ec2Client dangleProbeEC2API, ssmClient ssmCheckAPI, instanceID string, desired int64, pollInterval, pollDeadline time.Duration) (bool, error) {
 	log.Printf("[Elastic CI Mode] Single-instance ASG detected - checking if instance %s is a dangling instance", instanceID)
 
 	documentName := "AWS-RunShellScript"
@@ -653,7 +654,7 @@ func (s *Scaler) terminateIfDangling(ctx context.Context, ec2Client dangleProbeE
 		}
 	}
 
-	_, err = ssmClient.SendCommand(ctx, &ssm.SendCommandInput{
+	sendOut, err := ssmClient.SendCommand(ctx, &ssm.SendCommandInput{
 		InstanceIds:  []string{instanceID},
 		DocumentName: aws.String(documentName),
 		Parameters: map[string][]string{
@@ -661,15 +662,43 @@ func (s *Scaler) terminateIfDangling(ctx context.Context, ec2Client dangleProbeE
 		},
 		Comment: aws.String("Check if buildkite-agent service is running"),
 	})
-	if err == nil {
-		log.Printf("[Elastic CI Mode] Instance appears responsive, not terminating directly")
-		return false, nil
+	if err != nil {
+		log.Printf("[Elastic CI Mode] Warning: Cannot check agent status, assuming dangling instance: %v", err)
+	} else {
+		active, err := agentServiceActive(ctx, ssmClient, instanceID, aws.ToString(sendOut.Command.CommandId), pollInterval, pollDeadline)
+		if err != nil {
+			return false, err
+		}
+		if active {
+			log.Printf("[Elastic CI Mode] Instance %s reports an active buildkite-agent service, not terminating directly", instanceID)
+			return false, nil
+		}
 	}
 
-	log.Printf("[Elastic CI Mode] Warning: Cannot check agent status, assuming dangling instance: %v", err)
 	log.Printf("[Elastic CI Mode] Directly terminating probable dangling instance")
 	if err := s.directlyTerminateInstance(ctx, ec2Client, instanceID, desired); err != nil {
 		return false, fmt.Errorf("directly terminate probable dangling instance: %w", err)
+	}
+	return true, nil
+}
+
+// agentServiceActive waits for the service-check command to finish on the
+// instance and reports whether it succeeded. A probe that never reaches a
+// terminal status counts as inactive. A polling error is returned as-is: it
+// tells us nothing about the instance, so the caller must not act on it.
+func agentServiceActive(ctx context.Context, ssmClient ssmCheckAPI, instanceID, commandID string, pollInterval, pollDeadline time.Duration) (bool, error) {
+	results, err := pollCommandInvocations(ctx, ssmClient, []string{commandID}, 1, pollInterval, pollDeadline)
+	if err != nil {
+		return false, fmt.Errorf("poll agent status probe %s: %w", commandID, err)
+	}
+	invocation, ok := results[instanceID]
+	if !ok {
+		log.Printf("[Elastic CI Mode] Agent status probe on %s was not picked up within %s, assuming dangling instance", instanceID, pollDeadline)
+		return false, nil
+	}
+	if invocation.Status != ssmTypes.CommandInvocationStatusSuccess {
+		log.Printf("[Elastic CI Mode] Agent status probe on %s did not succeed (status %s), assuming dangling instance", instanceID, invocation.Status)
+		return false, nil
 	}
 	return true, nil
 }
