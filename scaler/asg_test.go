@@ -105,6 +105,9 @@ func TestAutoscaleGroupDetailsUsesOnlyInServiceInstancesAsCandidates(t *testing.
 	if got, want := details.ActualCount, int64(1); got != want {
 		t.Errorf("actual count = %d, want %d", got, want)
 	}
+	if got, want := details.TotalCount, int64(5); got != want {
+		t.Errorf("total count = %d, want %d", got, want)
+	}
 	if got, want := details.InstanceIDs, []string{"i-in-service"}; !slices.Equal(got, want) {
 		t.Errorf("scale-in candidates = %v, want %v", got, want)
 	}
@@ -282,16 +285,13 @@ func TestDescribeInstancesTolerant(t *testing.T) {
 }
 
 func TestDetectPlatform(t *testing.T) {
-	ctx := context.Background()
 	driver := &ASGDriver{Name: "asg-1"}
 	describeErr := errors.New("describe failed")
 
-	reservations := func(platforms ...ec2Types.PlatformValues) []ec2Types.Reservation {
-		var instances []ec2Types.Instance
-		for _, p := range platforms {
-			instances = append(instances, ec2Types.Instance{Platform: p})
-		}
-		return []ec2Types.Reservation{{Instances: instances}}
+	platformResponse := func(platform ec2Types.PlatformValues) stubDescribeResponse {
+		return stubDescribeResponse{out: &ec2.DescribeInstancesOutput{
+			Reservations: []ec2Types.Reservation{{Instances: []ec2Types.Instance{{Platform: platform}}}},
+		}}
 	}
 
 	tests := []struct {
@@ -300,35 +300,17 @@ func TestDetectPlatform(t *testing.T) {
 		wantPlatform string
 		wantErr      bool
 	}{
-		{
-			name:         "linux instance",
-			response:     stubDescribeResponse{out: &ec2.DescribeInstancesOutput{Reservations: reservations("")}},
-			wantPlatform: "linux",
-		},
-		{
-			name:         "windows instance",
-			response:     stubDescribeResponse{out: &ec2.DescribeInstancesOutput{Reservations: reservations("windows")}},
-			wantPlatform: "windows",
-		},
-		{
-			name:     "describe error fails closed",
-			response: stubDescribeResponse{err: describeErr},
-			wantErr:  true,
-		},
-		{
-			// The sampled candidate can disappear between candidate selection
-			// and the describe call. Guessing Linux for a Windows ASG here
-			// would skip the SetDesiredCapacity fallback, so fail closed.
-			name:     "missing instance fails closed",
-			response: stubDescribeResponse{out: &ec2.DescribeInstancesOutput{}},
-			wantErr:  true,
-		},
+		{name: "linux instance", response: platformResponse(""), wantPlatform: "linux"},
+		{name: "windows instance", response: platformResponse("windows"), wantPlatform: "windows"},
+		{name: "describe error fails closed", response: stubDescribeResponse{err: describeErr}, wantErr: true},
+		// Missing candidates must fail closed: guessing Linux for a Windows ASG skips the capacity fallback.
+		{name: "missing instance fails closed", response: stubDescribeResponse{out: &ec2.DescribeInstancesOutput{}}, wantErr: true},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			stub := &stubDescribeInstancesClient{responses: []stubDescribeResponse{tc.response}}
-			platform, err := driver.detectPlatform(ctx, stub, []string{"i-a", "i-b"})
+			platform, err := driver.detectPlatform(t.Context(), stub, []string{"i-a", "i-b"})
 			if tc.wantErr {
 				if err == nil {
 					t.Fatal("detectPlatform() error = nil, want error")

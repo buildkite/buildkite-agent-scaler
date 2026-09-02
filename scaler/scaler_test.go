@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/buildkite/buildkite-agent-scaler/buildkite"
 )
 
@@ -486,6 +487,7 @@ func (d *asgTestDriver) Describe(ctx context.Context) (AutoscaleGroupDetails, er
 		Pending:      d.pendingCapacity,
 		DesiredCount: d.desiredCapacity,
 		ActualCount:  actualCount,
+		TotalCount:   d.desiredCapacity,
 		MinSize:      0,
 		MaxSize:      maxSize,
 		InstanceIDs:  instanceIDs,
@@ -511,6 +513,32 @@ func (d *asgTestDriver) SendSIGTERMToAgentsBatch(ctx context.Context, instanceID
 func (d *asgTestDriver) CleanupDanglingInstances(ctx context.Context, minimumInstanceUptime time.Duration, maxDanglingInstancesToCheck int) error {
 	d.danglingInstancesFound++
 	return d.err
+}
+
+type terminateInstancesTestClient struct {
+	events *[]string
+}
+
+func (c *terminateInstancesTestClient) TerminateInstances(context.Context, *ec2.TerminateInstancesInput, ...func(*ec2.Options)) (*ec2.TerminateInstancesOutput, error) {
+	*c.events = append(*c.events, "terminate instance")
+	return &ec2.TerminateInstancesOutput{}, nil
+}
+
+func TestDirectlyTerminateInstanceLowersDesiredCapacityFirst(t *testing.T) {
+	asg := &asgTestDriver{desiredCapacity: 1}
+	ec2Client := &terminateInstancesTestClient{events: &asg.events}
+	s := Scaler{autoscaling: asg}
+
+	if err := s.directlyTerminateInstance(t.Context(), ec2Client, "i-a", 0); err != nil {
+		t.Fatalf("directlyTerminateInstance() error = %v", err)
+	}
+
+	if got, want := fmt.Sprint(asg.events), "[set desired capacity terminate instance]"; got != want {
+		t.Errorf("calls = %s, want %s", got, want)
+	}
+	if got, want := asg.desiredCapacity, int64(0); got != want {
+		t.Errorf("desired capacity = %d, want %d", got, want)
+	}
 }
 
 func TestGracefullyScaleInLetsLinuxAgentsDecrementCapacity(t *testing.T) {
