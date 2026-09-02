@@ -546,7 +546,7 @@ func (s *Scaler) gracefullyScaleIn(ctx context.Context, instanceIDs []string, de
 	// Elastic CI Stack agents self-terminate and decrement desired capacity
 	// after draining. Setting desired capacity here for Linux would decrement
 	// twice when those targeted terminations complete.
-	dispatched, err := s.autoscaling.SendSIGTERMToAgentsBatch(ctx, instanceIDs)
+	accepted, err := s.autoscaling.SendSIGTERMToAgentsBatch(ctx, instanceIDs)
 	if errors.Is(err, ErrWindowsGracefulScaleInNotSupported) {
 		log.Printf("ℹ️  Skipped %d Windows instance(s) - graceful scale-in not supported, will be terminated directly by ASG", len(instanceIDs))
 		if err := s.setDesiredCapacity(ctx, desired); err != nil {
@@ -558,17 +558,23 @@ func (s *Scaler) gracefullyScaleIn(ctx context.Context, instanceIDs []string, de
 	if err != nil {
 		log.Printf("⚠️  Failed to send graceful-stop command to one or more instances: %v", err)
 	}
-	if dispatched == 0 && len(instanceIDs) > 0 {
-		s.scaleInParams.LastEvent = time.Now()
-		if err != nil {
-			return err
-		}
-		return errNoReachableScaleInCandidates
+	if len(instanceIDs) == 0 {
+		return nil
 	}
-	if dispatched > 0 {
-		s.scaleInParams.LastEvent = time.Now()
+
+	// Every attempt starts the cooldown. Instances that accepted the command
+	// stay in the ASG until they've drained, so retrying sooner would just
+	// pick the same ones again, and a failed attempt should back off rather
+	// than retry on every poll.
+	s.scaleInParams.LastEvent = time.Now()
+
+	if accepted > 0 {
+		return nil
 	}
-	return nil
+	if err != nil {
+		return err
+	}
+	return errNoReachableScaleInCandidates
 }
 
 func (s *Scaler) scaleOut(ctx context.Context, desired int64, current AutoscaleGroupDetails) error {

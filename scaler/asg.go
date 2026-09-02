@@ -599,7 +599,7 @@ sudo systemctl stop buildkite-agent.service || sudo /opt/buildkite-agent/bin/bui
 
 	var sendErrors []error
 	batchNumber := 0
-	dispatched := 0
+	accepted := 0
 	for instanceBatch := range slices.Chunk(onlineIDs, ssmMaxInstanceIDs) {
 		batchNumber++
 		_, err := ssmSvc.SendCommand(ctx, &ssm.SendCommandInput{
@@ -607,16 +607,17 @@ sudo systemctl stop buildkite-agent.service || sudo /opt/buildkite-agent/bin/bui
 			DocumentName: aws.String("AWS-RunShellScript"),
 			Parameters:   map[string][]string{"commands": {command}},
 			Comment:      aws.String("Gracefully stop Buildkite agent"),
+			MaxErrors:    aws.String("100%"),
 		})
 		if err != nil {
 			sendErrors = append(sendErrors, fmt.Errorf("batch %d: %w", batchNumber, err))
 			continue
 		}
-		dispatched += len(instanceBatch)
+		accepted += len(instanceBatch)
 		log.Printf("[Elastic CI Mode] Submitted graceful-stop command to %d instance(s)", len(instanceBatch))
 	}
 
-	return dispatched, errors.Join(sendErrors...)
+	return accepted, errors.Join(sendErrors...)
 }
 
 // CleanupDanglingInstances finds and marks unhealthy any "zombie" instances where the
