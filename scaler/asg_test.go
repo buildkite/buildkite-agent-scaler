@@ -23,6 +23,217 @@ import (
 	"github.com/aws/smithy-go"
 )
 
+type stubScalingActivitiesClient struct {
+	calls     []autoscaling.DescribeScalingActivitiesInput
+	responses []stubScalingActivitiesResponse
+	describe  func(context.Context, *autoscaling.DescribeScalingActivitiesInput) (*autoscaling.DescribeScalingActivitiesOutput, error)
+}
+
+type stubScalingActivitiesResponse struct {
+	output *autoscaling.DescribeScalingActivitiesOutput
+	err    error
+}
+
+func (s *stubScalingActivitiesClient) DescribeScalingActivities(ctx context.Context, params *autoscaling.DescribeScalingActivitiesInput, optFns ...func(*autoscaling.Options)) (*autoscaling.DescribeScalingActivitiesOutput, error) {
+	s.calls = append(s.calls, *params)
+	if s.describe != nil {
+		return s.describe(ctx, params)
+	}
+	response := s.responses[len(s.calls)-1]
+	return response.output, response.err
+}
+
+func TestGetLastScalingInAndOutActivity(t *testing.T) {
+	since := time.Date(2026, time.August, 26, 16, 0, 0, 0, time.FixedZone("UTC+2", 2*60*60))
+	scaleOut := types.Activity{
+		ActivityId: aws.String("scale-out"),
+		Cause:      aws.String("a user request explicitly set group desired capacity changing the desired capacity from 2 to 3, increasing the capacity"),
+		StatusCode: types.ScalingActivityStatusCodeSuccessful,
+	}
+	scaleIn := types.Activity{
+		ActivityId: aws.String("scale-in"),
+		Cause:      aws.String("At 2026-08-26T16:14:36Z instance i-017bacd33066f0408 was taken out of service in response to a user request, shrinking the capacity from 13 to 12."),
+		StatusCode: types.ScalingActivityStatusCodeSuccessful,
+	}
+	client := &stubScalingActivitiesClient{
+		responses: []stubScalingActivitiesResponse{{
+			output: &autoscaling.DescribeScalingActivitiesOutput{
+				Activities: []types.Activity{
+					{Cause: aws.String("shrinking the capacity"), StatusCode: types.ScalingActivityStatusCodeFailed},
+					{StatusCode: types.ScalingActivityStatusCodeSuccessful},
+					scaleOut,
+					scaleIn,
+				},
+			},
+		}},
+	}
+	driver := &ASGDriver{
+		Name:                              "agents",
+		MaxDescribeScalingActivitiesPages: -1,
+		scalingActivitiesSvc:              client,
+	}
+
+	gotScaleOut, gotScaleIn, err := driver.GetLastScalingInAndOutActivity(t.Context(), true, true, since)
+	if err != nil {
+		t.Fatalf("GetLastScalingInAndOutActivity() error = %v", err)
+	}
+	if gotScaleOut == nil || aws.ToString(gotScaleOut.ActivityId) != "scale-out" {
+		t.Errorf("scale-out activity = %#v, want %q", gotScaleOut, "scale-out")
+	}
+	if gotScaleIn == nil || aws.ToString(gotScaleIn.ActivityId) != "scale-in" {
+		t.Errorf("scale-in activity = %#v, want %q", gotScaleIn, "scale-in")
+	}
+	if len(client.calls) != 1 {
+		t.Fatalf("DescribeScalingActivities calls = %d, want 1", len(client.calls))
+	}
+
+	input := client.calls[0]
+	if got := aws.ToString(input.AutoScalingGroupName); got != "agents" {
+		t.Errorf("AutoScalingGroupName = %q, want %q", got, "agents")
+	}
+	if got := aws.ToInt32(input.MaxRecords); got != 100 {
+		t.Errorf("MaxRecords = %d, want 100", got)
+	}
+	filterValues := make(map[string][]string, len(input.Filters))
+	for _, filter := range input.Filters {
+		filterValues[aws.ToString(filter.Name)] = filter.Values
+	}
+	if got, want := filterValues["Status"], []string{activitySucessfulStatusCode}; !slices.Equal(got, want) {
+		t.Errorf("Status filter = %v, want %v", got, want)
+	}
+	if got, want := filterValues["StartTimeLowerBound"], []string{since.UTC().Format(time.RFC3339Nano)}; !slices.Equal(got, want) {
+		t.Errorf("StartTimeLowerBound filter = %v, want %v", got, want)
+	}
+}
+
+func TestGetLastScalingInAndOutActivityPagination(t *testing.T) {
+	client := &stubScalingActivitiesClient{
+		responses: []stubScalingActivitiesResponse{
+			{
+				output: &autoscaling.DescribeScalingActivitiesOutput{
+					NextToken: aws.String("next"),
+				},
+			},
+			{
+				output: &autoscaling.DescribeScalingActivitiesOutput{
+					Activities: []types.Activity{{
+						ActivityId: aws.String("scale-in"),
+						Cause:      aws.String("At 2026-08-26T16:14:36Z instance i-017bacd33066f0408 was taken out of service in response to a user request, shrinking the capacity from 2 to 1."),
+						StatusCode: types.ScalingActivityStatusCodeSuccessful,
+					}},
+				},
+			},
+		},
+	}
+	driver := &ASGDriver{
+		MaxDescribeScalingActivitiesPages: 2,
+		scalingActivitiesSvc:              client,
+	}
+
+	_, gotScaleIn, err := driver.GetLastScalingInAndOutActivity(t.Context(), false, true, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("GetLastScalingInAndOutActivity() error = %v", err)
+	}
+	if gotScaleIn == nil || aws.ToString(gotScaleIn.ActivityId) != "scale-in" {
+		t.Errorf("scale-in activity = %#v, want %q", gotScaleIn, "scale-in")
+	}
+	if len(client.calls) != 2 {
+		t.Errorf("DescribeScalingActivities calls = %d, want 2", len(client.calls))
+	}
+	if got := aws.ToString(client.calls[1].NextToken); got != "next" {
+		t.Errorf("second NextToken = %q, want %q", got, "next")
+	}
+}
+
+func TestGetLastScalingInAndOutActivityZeroPageLimitIsUnlimited(t *testing.T) {
+	client := &stubScalingActivitiesClient{
+		responses: []stubScalingActivitiesResponse{
+			{
+				output: &autoscaling.DescribeScalingActivitiesOutput{
+					NextToken: aws.String("next"),
+				},
+			},
+			{
+				output: &autoscaling.DescribeScalingActivitiesOutput{
+					Activities: []types.Activity{{
+						ActivityId: aws.String("scale-in"),
+						Cause:      aws.String("At 2026-08-26T16:14:36Z instance i-017bacd33066f0408 was taken out of service in response to a user request, shrinking the capacity from 2 to 1."),
+						StatusCode: types.ScalingActivityStatusCodeSuccessful,
+					}},
+				},
+			},
+		},
+	}
+	driver := &ASGDriver{scalingActivitiesSvc: client}
+
+	_, gotScaleIn, err := driver.GetLastScalingInAndOutActivity(t.Context(), false, true, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("GetLastScalingInAndOutActivity() error = %v", err)
+	}
+	if gotScaleIn == nil || aws.ToString(gotScaleIn.ActivityId) != "scale-in" {
+		t.Errorf("scale-in activity = %#v, want %q", gotScaleIn, "scale-in")
+	}
+	if got, want := len(client.calls), 2; got != want {
+		t.Errorf("DescribeScalingActivities calls = %d, want %d", got, want)
+	}
+}
+
+func TestGetLastScalingInAndOutActivityCompleteWithoutMatch(t *testing.T) {
+	client := &stubScalingActivitiesClient{
+		responses: []stubScalingActivitiesResponse{{
+			output: &autoscaling.DescribeScalingActivitiesOutput{},
+		}},
+	}
+	driver := &ASGDriver{
+		MaxDescribeScalingActivitiesPages: -1,
+		scalingActivitiesSvc:              client,
+	}
+
+	_, gotScaleIn, err := driver.GetLastScalingInAndOutActivity(t.Context(), false, true, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("GetLastScalingInAndOutActivity() error = %v", err)
+	}
+	if gotScaleIn != nil {
+		t.Errorf("scale-in activity = %#v, want nil", gotScaleIn)
+	}
+}
+
+func TestGetLastScalingInAndOutActivityFailsWhenPageLimitIsIncomplete(t *testing.T) {
+	client := &stubScalingActivitiesClient{
+		responses: []stubScalingActivitiesResponse{{
+			output: &autoscaling.DescribeScalingActivitiesOutput{NextToken: aws.String("next")},
+		}},
+	}
+	driver := &ASGDriver{
+		MaxDescribeScalingActivitiesPages: 1,
+		scalingActivitiesSvc:              client,
+	}
+
+	_, _, err := driver.GetLastScalingInAndOutActivity(t.Context(), false, true, time.Now().Add(-time.Hour))
+	if err == nil {
+		t.Fatal("GetLastScalingInAndOutActivity() error = nil, want page-limit error")
+	}
+	if len(client.calls) != 1 {
+		t.Errorf("DescribeScalingActivities calls = %d, want 1", len(client.calls))
+	}
+}
+
+func TestGetLastScalingInAndOutActivityPropagatesAPIErrors(t *testing.T) {
+	wantErr := errors.New("describe activities")
+	client := &stubScalingActivitiesClient{
+		responses: []stubScalingActivitiesResponse{{err: wantErr}},
+	}
+	driver := &ASGDriver{
+		MaxDescribeScalingActivitiesPages: -1,
+		scalingActivitiesSvc:              client,
+	}
+
+	_, _, err := driver.GetLastScalingInAndOutActivity(t.Context(), false, true, time.Now().Add(-time.Hour))
+	if !errors.Is(err, wantErr) {
+		t.Errorf("GetLastScalingInAndOutActivity() error = %v, want %v", err, wantErr)
+	}
+}
+
 func TestGetASGPlatform(t *testing.T) {
 	driver := &ASGDriver{}
 
