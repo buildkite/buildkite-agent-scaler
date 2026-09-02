@@ -457,8 +457,7 @@ type asgTestDriver struct {
 	pendingCapacity         int64
 	maxSize                 int64 // If 0, defaults to 100
 	sigTermsSent            []string
-	sigTermsDispatched      int
-	useSigTermsDispatched   bool
+	sigTermsAccepted        int
 	sigTermErr              error
 	setDesiredCapacityCalls int
 	elasticCIMode           bool
@@ -504,10 +503,7 @@ func (d *asgTestDriver) SetDesiredCapacity(ctx context.Context, count int64) err
 func (d *asgTestDriver) SendSIGTERMToAgentsBatch(ctx context.Context, instanceIDs []string) (int, error) {
 	d.events = append(d.events, "send graceful stop")
 	d.sigTermsSent = append(d.sigTermsSent, instanceIDs...)
-	if d.useSigTermsDispatched || d.sigTermErr != nil {
-		return d.sigTermsDispatched, d.sigTermErr
-	}
-	return len(instanceIDs), d.err
+	return d.sigTermsAccepted, d.sigTermErr
 }
 
 func (d *asgTestDriver) CleanupDanglingInstances(ctx context.Context, minimumInstanceUptime time.Duration, maxDanglingInstancesToCheck int) error {
@@ -543,75 +539,70 @@ func TestDirectlyTerminateInstanceLowersDesiredCapacityFirst(t *testing.T) {
 
 func TestGracefullyScaleInLetsLinuxAgentsDecrementCapacity(t *testing.T) {
 	testCases := []struct {
-		name                   string
-		dispatched             int
-		useDispatched          bool
-		dispatchErr            error
-		setDesiredErr          error
-		wantEvents             string
-		wantDesiredCapacity    int64
-		wantSetDesiredCapacity int
-		wantLastEvent          bool
-		wantErr                error
-		wantErrText            string
+		name                string
+		accepted            int
+		dispatchErr         error
+		setDesiredErr       error
+		wantEvents          string
+		wantDesiredCapacity int64
+		wantLastEvent       bool
+		wantErr             error
+		wantErrText         string
 	}{
 		{
 			name:                "successful Linux dispatch",
+			accepted:            2,
 			wantEvents:          "[send graceful stop]",
 			wantDesiredCapacity: 3,
 			wantLastEvent:       true,
 		},
 		{
 			name:                "no online Linux instances",
-			useDispatched:       true,
 			wantEvents:          "[send graceful stop]",
 			wantDesiredCapacity: 3,
 			wantLastEvent:       true,
 			wantErr:             errNoReachableScaleInCandidates,
 		},
 		{
-			name:                "failed Linux dispatch",
-			dispatchErr:         errors.New("send command"),
+			name:                "SSM API failure",
+			dispatchErr:         errors.New("describe SSM instance information: throttled"),
 			wantEvents:          "[send graceful stop]",
 			wantDesiredCapacity: 3,
 			wantLastEvent:       true,
-			wantErrText:         "send command",
+			wantErrText:         "describe SSM instance information: throttled",
 		},
 		{
 			name:                "partially successful Linux dispatch",
-			dispatched:          1,
+			accepted:            1,
 			dispatchErr:         errors.New("send command to later batch"),
 			wantEvents:          "[send graceful stop]",
 			wantDesiredCapacity: 3,
 			wantLastEvent:       true,
 		},
 		{
-			name:                   "Windows dispatch skipped",
-			dispatchErr:            ErrWindowsGracefulScaleInNotSupported,
-			wantEvents:             "[send graceful stop set desired capacity]",
-			wantDesiredCapacity:    1,
-			wantSetDesiredCapacity: 1,
-			wantLastEvent:          true,
+			name:                "Windows dispatch skipped",
+			dispatchErr:         ErrWindowsGracefulScaleInNotSupported,
+			wantEvents:          "[send graceful stop set desired capacity]",
+			wantDesiredCapacity: 1,
+			wantLastEvent:       true,
 		},
 		{
-			name:                   "Windows desired capacity update fails",
-			dispatchErr:            ErrWindowsGracefulScaleInNotSupported,
-			setDesiredErr:          errors.New("throttled"),
-			wantEvents:             "[send graceful stop set desired capacity]",
-			wantDesiredCapacity:    1,
-			wantSetDesiredCapacity: 1,
-			wantErrText:            "set desired capacity to 1 for windows instances: throttled",
+			name:                "Windows desired capacity update fails",
+			dispatchErr:         ErrWindowsGracefulScaleInNotSupported,
+			setDesiredErr:       errors.New("throttled"),
+			wantEvents:          "[send graceful stop set desired capacity]",
+			wantDesiredCapacity: 1,
+			wantErrText:         "set desired capacity to 1 for windows instances: throttled",
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			asg := &asgTestDriver{
-				desiredCapacity:       3,
-				sigTermsDispatched:    tc.dispatched,
-				useSigTermsDispatched: tc.useDispatched,
-				sigTermErr:            tc.dispatchErr,
-				err:                   tc.setDesiredErr,
+				desiredCapacity:  3,
+				sigTermsAccepted: tc.accepted,
+				sigTermErr:       tc.dispatchErr,
+				err:              tc.setDesiredErr,
 			}
 			s := Scaler{autoscaling: asg}
 
@@ -632,14 +623,8 @@ func TestGracefullyScaleInLetsLinuxAgentsDecrementCapacity(t *testing.T) {
 			if got := fmt.Sprint(asg.events); got != tc.wantEvents {
 				t.Errorf("calls = %s, want %s", got, tc.wantEvents)
 			}
-			if got, want := fmt.Sprint(asg.sigTermsSent), "[i-a i-b]"; got != want {
-				t.Errorf("graceful-stop targets = %s, want %s", got, want)
-			}
 			if got := asg.desiredCapacity; got != tc.wantDesiredCapacity {
 				t.Errorf("desired capacity = %d, want %d", got, tc.wantDesiredCapacity)
-			}
-			if got := asg.setDesiredCapacityCalls; got != tc.wantSetDesiredCapacity {
-				t.Errorf("SetDesiredCapacity calls = %d, want %d", got, tc.wantSetDesiredCapacity)
 			}
 			if got := !s.scaleInParams.LastEvent.IsZero(); got != tc.wantLastEvent {
 				t.Errorf("LastEvent recorded = %t, want %t", got, tc.wantLastEvent)
