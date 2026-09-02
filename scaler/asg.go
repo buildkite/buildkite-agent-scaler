@@ -29,6 +29,7 @@ var ErrWindowsGracefulScaleInNotSupported = errors.New("graceful scale-in not su
 const (
 	activitySucessfulStatusCode           = "Successful"
 	userRequestForChangingDesiredCapacity = "a user request explicitly set group desired capacity changing the desired capacity"
+	userRequestForTerminatingInstance     = "was taken out of service in response to a user request"
 	scalingOutKey                         = "increasing the capacity"
 	shrinkingKey                          = "shrinking the capacity"
 )
@@ -471,9 +472,17 @@ func (a *ASGDriver) GetAutoscalingActivities(ctx context.Context, nextToken *str
 	return svc.DescribeScalingActivities(ctx, input)
 }
 
+// isUserRequestedScaleIn reports whether an activity shrank the group because
+// someone asked for it: a desired-capacity change, or an instance terminated
+// with --should-decrement-desired-capacity, which is how Elastic CI Stack
+// agents leave the group after draining.
+func isUserRequestedScaleIn(cause string) bool {
+	return strings.Contains(cause, shrinkingKey) &&
+		(strings.Contains(cause, userRequestForChangingDesiredCapacity) ||
+			strings.Contains(cause, userRequestForTerminatingInstance))
+}
+
 func (a *ASGDriver) GetLastScalingInAndOutActivity(ctx context.Context, findScaleOut, findScaleIn bool) (*types.Activity, *types.Activity, error) {
-	const scalingOutKey = "increasing the capacity"
-	const shrinkingKey = "shrinking the capacity"
 	var nextToken *string
 	var lastScalingOutActivity *types.Activity
 	var lastScalingInActivity *types.Activity
@@ -491,12 +500,13 @@ func (a *ASGDriver) GetLastScalingInAndOutActivity(ctx context.Context, findScal
 		}
 
 		for _, activity := range output.Activities {
-			// Convert StatusCode to string and check if it matches the successful status
-			if string(activity.StatusCode) == activitySucessfulStatusCode &&
-				strings.Contains(*activity.Cause, userRequestForChangingDesiredCapacity) {
-				if lastScalingOutActivity == nil && strings.Contains(*activity.Cause, scalingOutKey) {
+			cause := aws.ToString(activity.Cause)
+			if string(activity.StatusCode) == activitySucessfulStatusCode {
+				if lastScalingOutActivity == nil &&
+					strings.Contains(cause, userRequestForChangingDesiredCapacity) &&
+					strings.Contains(cause, scalingOutKey) {
 					lastScalingOutActivity = &activity
-				} else if lastScalingInActivity == nil && strings.Contains(*activity.Cause, shrinkingKey) {
+				} else if lastScalingInActivity == nil && isUserRequestedScaleIn(cause) {
 					lastScalingInActivity = &activity
 				}
 			}
