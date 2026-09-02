@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2Types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/buildkite/buildkite-agent-scaler/buildkite"
 )
 
@@ -518,6 +521,61 @@ type terminateInstancesTestClient struct {
 func (c *terminateInstancesTestClient) TerminateInstances(context.Context, *ec2.TerminateInstancesInput, ...func(*ec2.Options)) (*ec2.TerminateInstancesOutput, error) {
 	*c.events = append(*c.events, "terminate instance")
 	return &ec2.TerminateInstancesOutput{}, nil
+}
+
+func describeOutput(instances ...ec2Types.Instance) *ec2.DescribeInstancesOutput {
+	return &ec2.DescribeInstancesOutput{Reservations: []ec2Types.Reservation{{Instances: instances}}}
+}
+
+func TestOldestInstances(t *testing.T) {
+	t0 := time.Date(2026, 9, 2, 8, 0, 0, 0, time.UTC)
+	instance := func(id string, launched time.Time) ec2Types.Instance {
+		return ec2Types.Instance{InstanceId: aws.String(id), LaunchTime: aws.Time(launched)}
+	}
+
+	for _, tc := range []struct {
+		name string
+		out  *ec2.DescribeInstancesOutput
+		n    int64
+		want []string
+	}{
+		{
+			name: "oldest first regardless of describe order",
+			out:  describeOutput(instance("i-c", t0.Add(2*time.Minute)), instance("i-a", t0), instance("i-b", t0.Add(time.Minute))),
+			n:    2,
+			want: []string{"i-a", "i-b"},
+		},
+		{
+			name: "launch time ties break on instance ID",
+			out:  describeOutput(instance("i-b", t0), instance("i-c", t0), instance("i-a", t0)),
+			n:    2,
+			want: []string{"i-a", "i-b"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &stubDescribeInstancesClient{responses: []stubDescribeResponse{{out: tc.out}}}
+			got, err := oldestInstances(t.Context(), client, []string{"i-a", "i-b", "i-c"}, tc.n, "asg-1")
+			if err != nil {
+				t.Fatalf("oldestInstances() error = %v", err)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("oldestInstances() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestOldestInstancesFailsClosedOnDescribeError(t *testing.T) {
+	describeErr := errors.New("throttled")
+	client := &stubDescribeInstancesClient{responses: []stubDescribeResponse{{err: describeErr}}}
+
+	got, err := oldestInstances(t.Context(), client, []string{"i-a", "i-b"}, 1, "asg-1")
+	if !errors.Is(err, describeErr) {
+		t.Fatalf("oldestInstances() error = %v, want %v", err, describeErr)
+	}
+	if len(got) != 0 {
+		t.Errorf("oldestInstances() = %v, want no candidates", got)
+	}
 }
 
 func TestDirectlyTerminateInstanceLowersDesiredCapacityFirst(t *testing.T) {
