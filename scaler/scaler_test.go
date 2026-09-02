@@ -616,14 +616,17 @@ func TestTerminateIfDangling(t *testing.T) {
 		}}}
 	}
 	listErr := errors.New("ListCommandInvocations throttled")
+	metricsErr := errors.New("buildkite metrics unavailable")
 
 	for _, tc := range []struct {
-		name           string
-		sendErr        error
-		listResponses  []stubListResponse
-		wantErr        error
-		wantTerminated bool
-		wantEvents     string
+		name            string
+		sendErr         error
+		listResponses   []stubListResponse
+		connectedAgents int64
+		metricsErr      error
+		wantErr         error
+		wantTerminated  bool
+		wantEvents      string
 	}{
 		{
 			name:           "unreachable instance is terminated after lowering capacity",
@@ -639,10 +642,18 @@ func TestTerminateIfDangling(t *testing.T) {
 		{
 			// SendCommand accepts commands for ConnectionLost instances and
 			// leaves them Pending; accepted is not the same as executed.
-			name:           "probe that never executes is terminated",
+			name:           "probe that never executes is terminated when no agents are connected",
 			listResponses:  probeResult(ssmTypes.CommandInvocationStatusPending),
 			wantTerminated: true,
 			wantEvents:     "[set desired capacity terminate instance]",
+		},
+		{
+			// A broken SSM agent says nothing about buildkite-agent, which may
+			// have picked up a job while we waited on the probe.
+			name:            "probe that never executes is left alone while an agent is connected",
+			listResponses:   probeResult(ssmTypes.CommandInvocationStatusPending),
+			connectedAgents: 1,
+			wantEvents:      "[]",
 		},
 		{
 			name:           "probe reporting a stopped agent service is terminated",
@@ -656,6 +667,13 @@ func TestTerminateIfDangling(t *testing.T) {
 			wantErr:       listErr,
 			wantEvents:    "[]",
 		},
+		{
+			name:          "metrics failure leaves the instance alone and reports the error",
+			listResponses: probeResult(ssmTypes.CommandInvocationStatusPending),
+			metricsErr:    metricsErr,
+			wantErr:       metricsErr,
+			wantEvents:    "[]",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			asg := &asgTestDriver{desiredCapacity: 1}
@@ -664,7 +682,13 @@ func TestTerminateIfDangling(t *testing.T) {
 				terminateInstancesTestClient: &terminateInstancesTestClient{events: &asg.events},
 			}
 			ssmClient := &stubSSMClient{sendErr: tc.sendErr, listResponses: tc.listResponses}
-			s := Scaler{autoscaling: asg}
+			s := Scaler{
+				autoscaling: asg,
+				bk: &buildkiteTestDriver{
+					metrics: buildkite.AgentMetrics{TotalAgents: tc.connectedAgents},
+					err:     tc.metricsErr,
+				},
+			}
 
 			terminated, err := s.terminateIfDangling(t.Context(), ec2Client, ssmClient, "i-a", 0, time.Millisecond, time.Millisecond)
 			if !errors.Is(err, tc.wantErr) {
