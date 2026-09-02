@@ -317,9 +317,13 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 
 	// Special Elastic CI Stack mode with additional safety checks
 	if s.elasticCIMode {
-		// Check for recent ASG scale-down activity to avoid scaling down too quickly
-		// Only do this check if we have access to the ASG activities
-		if driver, ok := s.autoscaling.(*ASGDriver); ok {
+		// Only walk the ASG activity history when this process has no
+		// scale-in on record, e.g. cold-start seeding failed. Once we've sent
+		// a graceful stop ourselves, LastEvent is the better signal: Elastic
+		// CI Stack agents decrement desired capacity with the same activity
+		// cause whether we asked them to stop or they idled out on their own,
+		// so the history can't tell our scale-ins apart from idle churn.
+		if driver, ok := s.autoscaling.(*ASGDriver); ok && s.scaleInParams.LastEvent.IsZero() {
 			// In ElasticCIMode, override the page limit to allow unlimited pages
 			if driver.MaxDescribeScalingActivitiesPages >= 0 {
 				// Override to allow unlimited pages (-1) for full activity history in ElasticCIMode
@@ -339,6 +343,10 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 				// Check how recently the ASG scaled down
 				lastScaleInTime := *lastScaleInActivity.StartTime
 				timeSinceLastScaleIn := time.Since(lastScaleInTime)
+
+				// Remember it so the next poll uses the in-process cooldown
+				// instead of paging through the history again.
+				s.scaleInParams.LastEvent = lastScaleInTime
 
 				// Check if we're in cooldown period based on the last ASG scale-in activity
 				if s.scaleInParams.CooldownPeriod > 0 && timeSinceLastScaleIn < s.scaleInParams.CooldownPeriod {

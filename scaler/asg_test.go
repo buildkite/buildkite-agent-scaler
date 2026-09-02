@@ -113,6 +113,49 @@ func TestAutoscaleGroupDetailsUsesOnlyInServiceInstancesAsCandidates(t *testing.
 	}
 }
 
+func TestIsUserRequestedScaleIn(t *testing.T) {
+	testCases := []struct {
+		name  string
+		cause string
+		want  bool
+	}{
+		{
+			name:  "desired capacity change",
+			cause: "At 2026-09-02T08:00:00Z a user request explicitly set group desired capacity changing the desired capacity from 4 to 3.  At 2026-09-02T08:00:30Z an instance was taken out of service in response to a difference between desired and actual capacity, shrinking the capacity from 4 to 3.  At 2026-09-02T08:00:31Z instance i-0123456789abcdef0 was selected for termination.",
+			want:  true,
+		},
+		{
+			name:  "instance terminates with decrement",
+			cause: "At 2026-09-02T08:00:00Z instance i-0123456789abcdef0 was taken out of service in response to a user request, shrinking the capacity from 4 to 3.",
+			want:  true,
+		},
+		{
+			name:  "desired capacity change scaling out",
+			cause: "At 2026-09-02T08:00:00Z a user request explicitly set group desired capacity changing the desired capacity from 3 to 4.  At 2026-09-02T08:00:30Z an instance was started in response to a difference between desired and actual capacity, increasing the capacity from 3 to 4.",
+		},
+		{
+			name:  "instance termination without decrement",
+			cause: "At 2026-09-02T08:00:00Z instance i-0123456789abcdef0 was taken out of service in response to a user request.",
+		},
+		{
+			name:  "unhealthy instance replaced",
+			cause: "At 2026-09-02T08:00:00Z an instance was taken out of service in response to an EC2 health check indicating it has been terminated or stopped.",
+		},
+		{
+			name:  "alarm-driven scale-in",
+			cause: "At 2026-09-02T08:00:00Z a monitor alarm in state ALARM triggered policy changing the desired capacity from 4 to 3.  At 2026-09-02T08:00:30Z an instance was taken out of service in response to a difference between desired and actual capacity, shrinking the capacity from 4 to 3.",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isUserRequestedScaleIn(tc.cause); got != tc.want {
+				t.Errorf("isUserRequestedScaleIn(%q) = %t, want %t", tc.cause, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestParseStaleInstanceIDs(t *testing.T) {
 	testCases := []struct {
 		name     string
