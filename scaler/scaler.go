@@ -1,12 +1,13 @@
 package scaler
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log"
 	"math"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -405,65 +406,10 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 	if asgDriver, ok := s.autoscaling.(*ASGDriver); ok && s.elasticCIMode && len(current.InstanceIDs) > 0 && instancesToTerminate > 0 {
 		log.Printf("[Elastic CI Mode] Using graceful termination for %d instances", instancesToTerminate)
 
-		// Determine instances to terminate by sorting by launch time (oldest first)
-		maxToTerminate := instancesToTerminate
-
-		instancesForTermination := make([]string, 0, maxToTerminate)
-
-		if len(current.InstanceIDs) > 0 {
-			// Define a struct to hold instance info for sorting
-			type instanceInfo struct {
-				ID         string
-				LaunchTime time.Time
-			}
-
-			ec2Svc := ec2.NewFromConfig(s.cfg)
-
-			instances := make([]instanceInfo, 0, len(current.InstanceIDs))
-			describeResult, err := describeInstancesTolerant(ctx, ec2Svc, current.InstanceIDs, asgDriver.Name)
-
-			if err != nil {
-				log.Printf("[Elastic CI Mode] Warning: Could not get instance launch times: %v", err)
-				// Fall back to unsorted if we can't get launch times
-				instancesForTermination = current.InstanceIDs
-				if int64(len(instancesForTermination)) > maxToTerminate {
-					instancesForTermination = instancesForTermination[:maxToTerminate]
-				}
-			} else {
-				// Process results and build list of instances with launch times
-				// We need to iterate through reservations as that's how AWS groups the instances
-				for _, reservation := range describeResult.Reservations {
-					for _, instance := range reservation.Instances {
-						if instance.InstanceId != nil && instance.LaunchTime != nil {
-							instances = append(instances, instanceInfo{
-								ID:         *instance.InstanceId,
-								LaunchTime: *instance.LaunchTime,
-							})
-						}
-					}
-				}
-
-				// Sort instances by launch time (oldest first)
-				sort.Slice(instances, func(i, j int) bool {
-					return instances[i].LaunchTime.Before(instances[j].LaunchTime)
-				})
-
-				limit := int(maxToTerminate)
-				if len(instances) < limit {
-					limit = len(instances)
-				}
-
-				instancesForTermination = make([]string, limit)
-				for i := 0; i < limit; i++ {
-					instancesForTermination[i] = instances[i].ID
-				}
-
-				if len(instances) > 0 {
-					oldestTime := instances[0].LaunchTime.Format(time.RFC3339)
-					log.Printf("[Elastic CI Mode] Selecting %d oldest instances by launch time for termination (oldest from %s)",
-						len(instancesForTermination), oldestTime)
-				}
-			}
+		ec2Client := ec2.NewFromConfig(s.cfg)
+		instancesForTermination, err := oldestInstances(ctx, ec2Client, current.InstanceIDs, instancesToTerminate, asgDriver.Name)
+		if err != nil {
+			return fmt.Errorf("select scale-in candidates: %w", err)
 		}
 
 		log.Printf("[Elastic CI Mode] Attempting graceful termination for %d instance(s): %v", len(instancesForTermination), instancesForTermination)
@@ -481,7 +427,6 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 
 			// Only consider direct termination for dangling instances
 			ssmClient := ssm.NewFromConfig(s.cfg)
-			ec2Client := ec2.NewFromConfig(s.cfg)
 
 			// Detect platform for this instance
 			descResp, descErr := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
@@ -669,6 +614,51 @@ func (s *Scaler) directlyTerminateInstance(ctx context.Context, ec2Client termin
 
 	log.Printf("[Elastic CI Mode] Successfully terminated instance %s via EC2 API", instanceID)
 	return nil
+}
+
+// oldestInstances picks up to n instances to stop, oldest launch first.
+//
+// Draining instances stay in the ASG until their job finishes, so a later poll
+// sees the same set and must pick the same instances. Anything else stops more
+// agents than the scaling target asked for. Instance ID breaks launch-time ties
+// because instances launched in one batch often share a timestamp. When the
+// describe call fails we return the error instead of guessing from ASG order,
+// which AWS does not keep stable.
+func oldestInstances(ctx context.Context, client describeInstancesAPI, instanceIDs []string, n int64, asgName string) ([]string, error) {
+	describeResult, err := describeInstancesTolerant(ctx, client, instanceIDs, asgName)
+	if err != nil {
+		return nil, fmt.Errorf("describe instance launch times: %w", err)
+	}
+
+	type instanceInfo struct {
+		ID         string
+		LaunchTime time.Time
+	}
+	instances := make([]instanceInfo, 0, len(instanceIDs))
+	for _, reservation := range describeResult.Reservations {
+		for _, instance := range reservation.Instances {
+			if instance.InstanceId == nil || instance.LaunchTime == nil {
+				continue
+			}
+			instances = append(instances, instanceInfo{ID: *instance.InstanceId, LaunchTime: *instance.LaunchTime})
+		}
+	}
+
+	slices.SortFunc(instances, func(a, b instanceInfo) int {
+		return cmp.Or(a.LaunchTime.Compare(b.LaunchTime), cmp.Compare(a.ID, b.ID))
+	})
+
+	limit := min(int(n), len(instances))
+	selected := make([]string, 0, limit)
+	for _, instance := range instances[:limit] {
+		selected = append(selected, instance.ID)
+	}
+
+	if len(selected) > 0 {
+		log.Printf("[Elastic CI Mode] Selecting %d oldest instances by launch time for termination (oldest from %s)",
+			len(selected), instances[0].LaunchTime.Format(time.RFC3339))
+	}
+	return selected, nil
 }
 
 type buildkiteDriver struct {
