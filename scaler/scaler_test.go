@@ -2,10 +2,15 @@ package scaler
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2Types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/buildkite/buildkite-agent-scaler/buildkite"
 )
 
@@ -455,9 +460,12 @@ type asgTestDriver struct {
 	pendingCapacity         int64
 	maxSize                 int64 // If 0, defaults to 100
 	sigTermsSent            []string
+	sigTermsAccepted        int
+	sigTermErr              error
 	setDesiredCapacityCalls int
 	elasticCIMode           bool
 	danglingInstancesFound  int
+	events                  []string
 }
 
 func (d *asgTestDriver) Describe(ctx context.Context) (AutoscaleGroupDetails, error) {
@@ -481,6 +489,7 @@ func (d *asgTestDriver) Describe(ctx context.Context) (AutoscaleGroupDetails, er
 		Pending:      d.pendingCapacity,
 		DesiredCount: d.desiredCapacity,
 		ActualCount:  actualCount,
+		TotalCount:   d.desiredCapacity,
 		MinSize:      0,
 		MaxSize:      maxSize,
 		InstanceIDs:  instanceIDs,
@@ -490,20 +499,196 @@ func (d *asgTestDriver) Describe(ctx context.Context) (AutoscaleGroupDetails, er
 func (d *asgTestDriver) SetDesiredCapacity(ctx context.Context, count int64) error {
 	d.setDesiredCapacityCalls++
 	d.desiredCapacity = count
+	d.events = append(d.events, "set desired capacity")
 	return d.err
 }
 
-func (d *asgTestDriver) SendSIGTERMToAgents(ctx context.Context, instanceID string) error {
-	if d.sigTermsSent == nil {
-		d.sigTermsSent = []string{}
-	}
-	d.sigTermsSent = append(d.sigTermsSent, instanceID)
-	return d.err
+func (d *asgTestDriver) SendSIGTERMToAgentsBatch(ctx context.Context, instanceIDs []string) (int, error) {
+	d.events = append(d.events, "send graceful stop")
+	d.sigTermsSent = append(d.sigTermsSent, instanceIDs...)
+	return d.sigTermsAccepted, d.sigTermErr
 }
 
 func (d *asgTestDriver) CleanupDanglingInstances(ctx context.Context, minimumInstanceUptime time.Duration, maxDanglingInstancesToCheck int) error {
 	d.danglingInstancesFound++
 	return d.err
+}
+
+type terminateInstancesTestClient struct {
+	events *[]string
+}
+
+func (c *terminateInstancesTestClient) TerminateInstances(context.Context, *ec2.TerminateInstancesInput, ...func(*ec2.Options)) (*ec2.TerminateInstancesOutput, error) {
+	*c.events = append(*c.events, "terminate instance")
+	return &ec2.TerminateInstancesOutput{}, nil
+}
+
+func describeOutput(instances ...ec2Types.Instance) *ec2.DescribeInstancesOutput {
+	return &ec2.DescribeInstancesOutput{Reservations: []ec2Types.Reservation{{Instances: instances}}}
+}
+
+func TestOldestInstances(t *testing.T) {
+	t0 := time.Date(2026, 9, 2, 8, 0, 0, 0, time.UTC)
+	instance := func(id string, launched time.Time) ec2Types.Instance {
+		return ec2Types.Instance{InstanceId: aws.String(id), LaunchTime: aws.Time(launched)}
+	}
+
+	for _, tc := range []struct {
+		name string
+		out  *ec2.DescribeInstancesOutput
+		n    int64
+		want []string
+	}{
+		{
+			name: "oldest first regardless of describe order",
+			out:  describeOutput(instance("i-c", t0.Add(2*time.Minute)), instance("i-a", t0), instance("i-b", t0.Add(time.Minute))),
+			n:    2,
+			want: []string{"i-a", "i-b"},
+		},
+		{
+			name: "launch time ties break on instance ID",
+			out:  describeOutput(instance("i-b", t0), instance("i-c", t0), instance("i-a", t0)),
+			n:    2,
+			want: []string{"i-a", "i-b"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &stubDescribeInstancesClient{responses: []stubDescribeResponse{{out: tc.out}}}
+			got, err := oldestInstances(t.Context(), client, []string{"i-a", "i-b", "i-c"}, tc.n, "asg-1")
+			if err != nil {
+				t.Fatalf("oldestInstances() error = %v", err)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("oldestInstances() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestOldestInstancesFailsClosedOnDescribeError(t *testing.T) {
+	describeErr := errors.New("throttled")
+	client := &stubDescribeInstancesClient{responses: []stubDescribeResponse{{err: describeErr}}}
+
+	got, err := oldestInstances(t.Context(), client, []string{"i-a", "i-b"}, 1, "asg-1")
+	if !errors.Is(err, describeErr) {
+		t.Fatalf("oldestInstances() error = %v, want %v", err, describeErr)
+	}
+	if len(got) != 0 {
+		t.Errorf("oldestInstances() = %v, want no candidates", got)
+	}
+}
+
+func TestDirectlyTerminateInstanceLowersDesiredCapacityFirst(t *testing.T) {
+	asg := &asgTestDriver{desiredCapacity: 1}
+	ec2Client := &terminateInstancesTestClient{events: &asg.events}
+	s := Scaler{autoscaling: asg}
+
+	if err := s.directlyTerminateInstance(t.Context(), ec2Client, "i-a", 0); err != nil {
+		t.Fatalf("directlyTerminateInstance() error = %v", err)
+	}
+
+	if got, want := fmt.Sprint(asg.events), "[set desired capacity terminate instance]"; got != want {
+		t.Errorf("calls = %s, want %s", got, want)
+	}
+	if got, want := asg.desiredCapacity, int64(0); got != want {
+		t.Errorf("desired capacity = %d, want %d", got, want)
+	}
+}
+
+func TestGracefullyScaleInLetsLinuxAgentsDecrementCapacity(t *testing.T) {
+	testCases := []struct {
+		name                string
+		accepted            int
+		dispatchErr         error
+		setDesiredErr       error
+		wantEvents          string
+		wantDesiredCapacity int64
+		wantLastEvent       bool
+		wantErr             error
+		wantErrText         string
+	}{
+		{
+			name:                "successful Linux dispatch",
+			accepted:            2,
+			wantEvents:          "[send graceful stop]",
+			wantDesiredCapacity: 3,
+			wantLastEvent:       true,
+		},
+		{
+			name:                "no online Linux instances",
+			wantEvents:          "[send graceful stop]",
+			wantDesiredCapacity: 3,
+			wantLastEvent:       true,
+			wantErr:             errNoReachableScaleInCandidates,
+		},
+		{
+			name:                "SSM API failure",
+			dispatchErr:         errors.New("describe SSM instance information: throttled"),
+			wantEvents:          "[send graceful stop]",
+			wantDesiredCapacity: 3,
+			wantLastEvent:       true,
+			wantErrText:         "describe SSM instance information: throttled",
+		},
+		{
+			name:                "partially successful Linux dispatch",
+			accepted:            1,
+			dispatchErr:         errors.New("send command to later batch"),
+			wantEvents:          "[send graceful stop]",
+			wantDesiredCapacity: 3,
+			wantLastEvent:       true,
+		},
+		{
+			name:                "Windows dispatch skipped",
+			dispatchErr:         ErrWindowsGracefulScaleInNotSupported,
+			wantEvents:          "[send graceful stop set desired capacity]",
+			wantDesiredCapacity: 1,
+			wantLastEvent:       true,
+		},
+		{
+			name:                "Windows desired capacity update fails",
+			dispatchErr:         ErrWindowsGracefulScaleInNotSupported,
+			setDesiredErr:       errors.New("throttled"),
+			wantEvents:          "[send graceful stop set desired capacity]",
+			wantDesiredCapacity: 1,
+			wantErrText:         "set desired capacity to 1 for windows instances: throttled",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			asg := &asgTestDriver{
+				desiredCapacity:  3,
+				sigTermsAccepted: tc.accepted,
+				sigTermErr:       tc.dispatchErr,
+				err:              tc.setDesiredErr,
+			}
+			s := Scaler{autoscaling: asg}
+
+			err := s.gracefullyScaleIn(t.Context(), []string{"i-a", "i-b"}, 1)
+			switch {
+			case tc.wantErr != nil:
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("gracefullyScaleIn() error = %v, want %v", err, tc.wantErr)
+				}
+			case tc.wantErrText != "":
+				if err == nil || err.Error() != tc.wantErrText {
+					t.Fatalf("gracefullyScaleIn() error = %v, want %q", err, tc.wantErrText)
+				}
+			case err != nil:
+				t.Fatalf("gracefullyScaleIn() error = %v, want nil", err)
+			}
+
+			if got := fmt.Sprint(asg.events); got != tc.wantEvents {
+				t.Errorf("calls = %s, want %s", got, tc.wantEvents)
+			}
+			if got := asg.desiredCapacity; got != tc.wantDesiredCapacity {
+				t.Errorf("desired capacity = %d, want %d", got, tc.wantDesiredCapacity)
+			}
+			if got := !s.scaleInParams.LastEvent.IsZero(); got != tc.wantLastEvent {
+				t.Errorf("LastEvent recorded = %t, want %t", got, tc.wantLastEvent)
+			}
+		})
+	}
 }
 
 // TestScaleInWhileASGConverging pins the early return in Run that suppresses

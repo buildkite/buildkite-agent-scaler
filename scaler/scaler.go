@@ -1,11 +1,13 @@
 package scaler
 
 import (
+	"cmp"
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"math"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -48,7 +50,7 @@ type Scaler struct {
 	autoscaling interface {
 		Describe(ctx context.Context) (AutoscaleGroupDetails, error)
 		SetDesiredCapacity(ctx context.Context, count int64) error
-		SendSIGTERMToAgents(ctx context.Context, instanceID string) error
+		SendSIGTERMToAgentsBatch(ctx context.Context, instanceIDs []string) (int, error)
 		CleanupDanglingInstances(ctx context.Context, minimumInstanceUptime time.Duration, maxDanglingInstancesToCheck int) error
 	}
 	bk interface {
@@ -316,9 +318,13 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 
 	// Special Elastic CI Stack mode with additional safety checks
 	if s.elasticCIMode {
-		// Check for recent ASG scale-down activity to avoid scaling down too quickly
-		// Only do this check if we have access to the ASG activities
-		if driver, ok := s.autoscaling.(*ASGDriver); ok {
+		// Only walk the ASG activity history when this process has no
+		// scale-in on record, e.g. cold-start seeding failed. Once we've sent
+		// a graceful stop ourselves, LastEvent is the better signal: Elastic
+		// CI Stack agents decrement desired capacity with the same activity
+		// cause whether we asked them to stop or they idled out on their own,
+		// so the history can't tell our scale-ins apart from idle churn.
+		if driver, ok := s.autoscaling.(*ASGDriver); ok && s.scaleInParams.LastEvent.IsZero() {
 			// In ElasticCIMode, override the page limit to allow unlimited pages
 			if driver.MaxDescribeScalingActivitiesPages >= 0 {
 				// Override to allow unlimited pages (-1) for full activity history in ElasticCIMode
@@ -338,6 +344,10 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 				// Check how recently the ASG scaled down
 				lastScaleInTime := *lastScaleInActivity.StartTime
 				timeSinceLastScaleIn := time.Since(lastScaleInTime)
+
+				// Remember it so the next poll uses the in-process cooldown
+				// instead of paging through the history again.
+				s.scaleInParams.LastEvent = lastScaleInTime
 
 				// Check if we're in cooldown period based on the last ASG scale-in activity
 				if s.scaleInParams.CooldownPeriod > 0 && timeSinceLastScaleIn < s.scaleInParams.CooldownPeriod {
@@ -393,116 +403,30 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 	instancesToTerminate := current.DesiredCount - desired
 
 	// In Elastic CI Mode, use graceful termination if we have instance IDs
-	if _, ok := s.autoscaling.(*ASGDriver); ok && s.elasticCIMode && len(current.InstanceIDs) > 0 && instancesToTerminate > 0 {
+	if asgDriver, ok := s.autoscaling.(*ASGDriver); ok && s.elasticCIMode && len(current.InstanceIDs) > 0 && instancesToTerminate > 0 {
 		log.Printf("[Elastic CI Mode] Using graceful termination for %d instances", instancesToTerminate)
 
-		// Determine instances to terminate by sorting by launch time (oldest first)
-		maxToTerminate := instancesToTerminate
-
-		instancesForTermination := make([]string, 0, maxToTerminate)
-
-		if len(current.InstanceIDs) > 0 {
-			// Define a struct to hold instance info for sorting
-			type instanceInfo struct {
-				ID         string
-				LaunchTime time.Time
-			}
-
-			ec2Svc := ec2.NewFromConfig(s.cfg)
-
-			instances := make([]instanceInfo, 0, len(current.InstanceIDs))
-			describeResult, err := ec2Svc.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
-				InstanceIds: current.InstanceIDs,
-			})
-
-			if err != nil {
-				log.Printf("[Elastic CI Mode] Warning: Could not get instance launch times: %v", err)
-				// Fall back to unsorted if we can't get launch times
-				instancesForTermination = current.InstanceIDs
-				if int64(len(instancesForTermination)) > maxToTerminate {
-					instancesForTermination = instancesForTermination[:maxToTerminate]
-				}
-			} else {
-				// Process results and build list of instances with launch times
-				// We need to iterate through reservations as that's how AWS groups the instances
-				for _, reservation := range describeResult.Reservations {
-					for _, instance := range reservation.Instances {
-						if instance.InstanceId != nil && instance.LaunchTime != nil {
-							instances = append(instances, instanceInfo{
-								ID:         *instance.InstanceId,
-								LaunchTime: *instance.LaunchTime,
-							})
-						}
-					}
-				}
-
-				// Sort instances by launch time (oldest first)
-				sort.Slice(instances, func(i, j int) bool {
-					return instances[i].LaunchTime.Before(instances[j].LaunchTime)
-				})
-
-				limit := int(maxToTerminate)
-				if len(instances) < limit {
-					limit = len(instances)
-				}
-
-				instancesForTermination = make([]string, limit)
-				for i := 0; i < limit; i++ {
-					instancesForTermination[i] = instances[i].ID
-				}
-
-				if len(instances) > 0 {
-					oldestTime := instances[0].LaunchTime.Format(time.RFC3339)
-					log.Printf("[Elastic CI Mode] Selecting %d oldest instances by launch time for termination (oldest from %s)",
-						len(instancesForTermination), oldestTime)
-				}
-			}
+		ec2Client := ec2.NewFromConfig(s.cfg)
+		instancesForTermination, err := oldestInstances(ctx, ec2Client, current.InstanceIDs, instancesToTerminate, asgDriver.Name)
+		if err != nil {
+			return fmt.Errorf("select scale-in candidates: %w", err)
 		}
 
 		log.Printf("[Elastic CI Mode] Attempting graceful termination for %d instance(s): %v", len(instancesForTermination), instancesForTermination)
+		gracefulScaleInErr := s.gracefullyScaleIn(ctx, instancesForTermination, desired)
 
-		sigTermErrors := 0
-		sigTermSkipped := 0
-		sigTermSuccess := 0
-		for _, instanceID := range instancesForTermination {
-			if err := s.autoscaling.SendSIGTERMToAgents(ctx, instanceID); err != nil {
-				if errors.Is(err, ErrWindowsGracefulScaleInNotSupported) {
-					sigTermSkipped++
-				} else {
-					log.Printf("⚠️  Failed to send SIGTERM to instance %s: %v", instanceID, err)
-					sigTermErrors++
-				}
-			} else {
-				log.Printf("✅ Successfully sent SIGTERM to instance %s", instanceID)
-				sigTermSuccess++
-			}
-		}
-
-		if sigTermErrors > 0 {
-			log.Printf("⚠️  Failed to send SIGTERM to %d/%d instances",
-				sigTermErrors, len(instancesForTermination))
-		}
-		if sigTermSkipped > 0 {
-			log.Printf("ℹ️  Skipped %d Windows instance(s) - graceful scale-in not supported, will be terminated directly by ASG",
-				sigTermSkipped)
-		}
-		if sigTermSuccess > 0 {
-			log.Printf("✅ Successfully sent SIGTERM to %d instance(s)", sigTermSuccess)
-		}
-
-		log.Printf("[Elastic CI Mode] Updating ASG desired capacity to %d", desired)
-		if err := s.setDesiredCapacity(ctx, desired); err != nil {
-			log.Printf("CRITICAL: [Elastic CI Mode] Failed to set desired capacity to %d after sending SIGTERMs: %v. ASG might replace terminated instances.", desired, err)
-
-		}
-
-		if current.DesiredCount <= 1 && len(current.InstanceIDs) == 1 {
+		// Only probe when nothing was reachable over SSM. A failed SSM or EC2
+		// API call tells us nothing about the instance, and the probe would
+		// most likely fail the same way before hard-killing an agent that
+		// might be mid-job.
+		failedGracefulHandoff := errors.Is(gracefulScaleInErr, errNoReachableScaleInCandidates)
+		singleInstanceASG := current.DesiredCount <= 1 && current.TotalCount == 1 && len(current.InstanceIDs) == 1
+		if failedGracefulHandoff && singleInstanceASG {
 			instanceID := current.InstanceIDs[0]
 			log.Printf("[Elastic CI Mode] Single-instance ASG detected - checking if instance %s is a dangling instance", instanceID)
 
 			// Only consider direct termination for dangling instances
 			ssmClient := ssm.NewFromConfig(s.cfg)
-			ec2Client := ec2.NewFromConfig(s.cfg)
 
 			// Detect platform for this instance
 			descResp, descErr := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
@@ -537,15 +461,14 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 				log.Printf("[Elastic CI Mode] Warning: Cannot check agent status, assuming dangling instance: %v", err)
 				log.Printf("[Elastic CI Mode] Directly terminating probable dangling instance")
 
-				if termErr := directlyTerminateInstance(ctx, ec2Client, instanceID); termErr != nil {
-					log.Printf("[Elastic CI Mode] Error: Failed to terminate: %v", termErr)
+				if termErr := s.directlyTerminateInstance(ctx, ec2Client, instanceID, desired); termErr != nil {
+					return errors.Join(gracefulScaleInErr, fmt.Errorf("directly terminate probable dangling instance: %w", termErr))
 				}
 			} else {
 				log.Printf("[Elastic CI Mode] Instance appears responsive, not terminating directly")
 			}
 		}
-		s.scaleInParams.LastEvent = time.Now()
-		return nil
+		return gracefulScaleInErr
 	} else {
 		log.Printf("Using standard scale-in (Elastic CI Mode disabled or no instances to terminate)")
 		if err := s.setDesiredCapacity(ctx, desired); err != nil {
@@ -554,6 +477,49 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 		s.scaleInParams.LastEvent = time.Now()
 		return nil
 	}
+}
+
+// errNoReachableScaleInCandidates means no graceful-stop command went out
+// because none of the candidates is online in SSM. Kept separate from API
+// errors so callers can tell "nothing to talk to" from "the call failed".
+var errNoReachableScaleInCandidates = errors.New("no graceful-stop commands dispatched: no scale-in candidates reachable via SSM")
+
+// gracefullyScaleIn asks the selected instances to drain and stop. Windows
+// instances can't be drained this way, so they get a desired-capacity update
+// and the ASG terminates them.
+func (s *Scaler) gracefullyScaleIn(ctx context.Context, instanceIDs []string, desired int64) error {
+	// Elastic CI Stack agents self-terminate and decrement desired capacity
+	// after draining. Setting desired capacity here for Linux would decrement
+	// twice when those targeted terminations complete.
+	accepted, err := s.autoscaling.SendSIGTERMToAgentsBatch(ctx, instanceIDs)
+	if errors.Is(err, ErrWindowsGracefulScaleInNotSupported) {
+		log.Printf("ℹ️  Skipped %d Windows instance(s) - graceful scale-in not supported, will be terminated directly by ASG", len(instanceIDs))
+		if err := s.setDesiredCapacity(ctx, desired); err != nil {
+			return fmt.Errorf("set desired capacity to %d for windows instances: %w", desired, err)
+		}
+		s.scaleInParams.LastEvent = time.Now()
+		return nil
+	}
+	if err != nil {
+		log.Printf("⚠️  Failed to send graceful-stop command to one or more instances: %v", err)
+	}
+	if len(instanceIDs) == 0 {
+		return nil
+	}
+
+	// Every attempt starts the cooldown. Instances that accepted the command
+	// stay in the ASG until they've drained, so retrying sooner would just
+	// pick the same ones again, and a failed attempt should back off rather
+	// than retry on every poll.
+	s.scaleInParams.LastEvent = time.Now()
+
+	if accepted > 0 {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return errNoReachableScaleInCandidates
 }
 
 func (s *Scaler) scaleOut(ctx context.Context, desired int64, current AutoscaleGroupDetails) error {
@@ -628,9 +594,17 @@ func (s *Scaler) setDesiredCapacity(ctx context.Context, desired int64) error {
 	return nil
 }
 
-// directlyTerminateInstance terminates an EC2 instance directly via EC2 API
-// This is a helper function for dangling instance termination
-func directlyTerminateInstance(ctx context.Context, ec2Client *ec2.Client, instanceID string) error {
+type terminateInstancesAPI interface {
+	TerminateInstances(ctx context.Context, params *ec2.TerminateInstancesInput, optFns ...func(*ec2.Options)) (*ec2.TerminateInstancesOutput, error)
+}
+
+// directlyTerminateInstance lowers desired capacity before terminating an EC2
+// instance so the ASG does not launch a replacement.
+func (s *Scaler) directlyTerminateInstance(ctx context.Context, ec2Client terminateInstancesAPI, instanceID string, desired int64) error {
+	if err := s.setDesiredCapacity(ctx, desired); err != nil {
+		return fmt.Errorf("set desired capacity before terminating instance: %w", err)
+	}
+
 	_, err := ec2Client.TerminateInstances(ctx, &ec2.TerminateInstancesInput{
 		InstanceIds: []string{instanceID},
 	})
@@ -640,6 +614,51 @@ func directlyTerminateInstance(ctx context.Context, ec2Client *ec2.Client, insta
 
 	log.Printf("[Elastic CI Mode] Successfully terminated instance %s via EC2 API", instanceID)
 	return nil
+}
+
+// oldestInstances picks up to n instances to stop, oldest launch first.
+//
+// Draining instances stay in the ASG until their job finishes, so a later poll
+// sees the same set and must pick the same instances. Anything else stops more
+// agents than the scaling target asked for. Instance ID breaks launch-time ties
+// because instances launched in one batch often share a timestamp. When the
+// describe call fails we return the error instead of guessing from ASG order,
+// which AWS does not keep stable.
+func oldestInstances(ctx context.Context, client describeInstancesAPI, instanceIDs []string, n int64, asgName string) ([]string, error) {
+	describeResult, err := describeInstancesTolerant(ctx, client, instanceIDs, asgName)
+	if err != nil {
+		return nil, fmt.Errorf("describe instance launch times: %w", err)
+	}
+
+	type instanceInfo struct {
+		ID         string
+		LaunchTime time.Time
+	}
+	instances := make([]instanceInfo, 0, len(instanceIDs))
+	for _, reservation := range describeResult.Reservations {
+		for _, instance := range reservation.Instances {
+			if instance.InstanceId == nil || instance.LaunchTime == nil {
+				continue
+			}
+			instances = append(instances, instanceInfo{ID: *instance.InstanceId, LaunchTime: *instance.LaunchTime})
+		}
+	}
+
+	slices.SortFunc(instances, func(a, b instanceInfo) int {
+		return cmp.Or(a.LaunchTime.Compare(b.LaunchTime), cmp.Compare(a.ID, b.ID))
+	})
+
+	limit := min(int(n), len(instances))
+	selected := make([]string, 0, limit)
+	for _, instance := range instances[:limit] {
+		selected = append(selected, instance.ID)
+	}
+
+	if len(selected) > 0 {
+		log.Printf("[Elastic CI Mode] Selecting %d oldest instances by launch time for termination (oldest from %s)",
+			len(selected), instances[0].LaunchTime.Format(time.RFC3339))
+	}
+	return selected, nil
 }
 
 type buildkiteDriver struct {
