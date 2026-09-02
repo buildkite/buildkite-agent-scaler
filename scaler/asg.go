@@ -179,6 +179,12 @@ func filterOnlineSSMInstances(ctx context.Context, ssmSvc ssmCheckAPI, instanceI
 	return online, nil
 }
 
+// ssmPollTimings returns how often and for how long to poll Run Command
+// invocations, falling back to the production defaults when unset.
+func (a *ASGDriver) ssmPollTimings() (interval, deadline time.Duration) {
+	return cmp.Or(a.ssmPollInterval, 3*time.Second), cmp.Or(a.ssmPollDeadline, 60*time.Second)
+}
+
 // pollCommandInvocations polls ListCommandInvocations every interval until
 // every expected invocation reaches a terminal status or the deadline elapses.
 // On timeout it returns whatever invocations exist so far. Each poll lists every
@@ -321,8 +327,7 @@ func (a *ASGDriver) checkAndMarkUnhealthy(
 	// first poll, then poll on a fixed interval up to a bounded deadline.
 	// https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_GetCommandInvocation.html
 	registrationDelay := cmp.Or(a.ssmRegistrationDelay, 3*time.Second)
-	pollInterval := cmp.Or(a.ssmPollInterval, 3*time.Second)
-	pollDeadline := cmp.Or(a.ssmPollDeadline, 60*time.Second)
+	pollInterval, pollDeadline := a.ssmPollTimings()
 	time.Sleep(registrationDelay)
 	results, pollErr := pollCommandInvocations(ctx, ssmSvc, commandIDs, len(onlineIDs), pollInterval, pollDeadline)
 	if pollErr != nil {

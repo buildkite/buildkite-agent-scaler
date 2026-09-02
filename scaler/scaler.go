@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	ssmTypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/buildkite/buildkite-agent-scaler/buildkite"
 )
 
@@ -420,50 +421,13 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 		failedGracefulHandoff := errors.Is(gracefulScaleInErr, errNoReachableScaleInCandidates)
 		singleInstanceASG := current.DesiredCount <= 1 && current.TotalCount == 1 && len(current.InstanceIDs) == 1
 		if failedGracefulHandoff && singleInstanceASG {
-			instanceID := current.InstanceIDs[0]
-			log.Printf("[Elastic CI Mode] Single-instance ASG detected - checking if instance %s is a dangling instance", instanceID)
-
-			// Only consider direct termination for dangling instances
-			ssmClient := ssm.NewFromConfig(s.cfg)
-
-			// Detect platform for this instance
-			descResp, descErr := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
-				InstanceIds: []string{instanceID},
-			})
-
-			documentName := "AWS-RunShellScript"
-			checkCommand := "systemctl is-active buildkite-agent"
-			if descErr != nil {
-				log.Printf("[Elastic CI Mode] Warning: Failed to detect platform for %s, defaulting to Linux: %v", instanceID, descErr)
-			} else if len(descResp.Reservations) > 0 && len(descResp.Reservations[0].Instances) > 0 {
-				instance := descResp.Reservations[0].Instances[0]
-				if strings.EqualFold(string(instance.Platform), "windows") {
-					documentName = "AWS-RunPowerShellScript"
-					checkCommand = "nssm status buildkite-agent"
-					log.Printf("[Elastic CI Mode] Detected Windows platform for instance %s", instanceID)
-				}
-			}
-
-			// Try to check if buildkite-agent is running via SSM
-			_, err := ssmClient.SendCommand(ctx, &ssm.SendCommandInput{
-				InstanceIds:  []string{instanceID},
-				DocumentName: aws.String(documentName),
-				Parameters: map[string][]string{
-					"commands": {checkCommand},
-				},
-				Comment: aws.String("Check if buildkite-agent service is running"),
-			})
-
-			// Only terminate if we can't check agent status, suggesting it's likely a dangling instance
+			pollInterval, pollDeadline := asgDriver.ssmPollTimings()
+			terminated, err := s.terminateIfDangling(ctx, ec2Client, ssm.NewFromConfig(s.cfg), current.InstanceIDs[0], desired, pollInterval, pollDeadline)
 			if err != nil {
-				log.Printf("[Elastic CI Mode] Warning: Cannot check agent status, assuming dangling instance: %v", err)
-				log.Printf("[Elastic CI Mode] Directly terminating probable dangling instance")
-
-				if termErr := s.directlyTerminateInstance(ctx, ec2Client, instanceID, desired); termErr != nil {
-					return errors.Join(gracefulScaleInErr, fmt.Errorf("directly terminate probable dangling instance: %w", termErr))
-				}
-			} else {
-				log.Printf("[Elastic CI Mode] Instance appears responsive, not terminating directly")
+				return errors.Join(gracefulScaleInErr, err)
+			}
+			if terminated {
+				return nil
 			}
 		}
 		return gracefulScaleInErr
@@ -657,6 +621,100 @@ func oldestInstances(ctx context.Context, client describeInstancesAPI, instanceI
 			len(selected), instances[0].LaunchTime.Format(time.RFC3339))
 	}
 	return selected, nil
+}
+
+type dangleProbeEC2API interface {
+	describeInstancesAPI
+	terminateInstancesAPI
+}
+
+// terminateIfDangling handles the last instance in an ASG that no graceful
+// stop could reach. SSM already reported it as not Online, so we run a service
+// check and wait for the result: SendCommand only confirms the command was
+// accepted, and on a ConnectionLost instance it sits in Pending forever. A
+// Success result spares the instance. Anything else only proves the SSM agent
+// did not run the probe, not that buildkite-agent is down, so we terminate
+// only when Buildkite also reports no agents connected on the queue. Returns
+// true when the instance was terminated.
+func (s *Scaler) terminateIfDangling(ctx context.Context, ec2Client dangleProbeEC2API, ssmClient ssmCheckAPI, instanceID string, desired int64, pollInterval, pollDeadline time.Duration) (bool, error) {
+	log.Printf("[Elastic CI Mode] Single-instance ASG detected - checking if instance %s is a dangling instance", instanceID)
+
+	documentName := "AWS-RunShellScript"
+	checkCommand := "systemctl is-active buildkite-agent"
+	descResp, err := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+		InstanceIds: []string{instanceID},
+	})
+	if err != nil {
+		log.Printf("[Elastic CI Mode] Warning: Failed to detect platform for %s, defaulting to Linux: %v", instanceID, err)
+	} else if len(descResp.Reservations) > 0 && len(descResp.Reservations[0].Instances) > 0 {
+		instance := descResp.Reservations[0].Instances[0]
+		if strings.EqualFold(string(instance.Platform), "windows") {
+			documentName = "AWS-RunPowerShellScript"
+			checkCommand = "nssm status buildkite-agent"
+			log.Printf("[Elastic CI Mode] Detected Windows platform for instance %s", instanceID)
+		}
+	}
+
+	sendOut, err := ssmClient.SendCommand(ctx, &ssm.SendCommandInput{
+		InstanceIds:  []string{instanceID},
+		DocumentName: aws.String(documentName),
+		Parameters: map[string][]string{
+			"commands": {checkCommand},
+		},
+		Comment: aws.String("Check if buildkite-agent service is running"),
+	})
+	if err != nil {
+		log.Printf("[Elastic CI Mode] Warning: Cannot check agent status on %s: %v", instanceID, err)
+	} else {
+		active, err := agentServiceActive(ctx, ssmClient, instanceID, aws.ToString(sendOut.Command.CommandId), pollInterval, pollDeadline)
+		if err != nil {
+			return false, err
+		}
+		if active {
+			log.Printf("[Elastic CI Mode] Instance %s reports an active buildkite-agent service, not terminating directly", instanceID)
+			return false, nil
+		}
+	}
+
+	// The queue metrics that drove this scale-in are from before the probe
+	// wait, and the agent may have taken a job since. Ask Buildkite again and
+	// only hard-kill when nothing is connected on the queue.
+	metrics, err := s.bk.GetAgentMetrics(ctx)
+	if err != nil {
+		return false, fmt.Errorf("confirm no agents connected before terminating %s: %w", instanceID, err)
+	}
+	if metrics.TotalAgents > 0 {
+		log.Printf("[Elastic CI Mode] Buildkite still reports %d agent(s) connected on the queue, not terminating %s directly", metrics.TotalAgents, instanceID)
+		return false, nil
+	}
+
+	log.Printf("[Elastic CI Mode] Directly terminating probable dangling instance")
+	if err := s.directlyTerminateInstance(ctx, ec2Client, instanceID, desired); err != nil {
+		return false, fmt.Errorf("directly terminate probable dangling instance: %w", err)
+	}
+	return true, nil
+}
+
+// agentServiceActive waits for the service-check command to finish on the
+// instance and reports whether it succeeded. Only Success is a positive answer;
+// a probe that never reaches a terminal status is inconclusive and reported as
+// not active. A polling error is returned as-is: it tells us nothing about the
+// instance, so the caller must not act on it.
+func agentServiceActive(ctx context.Context, ssmClient ssmCheckAPI, instanceID, commandID string, pollInterval, pollDeadline time.Duration) (bool, error) {
+	results, err := pollCommandInvocations(ctx, ssmClient, []string{commandID}, 1, pollInterval, pollDeadline)
+	if err != nil {
+		return false, fmt.Errorf("poll agent status probe %s: %w", commandID, err)
+	}
+	invocation, ok := results[instanceID]
+	if !ok {
+		log.Printf("[Elastic CI Mode] Agent status probe on %s was not picked up within %s", instanceID, pollDeadline)
+		return false, nil
+	}
+	if invocation.Status != ssmTypes.CommandInvocationStatusSuccess {
+		log.Printf("[Elastic CI Mode] Agent status probe on %s did not succeed (status %s)", instanceID, invocation.Status)
+		return false, nil
+	}
+	return true, nil
 }
 
 type buildkiteDriver struct {

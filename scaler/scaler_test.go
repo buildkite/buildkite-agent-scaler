@@ -13,6 +13,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/autoscaling/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2Types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	ssmTypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
 	"github.com/buildkite/buildkite-agent-scaler/buildkite"
 )
 
@@ -545,6 +547,13 @@ func (c *terminateInstancesTestClient) TerminateInstances(context.Context, *ec2.
 	return &ec2.TerminateInstancesOutput{}, nil
 }
 
+// dangleProbeTestClient combines the describe and terminate stubs so one value
+// satisfies dangleProbeEC2API.
+type dangleProbeTestClient struct {
+	*stubDescribeInstancesClient
+	*terminateInstancesTestClient
+}
+
 func describeOutput(instances ...ec2Types.Instance) *ec2.DescribeInstancesOutput {
 	return &ec2.DescribeInstancesOutput{Reservations: []ec2Types.Reservation{{Instances: instances}}}
 }
@@ -597,6 +606,101 @@ func TestOldestInstancesFailsClosedOnDescribeError(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("oldestInstances() = %v, want no candidates", got)
+	}
+}
+
+func TestTerminateIfDangling(t *testing.T) {
+	probeResult := func(status ssmTypes.CommandInvocationStatus) []stubListResponse {
+		return []stubListResponse{{out: &ssm.ListCommandInvocationsOutput{
+			CommandInvocations: []ssmTypes.CommandInvocation{{InstanceId: aws.String("i-a"), Status: status}},
+		}}}
+	}
+	listErr := errors.New("ListCommandInvocations throttled")
+	metricsErr := errors.New("buildkite metrics unavailable")
+
+	for _, tc := range []struct {
+		name            string
+		sendErr         error
+		listResponses   []stubListResponse
+		connectedAgents int64
+		metricsErr      error
+		wantErr         error
+		wantTerminated  bool
+		wantEvents      string
+	}{
+		{
+			name:           "unreachable instance is terminated after lowering capacity",
+			sendErr:        errors.New("InvalidInstanceId"),
+			wantTerminated: true,
+			wantEvents:     "[set desired capacity terminate instance]",
+		},
+		{
+			name:          "instance with an active agent service is left alone",
+			listResponses: probeResult(ssmTypes.CommandInvocationStatusSuccess),
+			wantEvents:    "[]",
+		},
+		{
+			// SendCommand accepts commands for ConnectionLost instances and
+			// leaves them Pending; accepted is not the same as executed.
+			name:           "probe that never executes is terminated when no agents are connected",
+			listResponses:  probeResult(ssmTypes.CommandInvocationStatusPending),
+			wantTerminated: true,
+			wantEvents:     "[set desired capacity terminate instance]",
+		},
+		{
+			// A broken SSM agent says nothing about buildkite-agent, which may
+			// have picked up a job while we waited on the probe.
+			name:            "probe that never executes is left alone while an agent is connected",
+			listResponses:   probeResult(ssmTypes.CommandInvocationStatusPending),
+			connectedAgents: 1,
+			wantEvents:      "[]",
+		},
+		{
+			name:           "probe reporting a stopped agent service is terminated",
+			listResponses:  probeResult(ssmTypes.CommandInvocationStatusFailed),
+			wantTerminated: true,
+			wantEvents:     "[set desired capacity terminate instance]",
+		},
+		{
+			name:          "polling failure leaves the instance alone and reports the error",
+			listResponses: []stubListResponse{{err: listErr}},
+			wantErr:       listErr,
+			wantEvents:    "[]",
+		},
+		{
+			name:          "metrics failure leaves the instance alone and reports the error",
+			listResponses: probeResult(ssmTypes.CommandInvocationStatusPending),
+			metricsErr:    metricsErr,
+			wantErr:       metricsErr,
+			wantEvents:    "[]",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			asg := &asgTestDriver{desiredCapacity: 1}
+			ec2Client := dangleProbeTestClient{
+				stubDescribeInstancesClient:  &stubDescribeInstancesClient{},
+				terminateInstancesTestClient: &terminateInstancesTestClient{events: &asg.events},
+			}
+			ssmClient := &stubSSMClient{sendErr: tc.sendErr, listResponses: tc.listResponses}
+			s := Scaler{
+				autoscaling: asg,
+				bk: &buildkiteTestDriver{
+					metrics: buildkite.AgentMetrics{TotalAgents: tc.connectedAgents},
+					err:     tc.metricsErr,
+				},
+			}
+
+			terminated, err := s.terminateIfDangling(t.Context(), ec2Client, ssmClient, "i-a", 0, time.Millisecond, time.Millisecond)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("terminateIfDangling() error = %v, want %v", err, tc.wantErr)
+			}
+			if terminated != tc.wantTerminated {
+				t.Errorf("terminated = %v, want %v", terminated, tc.wantTerminated)
+			}
+			if got := fmt.Sprint(asg.events); got != tc.wantEvents {
+				t.Errorf("calls = %s, want %s", got, tc.wantEvents)
+			}
+		})
 	}
 }
 
