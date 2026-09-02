@@ -457,6 +457,7 @@ type asgTestDriver struct {
 	maxSize                 int64 // If 0, defaults to 100
 	sigTermsSent            []string
 	sigTermsDispatched      int
+	useSigTermsDispatched   bool
 	sigTermErr              error
 	setDesiredCapacityCalls int
 	elasticCIMode           bool
@@ -501,7 +502,7 @@ func (d *asgTestDriver) SetDesiredCapacity(ctx context.Context, count int64) err
 func (d *asgTestDriver) SendSIGTERMToAgentsBatch(ctx context.Context, instanceIDs []string) (int, error) {
 	d.events = append(d.events, "send graceful stop")
 	d.sigTermsSent = append(d.sigTermsSent, instanceIDs...)
-	if d.sigTermErr != nil {
+	if d.useSigTermsDispatched || d.sigTermErr != nil {
 		return d.sigTermsDispatched, d.sigTermErr
 	}
 	return len(instanceIDs), d.err
@@ -516,11 +517,15 @@ func TestGracefullyScaleInLetsLinuxAgentsDecrementCapacity(t *testing.T) {
 	testCases := []struct {
 		name                   string
 		dispatched             int
+		useDispatched          bool
 		dispatchErr            error
+		setDesiredErr          error
 		wantEvents             string
 		wantDesiredCapacity    int64
 		wantSetDesiredCapacity int
 		wantLastEvent          bool
+		wantErr                error
+		wantErrText            string
 	}{
 		{
 			name:                "successful Linux dispatch",
@@ -529,10 +534,20 @@ func TestGracefullyScaleInLetsLinuxAgentsDecrementCapacity(t *testing.T) {
 			wantLastEvent:       true,
 		},
 		{
+			name:                "no online Linux instances",
+			useDispatched:       true,
+			wantEvents:          "[send graceful stop]",
+			wantDesiredCapacity: 3,
+			wantLastEvent:       true,
+			wantErr:             errNoReachableScaleInCandidates,
+		},
+		{
 			name:                "failed Linux dispatch",
 			dispatchErr:         errors.New("send command"),
 			wantEvents:          "[send graceful stop]",
 			wantDesiredCapacity: 3,
+			wantLastEvent:       true,
+			wantErrText:         "send command",
 		},
 		{
 			name:                "partially successful Linux dispatch",
@@ -550,14 +565,41 @@ func TestGracefullyScaleInLetsLinuxAgentsDecrementCapacity(t *testing.T) {
 			wantSetDesiredCapacity: 1,
 			wantLastEvent:          true,
 		},
+		{
+			name:                   "Windows desired capacity update fails",
+			dispatchErr:            ErrWindowsGracefulScaleInNotSupported,
+			setDesiredErr:          errors.New("throttled"),
+			wantEvents:             "[send graceful stop set desired capacity]",
+			wantDesiredCapacity:    1,
+			wantSetDesiredCapacity: 1,
+			wantErrText:            "set desired capacity to 1 for windows instances: throttled",
+		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			asg := &asgTestDriver{desiredCapacity: 3, sigTermsDispatched: tc.dispatched, sigTermErr: tc.dispatchErr}
+			asg := &asgTestDriver{
+				desiredCapacity:       3,
+				sigTermsDispatched:    tc.dispatched,
+				useSigTermsDispatched: tc.useDispatched,
+				sigTermErr:            tc.dispatchErr,
+				err:                   tc.setDesiredErr,
+			}
 			s := Scaler{autoscaling: asg}
 
-			s.gracefullyScaleIn(t.Context(), []string{"i-a", "i-b"}, 1)
+			err := s.gracefullyScaleIn(t.Context(), []string{"i-a", "i-b"}, 1)
+			switch {
+			case tc.wantErr != nil:
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("gracefullyScaleIn() error = %v, want %v", err, tc.wantErr)
+				}
+			case tc.wantErrText != "":
+				if err == nil || err.Error() != tc.wantErrText {
+					t.Fatalf("gracefullyScaleIn() error = %v, want %q", err, tc.wantErrText)
+				}
+			case err != nil:
+				t.Fatalf("gracefullyScaleIn() error = %v, want nil", err)
+			}
 
 			if got := fmt.Sprint(asg.events); got != tc.wantEvents {
 				t.Errorf("calls = %s, want %s", got, tc.wantEvents)

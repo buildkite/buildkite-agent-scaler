@@ -3,6 +3,7 @@ package scaler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"math"
 	"sort"
@@ -458,7 +459,7 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 		}
 
 		log.Printf("[Elastic CI Mode] Attempting graceful termination for %d instance(s): %v", len(instancesForTermination), instancesForTermination)
-		s.gracefullyScaleIn(ctx, instancesForTermination, desired)
+		gracefulScaleInErr := s.gracefullyScaleIn(ctx, instancesForTermination, desired)
 
 		if current.DesiredCount <= 1 && len(current.InstanceIDs) == 1 {
 			instanceID := current.InstanceIDs[0]
@@ -508,7 +509,7 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 				log.Printf("[Elastic CI Mode] Instance appears responsive, not terminating directly")
 			}
 		}
-		return nil
+		return gracefulScaleInErr
 	} else {
 		log.Printf("Using standard scale-in (Elastic CI Mode disabled or no instances to terminate)")
 		if err := s.setDesiredCapacity(ctx, desired); err != nil {
@@ -519,27 +520,41 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 	}
 }
 
-func (s *Scaler) gracefullyScaleIn(ctx context.Context, instanceIDs []string, desired int64) {
+// errNoReachableScaleInCandidates means no graceful-stop command went out
+// because none of the candidates is online in SSM. Kept separate from API
+// errors so callers can tell "nothing to talk to" from "the call failed".
+var errNoReachableScaleInCandidates = errors.New("no graceful-stop commands dispatched: no scale-in candidates reachable via SSM")
+
+// gracefullyScaleIn asks the selected instances to drain and stop. Windows
+// instances can't be drained this way, so they get a desired-capacity update
+// and the ASG terminates them.
+func (s *Scaler) gracefullyScaleIn(ctx context.Context, instanceIDs []string, desired int64) error {
 	// Elastic CI Stack agents self-terminate and decrement desired capacity
 	// after draining. Setting desired capacity here for Linux would decrement
 	// twice when those targeted terminations complete.
 	dispatched, err := s.autoscaling.SendSIGTERMToAgentsBatch(ctx, instanceIDs)
-	if err != nil {
-		if errors.Is(err, ErrWindowsGracefulScaleInNotSupported) {
-			log.Printf("ℹ️  Skipped %d Windows instance(s) - graceful scale-in not supported, will be terminated directly by ASG", len(instanceIDs))
-			if err := s.setDesiredCapacity(ctx, desired); err != nil {
-				log.Printf("CRITICAL: [Elastic CI Mode] Failed to set desired capacity to %d for Windows instances: %v", desired, err)
-			} else {
-				s.scaleInParams.LastEvent = time.Now()
-			}
-			return
+	if errors.Is(err, ErrWindowsGracefulScaleInNotSupported) {
+		log.Printf("ℹ️  Skipped %d Windows instance(s) - graceful scale-in not supported, will be terminated directly by ASG", len(instanceIDs))
+		if err := s.setDesiredCapacity(ctx, desired); err != nil {
+			return fmt.Errorf("set desired capacity to %d for windows instances: %w", desired, err)
 		}
-
+		s.scaleInParams.LastEvent = time.Now()
+		return nil
+	}
+	if err != nil {
 		log.Printf("⚠️  Failed to send graceful-stop command to one or more instances: %v", err)
+	}
+	if dispatched == 0 && len(instanceIDs) > 0 {
+		s.scaleInParams.LastEvent = time.Now()
+		if err != nil {
+			return err
+		}
+		return errNoReachableScaleInCandidates
 	}
 	if dispatched > 0 {
 		s.scaleInParams.LastEvent = time.Now()
 	}
+	return nil
 }
 
 func (s *Scaler) scaleOut(ctx context.Context, desired int64, current AutoscaleGroupDetails) error {
