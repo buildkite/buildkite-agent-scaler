@@ -587,14 +587,20 @@ func (a *ASGDriver) sendSIGTERMToAgentsBatch(ctx context.Context, ssmSvc ssmChec
 
 	// With consecutive Lambda invocations selecting the same instance, only
 	// the first command stops the agent. Later commands observe the marker and
-	// exit without disrupting the drain already in progress.
+	// exit without disrupting the drain already in progress. The marker is
+	// written before the stop so the drain can see it, and removed again if
+	// both stop commands fail; a stale marker would block every retry.
 	command := `#!/bin/bash
 if [ -f ` + terminationMarkerPath + ` ]; then
   echo "Already marked for termination, skipping"
   exit 0
 fi
 echo "Termination requested at $(date)" > ` + terminationMarkerPath + `
-sudo systemctl stop buildkite-agent.service || sudo /opt/buildkite-agent/bin/buildkite-agent stop --signal SIGTERM
+if ! sudo systemctl stop buildkite-agent.service && ! sudo /opt/buildkite-agent/bin/buildkite-agent stop --signal SIGTERM; then
+  echo "Both stop commands failed, clearing termination marker so a later attempt can retry"
+  rm -f ` + terminationMarkerPath + `
+  exit 1
+fi
 `
 
 	var sendErrors []error
