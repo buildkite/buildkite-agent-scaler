@@ -40,6 +40,7 @@ type AutoscaleGroupDetails struct {
 	MaxSize      int64
 	InstanceIDs  []string // InService instance IDs eligible for scale-in
 	ActualCount  int64    // Actual number of running instances
+	TotalCount   int64    // Total number of instances across all lifecycle states
 }
 
 type ASGDriver struct {
@@ -396,6 +397,7 @@ func autoscaleGroupDetails(asg types.AutoScalingGroup) AutoscaleGroupDetails {
 		MinSize:      int64(*asg.MinSize),
 		MaxSize:      int64(*asg.MaxSize),
 		InstanceIDs:  make([]string, 0, len(asg.Instances)),
+		TotalCount:   int64(len(asg.Instances)),
 	}
 
 	for _, instance := range asg.Instances {

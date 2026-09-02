@@ -461,7 +461,13 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 		log.Printf("[Elastic CI Mode] Attempting graceful termination for %d instance(s): %v", len(instancesForTermination), instancesForTermination)
 		gracefulScaleInErr := s.gracefullyScaleIn(ctx, instancesForTermination, desired)
 
-		if current.DesiredCount <= 1 && len(current.InstanceIDs) == 1 {
+		// Only probe when nothing was reachable over SSM. A failed SSM or EC2
+		// API call tells us nothing about the instance, and the probe would
+		// most likely fail the same way before hard-killing an agent that
+		// might be mid-job.
+		failedGracefulHandoff := errors.Is(gracefulScaleInErr, errNoReachableScaleInCandidates)
+		singleInstanceASG := current.DesiredCount <= 1 && current.TotalCount == 1 && len(current.InstanceIDs) == 1
+		if failedGracefulHandoff && singleInstanceASG {
 			instanceID := current.InstanceIDs[0]
 			log.Printf("[Elastic CI Mode] Single-instance ASG detected - checking if instance %s is a dangling instance", instanceID)
 
@@ -502,8 +508,8 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 				log.Printf("[Elastic CI Mode] Warning: Cannot check agent status, assuming dangling instance: %v", err)
 				log.Printf("[Elastic CI Mode] Directly terminating probable dangling instance")
 
-				if termErr := directlyTerminateInstance(ctx, ec2Client, instanceID); termErr != nil {
-					log.Printf("[Elastic CI Mode] Error: Failed to terminate: %v", termErr)
+				if termErr := s.directlyTerminateInstance(ctx, ec2Client, instanceID, desired); termErr != nil {
+					return errors.Join(gracefulScaleInErr, fmt.Errorf("directly terminate probable dangling instance: %w", termErr))
 				}
 			} else {
 				log.Printf("[Elastic CI Mode] Instance appears responsive, not terminating directly")
@@ -629,9 +635,17 @@ func (s *Scaler) setDesiredCapacity(ctx context.Context, desired int64) error {
 	return nil
 }
 
-// directlyTerminateInstance terminates an EC2 instance directly via EC2 API
-// This is a helper function for dangling instance termination
-func directlyTerminateInstance(ctx context.Context, ec2Client *ec2.Client, instanceID string) error {
+type terminateInstancesAPI interface {
+	TerminateInstances(ctx context.Context, params *ec2.TerminateInstancesInput, optFns ...func(*ec2.Options)) (*ec2.TerminateInstancesOutput, error)
+}
+
+// directlyTerminateInstance lowers desired capacity before terminating an EC2
+// instance so the ASG does not launch a replacement.
+func (s *Scaler) directlyTerminateInstance(ctx context.Context, ec2Client terminateInstancesAPI, instanceID string, desired int64) error {
+	if err := s.setDesiredCapacity(ctx, desired); err != nil {
+		return fmt.Errorf("set desired capacity before terminating instance: %w", err)
+	}
+
 	_, err := ec2Client.TerminateInstances(ctx, &ec2.TerminateInstancesInput{
 		InstanceIds: []string{instanceID},
 	})
