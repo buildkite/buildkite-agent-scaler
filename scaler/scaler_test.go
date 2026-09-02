@@ -545,6 +545,13 @@ func (c *terminateInstancesTestClient) TerminateInstances(context.Context, *ec2.
 	return &ec2.TerminateInstancesOutput{}, nil
 }
 
+// dangleProbeTestClient combines the describe and terminate stubs so one value
+// satisfies dangleProbeEC2API.
+type dangleProbeTestClient struct {
+	*stubDescribeInstancesClient
+	*terminateInstancesTestClient
+}
+
 func describeOutput(instances ...ec2Types.Instance) *ec2.DescribeInstancesOutput {
 	return &ec2.DescribeInstancesOutput{Reservations: []ec2Types.Reservation{{Instances: instances}}}
 }
@@ -597,6 +604,46 @@ func TestOldestInstancesFailsClosedOnDescribeError(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("oldestInstances() = %v, want no candidates", got)
+	}
+}
+
+func TestTerminateIfDangling(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		sendErr        error
+		wantTerminated bool
+		wantEvents     string
+	}{
+		{
+			name:           "unreachable instance is terminated after lowering capacity",
+			sendErr:        errors.New("InvalidInstanceId"),
+			wantTerminated: true,
+			wantEvents:     "[set desired capacity terminate instance]",
+		},
+		{
+			name:       "responsive instance is left alone",
+			wantEvents: "[]",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			asg := &asgTestDriver{desiredCapacity: 1}
+			ec2Client := dangleProbeTestClient{
+				stubDescribeInstancesClient:  &stubDescribeInstancesClient{},
+				terminateInstancesTestClient: &terminateInstancesTestClient{events: &asg.events},
+			}
+			s := Scaler{autoscaling: asg}
+
+			terminated, err := s.terminateIfDangling(t.Context(), ec2Client, &stubSSMClient{sendErr: tc.sendErr}, "i-a", 0)
+			if err != nil {
+				t.Fatalf("terminateIfDangling() error = %v", err)
+			}
+			if terminated != tc.wantTerminated {
+				t.Errorf("terminated = %v, want %v", terminated, tc.wantTerminated)
+			}
+			if got := fmt.Sprint(asg.events); got != tc.wantEvents {
+				t.Errorf("calls = %s, want %s", got, tc.wantEvents)
+			}
+		})
 	}
 }
 
