@@ -540,11 +540,15 @@ func TestOldestInstances(t *testing.T) {
 		return ec2Types.Instance{InstanceId: aws.String(id), LaunchTime: aws.Time(launched)}
 	}
 
+	describeErr := errors.New("throttled")
+
 	for _, tc := range []struct {
-		name string
-		out  *ec2.DescribeInstancesOutput
-		n    int64
-		want []string
+		name    string
+		out     *ec2.DescribeInstancesOutput
+		err     error
+		n       int64
+		want    []string
+		wantErr error
 	}{
 		{
 			name: "oldest first regardless of describe order",
@@ -558,30 +562,23 @@ func TestOldestInstances(t *testing.T) {
 			n:    2,
 			want: []string{"i-a", "i-b"},
 		},
+		{
+			name:    "describe error fails closed",
+			err:     describeErr,
+			n:       1,
+			wantErr: describeErr,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			client := &stubDescribeInstancesClient{responses: []stubDescribeResponse{{out: tc.out}}}
+			client := &stubDescribeInstancesClient{responses: []stubDescribeResponse{{out: tc.out, err: tc.err}}}
 			got, err := oldestInstances(t.Context(), client, []string{"i-a", "i-b", "i-c"}, tc.n, "asg-1")
-			if err != nil {
-				t.Fatalf("oldestInstances() error = %v", err)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("oldestInstances() error = %v, want %v", err, tc.wantErr)
 			}
 			if !slices.Equal(got, tc.want) {
 				t.Errorf("oldestInstances() = %v, want %v", got, tc.want)
 			}
 		})
-	}
-}
-
-func TestOldestInstancesFailsClosedOnDescribeError(t *testing.T) {
-	describeErr := errors.New("throttled")
-	client := &stubDescribeInstancesClient{responses: []stubDescribeResponse{{err: describeErr}}}
-
-	got, err := oldestInstances(t.Context(), client, []string{"i-a", "i-b"}, 1, "asg-1")
-	if !errors.Is(err, describeErr) {
-		t.Fatalf("oldestInstances() error = %v, want %v", err, describeErr)
-	}
-	if len(got) != 0 {
-		t.Errorf("oldestInstances() = %v, want no candidates", got)
 	}
 }
 
