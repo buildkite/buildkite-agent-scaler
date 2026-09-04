@@ -489,13 +489,10 @@ func (a *ASGDriver) SetDesiredCapacity(ctx context.Context, count int64) error {
 	return nil
 }
 
-func (a *ASGDriver) GetAutoscalingActivities(ctx context.Context, nextToken *string) (*autoscaling.DescribeScalingActivitiesOutput, error) {
-	svc := autoscaling.NewFromConfig(a.Cfg)
-	input := &autoscaling.DescribeScalingActivitiesInput{
-		AutoScalingGroupName: aws.String(a.Name),
-		NextToken:            nextToken,
-	}
-	return svc.DescribeScalingActivities(ctx, input)
+// scalingActivitiesAPI is the subset of autoscaling.Client used to read the
+// group's activity history.
+type scalingActivitiesAPI interface {
+	DescribeScalingActivities(ctx context.Context, params *autoscaling.DescribeScalingActivitiesInput, optFns ...func(*autoscaling.Options)) (*autoscaling.DescribeScalingActivitiesOutput, error)
 }
 
 // isUserRequestedScaleIn reports whether an activity shrank the group because
@@ -508,51 +505,75 @@ func isUserRequestedScaleIn(cause string) bool {
 			strings.Contains(cause, userRequestForTerminatingInstance))
 }
 
-func (a *ASGDriver) GetLastScalingInAndOutActivity(ctx context.Context, findScaleOut, findScaleIn bool) (*types.Activity, *types.Activity, error) {
+// GetLastScalingInAndOutActivity finds the most recent successful scale-out
+// and user-requested scale-in that started at or after since, walking at most
+// MaxDescribeScalingActivitiesPages pages. A zero since means no lower bound.
+// This seeds the cooldowns across Lambda cold starts.
+func (a *ASGDriver) GetLastScalingInAndOutActivity(ctx context.Context, findScaleOut, findScaleIn bool, since time.Time) (*types.Activity, *types.Activity, error) {
+	return a.lastScalingActivities(ctx, autoscaling.NewFromConfig(a.Cfg), findScaleOut, findScaleIn, since, a.MaxDescribeScalingActivitiesPages)
+}
+
+// lastScalingActivities walks the group's successful activities, newest
+// first, until it has found what was asked for or runs out of pages. A
+// non-positive maxPages means unlimited. Running out of pages before finding
+// a match isn't an error; hitting the cap is, because the answer is unknown.
+func (a *ASGDriver) lastScalingActivities(ctx context.Context, svc scalingActivitiesAPI, findScaleOut, findScaleIn bool, since time.Time, maxPages int) (*types.Activity, *types.Activity, error) {
+	if !findScaleOut && !findScaleIn {
+		return nil, nil, nil
+	}
+
+	filters := []types.Filter{
+		{Name: aws.String("Status"), Values: []string{activitySucessfulStatusCode}},
+	}
+	if !since.IsZero() {
+		filters = append(filters, types.Filter{
+			Name:   aws.String("StartTimeLowerBound"),
+			Values: []string{since.UTC().Format(time.RFC3339)},
+		})
+	}
+
 	var nextToken *string
 	var lastScalingOutActivity *types.Activity
 	var lastScalingInActivity *types.Activity
-	hasFoundScalingActivities := false
 
-	for i := 0; !hasFoundScalingActivities; {
-		i++
-		if a.MaxDescribeScalingActivitiesPages >= 0 && i >= a.MaxDescribeScalingActivitiesPages {
-			return lastScalingOutActivity, lastScalingInActivity, fmt.Errorf("%d exceeds allowed pages for autoscaling:DescribeScalingActivities, %d", i, a.MaxDescribeScalingActivitiesPages)
+	for page := 0; ; page++ {
+		if maxPages > 0 && page >= maxPages {
+			return lastScalingOutActivity, lastScalingInActivity, fmt.Errorf("autoscaling:DescribeScalingActivities exceeded maximum of %d pages", maxPages)
 		}
 
-		output, err := a.GetAutoscalingActivities(ctx, nextToken)
+		output, err := svc.DescribeScalingActivities(ctx, &autoscaling.DescribeScalingActivitiesInput{
+			AutoScalingGroupName: aws.String(a.Name),
+			Filters:              filters,
+			MaxRecords:           aws.Int32(100),
+			NextToken:            nextToken,
+		})
 		if err != nil {
 			return lastScalingOutActivity, lastScalingInActivity, err
 		}
 
-		for _, activity := range output.Activities {
+		for i := range output.Activities {
+			activity := &output.Activities[i]
 			cause := aws.ToString(activity.Cause)
-			if string(activity.StatusCode) == activitySucessfulStatusCode {
-				if lastScalingOutActivity == nil &&
-					strings.Contains(cause, userRequestForChangingDesiredCapacity) &&
-					strings.Contains(cause, scalingOutKey) {
-					lastScalingOutActivity = &activity
-				} else if lastScalingInActivity == nil && isUserRequestedScaleIn(cause) {
-					lastScalingInActivity = &activity
-				}
+			if findScaleOut && lastScalingOutActivity == nil &&
+				strings.Contains(cause, userRequestForChangingDesiredCapacity) &&
+				strings.Contains(cause, scalingOutKey) {
+				lastScalingOutActivity = activity
 			}
+			if findScaleIn && lastScalingInActivity == nil && isUserRequestedScaleIn(cause) {
+				lastScalingInActivity = activity
+			}
+		}
 
-			if findScaleOut && findScaleIn {
-				hasFoundScalingActivities = lastScalingOutActivity != nil && lastScalingInActivity != nil
-			} else if findScaleOut {
-				hasFoundScalingActivities = lastScalingOutActivity != nil
-			} else if findScaleIn {
-				hasFoundScalingActivities = lastScalingInActivity != nil
-			}
+		if (!findScaleOut || lastScalingOutActivity != nil) &&
+			(!findScaleIn || lastScalingInActivity != nil) {
+			return lastScalingOutActivity, lastScalingInActivity, nil
 		}
 
 		nextToken = output.NextToken
 		if nextToken == nil {
-			break
+			return lastScalingOutActivity, lastScalingInActivity, nil
 		}
 	}
-
-	return lastScalingOutActivity, lastScalingInActivity, nil
 }
 
 type dryRunASG struct {

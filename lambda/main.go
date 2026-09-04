@@ -127,8 +127,16 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		cctx, cancel := context.WithTimeout(ctx, asgActivityTimeoutDuration)
 		defer cancel()
 
+		// An activity older than the longest cooldown can't hold anything
+		// off, so don't page back past it. With no cooldowns, keep the old
+		// unbounded walk.
+		var activitySince time.Time
+		if lookback := max(scaleInCooldownPeriod, scaleOutCooldownPeriod); lookback > 0 {
+			activitySince = time.Now().Add(-lookback)
+		}
+
 		scalingLastActivityStartTime := time.Now()
-		scaleOutOutput, scaleInOutput, err := asg.GetLastScalingInAndOutActivity(cctx, !disableScaleOut, !disableScaleIn)
+		scaleOutOutput, scaleInOutput, err := asg.GetLastScalingInAndOutActivity(cctx, !disableScaleOut, !disableScaleIn, activitySince)
 		if errors.Is(err, context.DeadlineExceeded) {
 			log.Printf("Failed to retrieve last scaling activity events due to %v timeout", asgActivityTimeoutDuration)
 			return
