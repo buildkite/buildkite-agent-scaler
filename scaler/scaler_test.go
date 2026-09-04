@@ -773,6 +773,45 @@ func TestScaleInGracefulPathConverges(t *testing.T) {
 	}
 }
 
+// TestScaleInDisabledInElasticCIMode pins that DISABLE_SCALE_IN is honoured in
+// Elastic CI Mode: no graceful stop is dispatched and desired capacity is left
+// alone, so instances only leave the group when they idle out on their own.
+func TestScaleInDisabledInElasticCIMode(t *testing.T) {
+	launched := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	asg := &asgTestDriver{desiredCapacity: 3, sigTermsAccepted: 2}
+	ec2Client := &scaleInEC2TestClient{
+		stubDescribeInstancesClient: &stubDescribeInstancesClient{
+			responses: []stubDescribeResponse{{out: describeOutput(
+				ec2Types.Instance{InstanceId: aws.String("i-a"), LaunchTime: aws.Time(launched)},
+				ec2Types.Instance{InstanceId: aws.String("i-b"), LaunchTime: aws.Time(launched.Add(time.Minute))},
+				ec2Types.Instance{InstanceId: aws.String("i-c"), LaunchTime: aws.Time(launched.Add(2 * time.Minute))},
+			)}},
+		},
+		terminateInstancesTestClient: &terminateInstancesTestClient{events: &asg.events},
+	}
+	s := Scaler{
+		autoscaling:   asg,
+		elasticCIMode: true,
+		ec2:           ec2Client,
+		ssm:           &stubSSMClient{},
+		scaleInParams: ScaleParams{Disable: true},
+	}
+	current := AutoscaleGroupDetails{DesiredCount: 3, TotalCount: 3, InstanceIDs: []string{"i-a", "i-b", "i-c"}}
+
+	if err := s.scaleIn(t.Context(), 1, current); err != nil {
+		t.Fatalf("scaleIn() error = %v, want nil", err)
+	}
+	if got := fmt.Sprint(asg.events); got != "[]" {
+		t.Errorf("calls = %s, want []", got)
+	}
+	if got := asg.desiredCapacity; got != 3 {
+		t.Errorf("desired capacity = %d, want 3", got)
+	}
+	if !s.scaleInParams.LastEvent.IsZero() {
+		t.Errorf("LastEvent = %v, want zero", s.scaleInParams.LastEvent)
+	}
+}
+
 // TestScaleInWhileASGConverging pins the early return in Run that suppresses
 // repeated scaling while the ASG is still converging on a previously set
 // desired capacity. It must fire only when the computed desired count equals

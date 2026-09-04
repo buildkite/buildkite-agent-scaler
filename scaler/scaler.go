@@ -134,7 +134,7 @@ func NewScaler(client *buildkite.Client, cfg aws.Config, params Params) (*Scaler
 	if params.ElasticCIMode {
 		log.Printf("🛡️ [Elastic CI Mode] Running with enhanced safety features (stale metrics detection, dangling instance protection)")
 		if params.ScaleInParams.Disable {
-			log.Printf("ℹ️ [Elastic CI Mode] DISABLE_SCALE_IN=true is set but will be ignored to allow proper bidirectional scaling")
+			log.Printf("ℹ️ [Elastic CI Mode] DISABLE_SCALE_IN=true: instances leave the group only when they idle out on their own")
 		}
 	}
 
@@ -296,14 +296,8 @@ func (s *Scaler) Run(ctx context.Context) (time.Duration, error) {
 }
 
 func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGroupDetails) error {
-	// In ElasticCIMode, DISABLE_SCALE_IN is ignored (handled by s.elasticCIMode check below)
-	if s.scaleInParams.Disable && !s.elasticCIMode {
+	if s.scaleInParams.Disable {
 		return nil
-	}
-
-	// If we're in ElasticCIMode and DISABLE_SCALE_IN is true, log that we're ignoring it
-	if s.scaleInParams.Disable && s.elasticCIMode {
-		log.Printf("ℹ️ [Elastic CI Mode] Ignoring DISABLE_SCALE_IN=true since ElasticCIMode has safer scaling mechanisms")
 	}
 
 	// If we've scaled down before, check if a cooldown should be enforced

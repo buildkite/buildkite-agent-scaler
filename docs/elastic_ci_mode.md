@@ -104,3 +104,4 @@ Job dispatch delays, other issues related to job processing.
 - `DANGLING_CHECK_MINIMUM_INSTANCE_UPTIME`: Minimum instance uptime before checking for dangling instances (default 1h)
 - `MAX_DANGLING_INSTANCES_TO_CHECK`: Maximum number of instances to scan for dangling detection (default 5)
 - `SCALE_IN_COOLDOWN_PERIOD`: Time to wait between scale-in operations (default 1h for Elastic CI Mode, 0 otherwise)
+- `DISABLE_SCALE_IN`: Honoured in Elastic CI Mode as well. When `true` the scaler never sends a graceful stop or lowers desired capacity; instances leave the group only when they idle out on their own (`ScaleInIdlePeriod` in the Elastic CI Stack)
