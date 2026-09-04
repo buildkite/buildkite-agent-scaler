@@ -133,7 +133,7 @@ Parameters:
 
   MaxDescribeScalingActivitiesPages:
     Type: Number
-    Description: The number of pages to retrive for DescribeScalingActivity. Negative numbers mean unlimited.
+    Description: The maximum number of pages to retrieve for DescribeScalingActivities. Non-positive numbers mean unlimited.
     Default: "-1"
 
   MinPollInterval:

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"math"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/aws/aws-sdk-go-v2/service/autoscaling/types"
 	"github.com/buildkite/buildkite-agent-scaler/buildkite"
 	"github.com/buildkite/buildkite-agent-scaler/scaler"
 	"github.com/buildkite/buildkite-agent-scaler/version"
@@ -23,6 +25,35 @@ var (
 	lastScaleTimesFetched     bool
 	lastScaleIn, lastScaleOut time.Time
 )
+
+// seedLastScaleTimes turns the activity history lookup into the times the
+// scaler starts its cooldowns from. When the lookup failed and scale-in is
+// enabled it fails closed: the scale-in cooldown starts now, so the scaler
+// waits out one cooldown instead of scaling in with no history behind it.
+// The scale-out seed stays zero on failure: a missing scale-out cooldown
+// only risks launching sooner, and holding back capacity would cost more.
+func seedLastScaleTimes(scaleOut, scaleIn *types.Activity, err error, disableScaleIn bool, now time.Time) (lastScaleOut, lastScaleIn time.Time) {
+	if err != nil {
+		if !disableScaleIn {
+			lastScaleIn = now
+		}
+		return lastScaleOut, lastScaleIn
+	}
+	if scaleOut != nil && scaleOut.StartTime != nil {
+		lastScaleOut = *scaleOut.StartTime
+	}
+	if scaleIn != nil && scaleIn.StartTime != nil {
+		lastScaleIn = *scaleIn.StartTime
+	}
+	return lastScaleOut, lastScaleIn
+}
+
+func formatLastScale(t time.Time) string {
+	if t.IsZero() {
+		return "never"
+	}
+	return t.Format(time.RFC3339Nano)
+}
 
 func main() {
 	if EnvBool("DEBUG") {
@@ -127,32 +158,31 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		cctx, cancel := context.WithTimeout(ctx, asgActivityTimeoutDuration)
 		defer cancel()
 
+		// An activity older than the longest cooldown can't hold anything
+		// off, so don't page back past it. With no cooldowns, keep the old
+		// unbounded walk.
+		var activitySince time.Time
+		if lookback := max(scaleInCooldownPeriod, scaleOutCooldownPeriod); lookback > 0 {
+			activitySince = time.Now().Add(-lookback)
+		}
+
 		scalingLastActivityStartTime := time.Now()
-		scaleOutOutput, scaleInOutput, err := asg.GetLastScalingInAndOutActivity(cctx, !disableScaleOut, !disableScaleIn)
+		scaleOutOutput, scaleInOutput, err := asg.GetLastScalingInAndOutActivity(cctx, !disableScaleOut, !disableScaleIn, activitySince)
 		if errors.Is(err, context.DeadlineExceeded) {
-			log.Printf("Failed to retrieve last scaling activity events due to %v timeout", asgActivityTimeoutDuration)
-			return
+			err = fmt.Errorf("timed out after %v", asgActivityTimeoutDuration)
 		}
-		if err != nil { // Some other error.
-			log.Printf("Encountered error when retrieving last scaling activities: %s", err)
-			return
-		}
-
-		lastScaleInStr := "never"
-		if scaleInOutput != nil && scaleInOutput.StartTime != nil {
-			lastScaleIn = *scaleInOutput.StartTime
-			lastScaleInStr = lastScaleIn.Format(time.RFC3339Nano)
-		}
-		lastScaleOutStr := "never"
-		if scaleOutOutput != nil && scaleOutOutput.StartTime != nil {
-			lastScaleOut = *scaleOutOutput.StartTime
-			lastScaleOutStr = lastScaleOut.Format(time.RFC3339Nano)
-		}
-
+		lastScaleOut, lastScaleIn = seedLastScaleTimes(scaleOutOutput, scaleInOutput, err, disableScaleIn, time.Now())
 		lastScaleTimesFetched = true
 
-		scalingTimeDiff := time.Since(scalingLastActivityStartTime)
-		log.Printf("Successfully retrieved last scaling activity events. Last scale out %s, last scale in %s. Discovery took %s.", lastScaleOutStr, lastScaleInStr, scalingTimeDiff)
+		if err != nil {
+			log.Printf("Failed to retrieve last scaling activity events: %v", err)
+			if !disableScaleIn {
+				log.Printf("Treating the last scale-in as now so the scale-in cooldown is waited out first")
+			}
+			return
+		}
+		log.Printf("Successfully retrieved last scaling activity events. Last scale out %s, last scale in %s. Discovery took %s.",
+			formatLastScale(lastScaleOut), formatLastScale(lastScaleIn), time.Since(scalingLastActivityStartTime))
 	}()
 
 	token := os.Getenv("BUILDKITE_AGENT_TOKEN")

@@ -134,7 +134,7 @@ func NewScaler(client *buildkite.Client, cfg aws.Config, params Params) (*Scaler
 	if params.ElasticCIMode {
 		log.Printf("🛡️ [Elastic CI Mode] Running with enhanced safety features (stale metrics detection, dangling instance protection)")
 		if params.ScaleInParams.Disable {
-			log.Printf("ℹ️ [Elastic CI Mode] DISABLE_SCALE_IN=true is set but will be ignored to allow proper bidirectional scaling")
+			log.Printf("ℹ️ [Elastic CI Mode] DISABLE_SCALE_IN=true: instances leave the group only when they idle out on their own")
 		}
 	}
 
@@ -296,14 +296,8 @@ func (s *Scaler) Run(ctx context.Context) (time.Duration, error) {
 }
 
 func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGroupDetails) error {
-	// In ElasticCIMode, DISABLE_SCALE_IN is ignored (handled by s.elasticCIMode check below)
-	if s.scaleInParams.Disable && !s.elasticCIMode {
+	if s.scaleInParams.Disable {
 		return nil
-	}
-
-	// If we're in ElasticCIMode and DISABLE_SCALE_IN is true, log that we're ignoring it
-	if s.scaleInParams.Disable && s.elasticCIMode {
-		log.Printf("ℹ️ [Elastic CI Mode] Ignoring DISABLE_SCALE_IN=true since ElasticCIMode has safer scaling mechanisms")
 	}
 
 	// If we've scaled down before, check if a cooldown should be enforced
@@ -319,53 +313,6 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 		if cooldownRemaining > 0 {
 			log.Printf("⏲ Want to scale IN but in cooldown for %d seconds", cooldownRemaining/time.Second)
 			return nil
-		}
-	}
-
-	// Special Elastic CI Stack mode with additional safety checks
-	if s.elasticCIMode {
-		// Only walk the ASG activity history when this process has no
-		// scale-in on record, e.g. cold-start seeding failed. Once we've sent
-		// a graceful stop ourselves, LastEvent is the better signal: Elastic
-		// CI Stack agents decrement desired capacity with the same activity
-		// cause whether we asked them to stop or they idled out on their own,
-		// so the history can't tell our scale-ins apart from idle churn.
-		if driver, ok := s.autoscaling.(*ASGDriver); ok && s.scaleInParams.LastEvent.IsZero() {
-			// In ElasticCIMode, override the page limit to allow unlimited pages
-			if driver.MaxDescribeScalingActivitiesPages >= 0 {
-				// Override to allow unlimited pages (-1) for full activity history in ElasticCIMode
-				log.Printf("ℹ️ [Elastic CI Mode] Setting MAX_DESCRIBE_SCALING_ACTIVITIES_PAGES from %d to -1 (unlimited) for better safety checks",
-					driver.MaxDescribeScalingActivitiesPages)
-				driver.MaxDescribeScalingActivitiesPages = -1
-			}
-
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-
-			// Get the last scale-in activity from ASG history
-			_, lastScaleInActivity, err := driver.GetLastScalingInAndOutActivity(ctx, false, true)
-			if err != nil {
-				log.Printf("⚠️ [Elastic CI Mode] Could not check last ASG scale-in activity: %v", err)
-			} else if lastScaleInActivity != nil && lastScaleInActivity.StartTime != nil {
-				// Check how recently the ASG scaled down
-				lastScaleInTime := *lastScaleInActivity.StartTime
-				timeSinceLastScaleIn := time.Since(lastScaleInTime)
-
-				// Remember it so the next poll uses the in-process cooldown
-				// instead of paging through the history again.
-				s.scaleInParams.LastEvent = lastScaleInTime
-
-				// Check if we're in cooldown period based on the last ASG scale-in activity
-				if s.scaleInParams.CooldownPeriod > 0 && timeSinceLastScaleIn < s.scaleInParams.CooldownPeriod {
-					log.Printf("⏲ [Elastic CI Mode] Last successful ASG scale-in was %s ago, in cooldown period for %s more (cooldown: %s)",
-						timeSinceLastScaleIn.Round(time.Second),
-						(s.scaleInParams.CooldownPeriod - timeSinceLastScaleIn).Round(time.Second),
-						s.scaleInParams.CooldownPeriod)
-					return nil
-				}
-
-				log.Printf("[Elastic CI Mode] Last successful ASG scale-in was %s ago", timeSinceLastScaleIn.Round(time.Second))
-			}
 		}
 	}
 
