@@ -613,10 +613,8 @@ func (a *ASGDriver) sendSIGTERMToAgentsBatch(ctx context.Context, ssmSvc ssmChec
 	command := a.getStopCommand()
 
 	var sendErrors []error
-	batchNumber := 0
 	accepted := 0
 	for instanceBatch := range slices.Chunk(onlineIDs, ssmMaxInstanceIDs) {
-		batchNumber++
 		_, err := ssmSvc.SendCommand(ctx, &ssm.SendCommandInput{
 			InstanceIds:  instanceBatch,
 			DocumentName: aws.String("AWS-RunShellScript"),
@@ -625,7 +623,7 @@ func (a *ASGDriver) sendSIGTERMToAgentsBatch(ctx context.Context, ssmSvc ssmChec
 			MaxErrors:    aws.String("100%"),
 		})
 		if err != nil {
-			sendErrors = append(sendErrors, fmt.Errorf("batch %d: %w", batchNumber, err))
+			sendErrors = append(sendErrors, err)
 			continue
 		}
 		accepted += len(instanceBatch)
