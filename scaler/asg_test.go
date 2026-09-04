@@ -505,6 +505,88 @@ printf 'ActiveState=%s\nMainPID=%s\n' "$ACTIVE_STATE" "$MAIN_PID"
 	}
 }
 
+// TestLinuxStopCommand runs the graceful-stop script against stubbed sudo,
+// systemctl and buildkite-agent binaries. Each stub appends its name to a log
+// file so the test can see which stop attempts ran, and the marker file
+// stands in for terminationMarkerPath.
+func TestLinuxStopCommand(t *testing.T) {
+	binDir := t.TempDir()
+	stubs := map[string]string{
+		"sudo": `#!/bin/sh
+exec "$@"
+`,
+		"systemctl": `#!/bin/sh
+echo systemctl >> "$STOP_LOG"
+[ -z "$SYSTEMCTL_FAIL" ]
+`,
+		"buildkite-agent": `#!/bin/sh
+echo buildkite-agent >> "$STOP_LOG"
+[ -z "$AGENT_FAIL" ]
+`,
+	}
+	for name, body := range stubs {
+		if err := os.WriteFile(filepath.Join(binDir, name), []byte(body), 0o755); err != nil {
+			t.Fatalf("write %s stub: %v", name, err)
+		}
+	}
+
+	tests := []struct {
+		name          string
+		marker        bool
+		systemctlFail bool
+		agentFail     bool
+		wantExit      int
+		wantCalls     string
+		wantMarker    bool
+	}{
+		{name: "marker already present skips the stop", marker: true, wantExit: 0, wantCalls: "", wantMarker: true},
+		{name: "systemctl stops the unit", wantExit: 0, wantCalls: "systemctl\n", wantMarker: true},
+		{name: "agent binary is the fallback", systemctlFail: true, wantExit: 0, wantCalls: "systemctl\nbuildkite-agent\n", wantMarker: true},
+		{name: "both failing clears the marker", systemctlFail: true, agentFail: true, wantExit: 1, wantCalls: "systemctl\nbuildkite-agent\n", wantMarker: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			marker := filepath.Join(dir, "termination-marker")
+			stopLog := filepath.Join(dir, "stop.log")
+			if tc.marker {
+				if err := os.WriteFile(marker, nil, 0o600); err != nil {
+					t.Fatalf("write termination marker: %v", err)
+				}
+			}
+
+			script := (&ASGDriver{}).getStopCommand()
+			script = strings.ReplaceAll(script, terminationMarkerPath, marker)
+			script = strings.ReplaceAll(script, buildkiteAgentBinary, filepath.Join(binDir, "buildkite-agent"))
+			cmd := exec.Command("bash", "-c", script)
+			cmd.Env = append(os.Environ(),
+				"PATH="+binDir+":"+os.Getenv("PATH"),
+				"STOP_LOG="+stopLog,
+			)
+			if tc.systemctlFail {
+				cmd.Env = append(cmd.Env, "SYSTEMCTL_FAIL=1")
+			}
+			if tc.agentFail {
+				cmd.Env = append(cmd.Env, "AGENT_FAIL=1")
+			}
+			out, err := cmd.CombinedOutput()
+			if got := cmd.ProcessState.ExitCode(); got != tc.wantExit {
+				t.Fatalf("exit code = %d (err %v), want %d\n%s", got, err, tc.wantExit, out)
+			}
+
+			calls, _ := os.ReadFile(stopLog)
+			if got := string(calls); got != tc.wantCalls {
+				t.Errorf("stop attempts = %q, want %q", got, tc.wantCalls)
+			}
+			_, statErr := os.Stat(marker)
+			if got := statErr == nil; got != tc.wantMarker {
+				t.Errorf("marker present = %t, want %t", got, tc.wantMarker)
+			}
+		})
+	}
+}
+
 func TestRotateInstanceWindowSmallerThanWindow(t *testing.T) {
 	// When len(sorted) <= windowSize, all instances are returned without rotation.
 	instances := makeInstancesForRotation(3)
