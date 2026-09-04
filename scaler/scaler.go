@@ -66,9 +66,13 @@ type Scaler struct {
 	scaleOnlyAfterAllEvent      bool
 	asgActivityCooldown         time.Duration
 	elasticCIMode               bool // Special mode for Elastic CI Stack
-	cfg                         aws.Config
 	minimumInstanceUptime       time.Duration
 	maxDanglingInstancesToCheck int
+	// ec2 and ssm back the graceful scale-in path in Elastic CI Mode. asgName
+	// only labels log lines from that path.
+	ec2     scaleInEC2API
+	ssm     ssmCheckAPI
+	asgName string
 }
 
 func NewScaler(client *buildkite.Client, cfg aws.Config, params Params) (*Scaler, error) {
@@ -83,9 +87,11 @@ func NewScaler(client *buildkite.Client, cfg aws.Config, params Params) (*Scaler
 		scaleOnlyAfterAllEvent: params.ScaleOnlyAfterAllEvent,
 		asgActivityCooldown:    params.ASGActivityCooldown,
 		elasticCIMode:          params.ElasticCIMode,
+		ec2:                    ec2.NewFromConfig(cfg),
+		ssm:                    ssm.NewFromConfig(cfg),
+		asgName:                params.AutoScalingGroupName,
 	}
 
-	scaler.cfg = cfg
 	scaler.minimumInstanceUptime = params.MinimumInstanceUptime
 	scaler.maxDanglingInstancesToCheck = params.MaxDanglingInstancesToCheck
 
@@ -403,11 +409,10 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 	instancesToTerminate := current.DesiredCount - desired
 
 	// In Elastic CI Mode, use graceful termination if we have instance IDs
-	if asgDriver, ok := s.autoscaling.(*ASGDriver); ok && s.elasticCIMode && len(current.InstanceIDs) > 0 && instancesToTerminate > 0 {
+	if _, ok := s.autoscaling.(*ASGDriver); ok && s.elasticCIMode && len(current.InstanceIDs) > 0 && instancesToTerminate > 0 {
 		log.Printf("[Elastic CI Mode] Using graceful termination for %d instances", instancesToTerminate)
 
-		ec2Client := ec2.NewFromConfig(s.cfg)
-		instancesForTermination, err := oldestInstances(ctx, ec2Client, current.InstanceIDs, instancesToTerminate, asgDriver.Name)
+		instancesForTermination, err := oldestInstances(ctx, s.ec2, current.InstanceIDs, instancesToTerminate, s.asgName)
 		if err != nil {
 			return fmt.Errorf("select scale-in candidates: %w", err)
 		}
@@ -425,11 +430,8 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 			instanceID := current.InstanceIDs[0]
 			log.Printf("[Elastic CI Mode] Single-instance ASG detected - checking if instance %s is a dangling instance", instanceID)
 
-			// Only consider direct termination for dangling instances
-			ssmClient := ssm.NewFromConfig(s.cfg)
-
 			// Detect platform for this instance
-			descResp, descErr := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+			descResp, descErr := s.ec2.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
 				InstanceIds: []string{instanceID},
 			})
 
@@ -447,7 +449,7 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 			}
 
 			// Try to check if buildkite-agent is running via SSM
-			_, err := ssmClient.SendCommand(ctx, &ssm.SendCommandInput{
+			_, err := s.ssm.SendCommand(ctx, &ssm.SendCommandInput{
 				InstanceIds:  []string{instanceID},
 				DocumentName: aws.String(documentName),
 				Parameters: map[string][]string{
@@ -461,7 +463,7 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 				log.Printf("[Elastic CI Mode] Warning: Cannot check agent status, assuming dangling instance: %v", err)
 				log.Printf("[Elastic CI Mode] Directly terminating probable dangling instance")
 
-				if termErr := s.directlyTerminateInstance(ctx, ec2Client, instanceID, desired); termErr != nil {
+				if termErr := s.directlyTerminateInstance(ctx, s.ec2, instanceID, desired); termErr != nil {
 					return errors.Join(gracefulScaleInErr, fmt.Errorf("directly terminate probable dangling instance: %w", termErr))
 				}
 			} else {
@@ -596,6 +598,13 @@ func (s *Scaler) setDesiredCapacity(ctx context.Context, desired int64) error {
 
 type terminateInstancesAPI interface {
 	TerminateInstances(ctx context.Context, params *ec2.TerminateInstancesInput, optFns ...func(*ec2.Options)) (*ec2.TerminateInstancesOutput, error)
+}
+
+// scaleInEC2API is the subset of ec2.Client the graceful scale-in path uses,
+// extracted so tests can stub it.
+type scaleInEC2API interface {
+	describeInstancesAPI
+	terminateInstancesAPI
 }
 
 // directlyTerminateInstance lowers desired capacity before terminating an EC2
