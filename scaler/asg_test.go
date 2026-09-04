@@ -89,10 +89,10 @@ func TestLastScalingActivitiesFiltersAndMatches(t *testing.T) {
 	if gotScaleOut == nil || aws.ToString(gotScaleOut.ActivityId) != "scale-out" {
 		t.Errorf("scale-out activity = %#v, want %q", gotScaleOut, "scale-out")
 	}
-	// The newest shrink wins, whether the scaler lowered desired capacity
-	// or an Elastic CI Stack agent decremented it on the way out.
-	if gotScaleIn == nil || aws.ToString(gotScaleIn.ActivityId) != "agent-terminated" {
-		t.Errorf("scale-in activity = %#v, want %q", gotScaleIn, "agent-terminated")
+	// The newer agent-terminated shrink is skipped: it looks the same as an
+	// idle-out, so only the desired-capacity change counts.
+	if gotScaleIn == nil || aws.ToString(gotScaleIn.ActivityId) != "desired-lowered" {
+		t.Errorf("scale-in activity = %#v, want %q", gotScaleIn, "desired-lowered")
 	}
 	if len(client.calls) != 1 {
 		t.Fatalf("DescribeScalingActivities calls = %d, want 1", len(client.calls))
@@ -329,9 +329,10 @@ func TestIsUserRequestedScaleIn(t *testing.T) {
 			want:  true,
 		},
 		{
+			// Same cause whether the scaler asked the agent to stop or it
+			// idled out on its own, so it can't anchor a cooldown.
 			name:  "instance terminates with decrement",
 			cause: "At 2026-09-02T08:00:00Z instance i-0123456789abcdef0 was taken out of service in response to a user request, shrinking the capacity from 4 to 3.",
-			want:  true,
 		},
 		{
 			name:  "desired capacity change scaling out",

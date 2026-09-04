@@ -29,7 +29,6 @@ var ErrWindowsGracefulScaleInNotSupported = errors.New("graceful scale-in not su
 const (
 	activitySucessfulStatusCode           = "Successful"
 	userRequestForChangingDesiredCapacity = "a user request explicitly set group desired capacity changing the desired capacity"
-	userRequestForTerminatingInstance     = "was taken out of service in response to a user request"
 	scalingOutKey                         = "increasing the capacity"
 	shrinkingKey                          = "shrinking the capacity"
 )
@@ -495,14 +494,15 @@ type scalingActivitiesAPI interface {
 	DescribeScalingActivities(ctx context.Context, params *autoscaling.DescribeScalingActivitiesInput, optFns ...func(*autoscaling.Options)) (*autoscaling.DescribeScalingActivitiesOutput, error)
 }
 
-// isUserRequestedScaleIn reports whether an activity shrank the group because
-// someone asked for it: a desired-capacity change, or an instance terminated
-// with --should-decrement-desired-capacity, which is how Elastic CI Stack
-// agents leave the group after draining.
+// isUserRequestedScaleIn reports whether an activity shrank the group through
+// a desired-capacity change, which is how the scaler scales in outside
+// Elastic CI Mode. Instances that terminate with
+// --should-decrement-desired-capacity are deliberately not matched: an agent
+// idling out writes the same cause as one we asked to stop, so treating them
+// as scale-ins would make an idle-out restart the cooldown.
 func isUserRequestedScaleIn(cause string) bool {
 	return strings.Contains(cause, shrinkingKey) &&
-		(strings.Contains(cause, userRequestForChangingDesiredCapacity) ||
-			strings.Contains(cause, userRequestForTerminatingInstance))
+		strings.Contains(cause, userRequestForChangingDesiredCapacity)
 }
 
 // GetLastScalingInAndOutActivity finds the most recent successful scale-out
