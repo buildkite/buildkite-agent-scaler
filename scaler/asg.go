@@ -150,8 +150,9 @@ fi
 `
 }
 
-// ssmCheckAPI is the subset of ssm.Client used by checkAndMarkUnhealthy,
-// extracted so tests can stub it.
+// ssmCheckAPI is the subset of ssm.Client used by the dangling-instance check,
+// the graceful-stop dispatch and the single-instance probe, extracted so tests
+// can stub it.
 type ssmCheckAPI interface {
 	DescribeInstanceInformation(ctx context.Context, params *ssm.DescribeInstanceInformationInput, optFns ...func(*ssm.Options)) (*ssm.DescribeInstanceInformationOutput, error)
 	SendCommand(ctx context.Context, params *ssm.SendCommandInput, optFns ...func(*ssm.Options)) (*ssm.SendCommandOutput, error)

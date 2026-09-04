@@ -523,6 +523,13 @@ func (c *terminateInstancesTestClient) TerminateInstances(context.Context, *ec2.
 	return &ec2.TerminateInstancesOutput{}, nil
 }
 
+// scaleInEC2TestClient satisfies scaleInEC2API by combining the existing
+// DescribeInstances and TerminateInstances stubs.
+type scaleInEC2TestClient struct {
+	*stubDescribeInstancesClient
+	*terminateInstancesTestClient
+}
+
 func describeOutput(instances ...ec2Types.Instance) *ec2.DescribeInstancesOutput {
 	return &ec2.DescribeInstancesOutput{Reservations: []ec2Types.Reservation{{Instances: instances}}}
 }
@@ -578,111 +585,189 @@ func TestOldestInstancesFailsClosedOnDescribeError(t *testing.T) {
 	}
 }
 
-func TestDirectlyTerminateInstanceLowersDesiredCapacityFirst(t *testing.T) {
-	asg := &asgTestDriver{desiredCapacity: 1}
-	ec2Client := &terminateInstancesTestClient{events: &asg.events}
-	s := Scaler{autoscaling: asg}
-
-	if err := s.directlyTerminateInstance(t.Context(), ec2Client, "i-a", 0); err != nil {
-		t.Fatalf("directlyTerminateInstance() error = %v", err)
+// TestScaleInGracefulPathConverges drives scaleIn in Elastic CI mode with the
+// EC2 and SSM clients stubbed, so the wiring between the graceful stop, the
+// desired-capacity fallback and the single-instance rescue gets exercised
+// together, not just piece by piece.
+func TestScaleInGracefulPathConverges(t *testing.T) {
+	launched := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	instances := func(ids ...string) *ec2.DescribeInstancesOutput {
+		var out []ec2Types.Instance
+		for i, id := range ids {
+			out = append(out, ec2Types.Instance{
+				InstanceId: aws.String(id),
+				LaunchTime: aws.Time(launched.Add(time.Duration(i) * time.Minute)),
+			})
+		}
+		return describeOutput(out...)
 	}
+	threeInstances := AutoscaleGroupDetails{DesiredCount: 3, TotalCount: 3, InstanceIDs: []string{"i-a", "i-b", "i-c"}}
+	singleInstance := AutoscaleGroupDetails{DesiredCount: 1, TotalCount: 1, InstanceIDs: []string{"i-a"}}
 
-	if got, want := fmt.Sprint(asg.events), "[set desired capacity terminate instance]"; got != want {
-		t.Errorf("calls = %s, want %s", got, want)
-	}
-	if got, want := asg.desiredCapacity, int64(0); got != want {
-		t.Errorf("desired capacity = %d, want %d", got, want)
-	}
-}
-
-func TestGracefullyScaleInLetsLinuxAgentsDecrementCapacity(t *testing.T) {
 	testCases := []struct {
-		name                string
-		accepted            int
-		dispatchErr         error
-		setDesiredErr       error
-		wantEvents          string
-		wantDesiredCapacity int64
-		wantLastEvent       bool
-		wantErr             error
-		wantErrText         string
+		name          string
+		current       AutoscaleGroupDetails
+		desired       int64
+		describe      *ec2.DescribeInstancesOutput
+		accepted      int
+		dispatchErr   error
+		setDesiredErr error
+		ssmErr        error
+		wantEvents    string
+		wantDesired   int64
+		wantErrText   string
+		wantLastEvent bool
 	}{
 		{
-			name:                "successful Linux dispatch",
-			accepted:            2,
-			wantEvents:          "[send graceful stop]",
-			wantDesiredCapacity: 3,
-			wantLastEvent:       true,
+			name:          "unreachable candidates fall back to a desired-capacity change",
+			current:       threeInstances,
+			desired:       1,
+			describe:      instances("i-a", "i-b", "i-c"),
+			wantEvents:    "[send graceful stop set desired capacity]",
+			wantDesired:   1,
+			wantLastEvent: true,
 		},
 		{
-			name:                "no online Linux instances",
-			wantEvents:          "[send graceful stop]",
-			wantDesiredCapacity: 3,
-			wantLastEvent:       true,
-			wantErr:             errNoReachableScaleInCandidates,
+			name:          "candidates already gone from EC2 fall back without a stop",
+			current:       threeInstances,
+			desired:       1,
+			describe:      describeOutput(),
+			wantEvents:    "[set desired capacity]",
+			wantDesired:   1,
+			wantLastEvent: true,
 		},
 		{
-			name:                "SSM API failure",
-			dispatchErr:         errors.New("describe SSM instance information: throttled"),
-			wantEvents:          "[send graceful stop]",
-			wantDesiredCapacity: 3,
-			wantLastEvent:       true,
-			wantErrText:         "describe SSM instance information: throttled",
+			name:          "SSM dispatch failure backs off without touching desired capacity",
+			current:       threeInstances,
+			desired:       1,
+			describe:      instances("i-a", "i-b", "i-c"),
+			dispatchErr:   errors.New("ssm down"),
+			wantEvents:    "[send graceful stop]",
+			wantDesired:   3,
+			wantErrText:   "ssm down",
+			wantLastEvent: true,
 		},
 		{
-			name:                "partially successful Linux dispatch",
-			accepted:            1,
-			dispatchErr:         errors.New("send command to later batch"),
-			wantEvents:          "[send graceful stop]",
-			wantDesiredCapacity: 3,
-			wantLastEvent:       true,
+			name:          "accepted stop leaves desired capacity to the agent",
+			current:       threeInstances,
+			desired:       1,
+			describe:      instances("i-a", "i-b", "i-c"),
+			accepted:      1,
+			wantEvents:    "[send graceful stop]",
+			wantDesired:   3,
+			wantLastEvent: true,
+		},
+		// One accepted batch is a dispatch: the failed batches are only logged.
+		{
+			name:          "partially accepted stop still counts as a dispatch",
+			current:       threeInstances,
+			desired:       1,
+			describe:      instances("i-a", "i-b", "i-c"),
+			accepted:      1,
+			dispatchErr:   errors.New("send command to later batch"),
+			wantEvents:    "[send graceful stop]",
+			wantDesired:   3,
+			wantLastEvent: true,
 		},
 		{
-			name:                "Windows dispatch skipped",
-			dispatchErr:         ErrWindowsGracefulScaleInNotSupported,
-			wantEvents:          "[send graceful stop set desired capacity]",
-			wantDesiredCapacity: 1,
-			wantLastEvent:       true,
+			name:          "single unreachable instance is terminated directly",
+			current:       singleInstance,
+			desired:       0,
+			describe:      instances("i-a"),
+			ssmErr:        errors.New("InvalidInstanceId"),
+			wantEvents:    "[send graceful stop set desired capacity terminate instance]",
+			wantDesired:   0,
+			wantLastEvent: true,
 		},
 		{
-			name:                "Windows desired capacity update fails",
-			dispatchErr:         ErrWindowsGracefulScaleInNotSupported,
-			setDesiredErr:       errors.New("throttled"),
-			wantEvents:          "[send graceful stop set desired capacity]",
-			wantDesiredCapacity: 1,
-			wantErrText:         "set desired capacity to 1 for windows instances: throttled",
+			name:          "single instance that answers the probe is kept",
+			current:       singleInstance,
+			desired:       0,
+			describe:      instances("i-a"),
+			wantEvents:    "[send graceful stop set desired capacity]",
+			wantDesired:   0,
+			wantLastEvent: true,
+		},
+		{
+			name:          "rescue is skipped while another instance is still terminating",
+			current:       AutoscaleGroupDetails{DesiredCount: 1, TotalCount: 2, InstanceIDs: []string{"i-a"}},
+			desired:       0,
+			describe:      instances("i-a"),
+			ssmErr:        errors.New("InvalidInstanceId"),
+			wantEvents:    "[send graceful stop set desired capacity]",
+			wantDesired:   0,
+			wantLastEvent: true,
+		},
+		{
+			name:          "Windows candidates get a desired-capacity change",
+			current:       threeInstances,
+			desired:       1,
+			describe:      instances("i-a", "i-b", "i-c"),
+			dispatchErr:   ErrWindowsGracefulScaleInNotSupported,
+			wantEvents:    "[send graceful stop set desired capacity]",
+			wantDesired:   1,
+			wantLastEvent: true,
+		},
+		{
+			name:          "single Windows instance that SSM cannot reach is terminated directly",
+			current:       singleInstance,
+			desired:       0,
+			describe:      instances("i-a"),
+			dispatchErr:   ErrWindowsGracefulScaleInNotSupported,
+			ssmErr:        errors.New("InvalidInstanceId"),
+			wantEvents:    "[send graceful stop set desired capacity terminate instance]",
+			wantDesired:   0,
+			wantLastEvent: true,
+		},
+		{
+			name:          "desired-capacity fallback failure is reported",
+			current:       threeInstances,
+			desired:       1,
+			describe:      instances("i-a", "i-b", "i-c"),
+			dispatchErr:   ErrWindowsGracefulScaleInNotSupported,
+			setDesiredErr: errors.New("throttled"),
+			wantEvents:    "[send graceful stop set desired capacity]",
+			wantDesired:   1,
+			wantErrText:   errors.Join(ErrWindowsGracefulScaleInNotSupported, errors.New("throttled")).Error(),
+			wantLastEvent: false,
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			asg := &asgTestDriver{
-				desiredCapacity:  3,
+				desiredCapacity:  tc.current.DesiredCount,
 				sigTermsAccepted: tc.accepted,
 				sigTermErr:       tc.dispatchErr,
 				err:              tc.setDesiredErr,
 			}
-			s := Scaler{autoscaling: asg}
+			ec2Client := &scaleInEC2TestClient{
+				stubDescribeInstancesClient: &stubDescribeInstancesClient{
+					responses: []stubDescribeResponse{{out: tc.describe}},
+				},
+				terminateInstancesTestClient: &terminateInstancesTestClient{events: &asg.events},
+			}
+			s := Scaler{
+				autoscaling:   asg,
+				elasticCIMode: true,
+				ec2:           ec2Client,
+				ssm:           &stubSSMClient{sendErr: tc.ssmErr},
+			}
 
-			err := s.gracefullyScaleIn(t.Context(), []string{"i-a", "i-b"}, 1)
-			switch {
-			case tc.wantErr != nil:
-				if !errors.Is(err, tc.wantErr) {
-					t.Fatalf("gracefullyScaleIn() error = %v, want %v", err, tc.wantErr)
-				}
-			case tc.wantErrText != "":
+			err := s.scaleIn(t.Context(), tc.desired, tc.current)
+			if tc.wantErrText != "" {
 				if err == nil || err.Error() != tc.wantErrText {
-					t.Fatalf("gracefullyScaleIn() error = %v, want %q", err, tc.wantErrText)
+					t.Fatalf("scaleIn() error = %v, want %q", err, tc.wantErrText)
 				}
-			case err != nil:
-				t.Fatalf("gracefullyScaleIn() error = %v, want nil", err)
+			} else if err != nil {
+				t.Fatalf("scaleIn() error = %v, want nil", err)
 			}
 
 			if got := fmt.Sprint(asg.events); got != tc.wantEvents {
 				t.Errorf("calls = %s, want %s", got, tc.wantEvents)
 			}
-			if got := asg.desiredCapacity; got != tc.wantDesiredCapacity {
-				t.Errorf("desired capacity = %d, want %d", got, tc.wantDesiredCapacity)
+			if got := asg.desiredCapacity; got != tc.wantDesired {
+				t.Errorf("desired capacity = %d, want %d", got, tc.wantDesired)
 			}
 			if got := !s.scaleInParams.LastEvent.IsZero(); got != tc.wantLastEvent {
 				t.Errorf("LastEvent recorded = %t, want %t", got, tc.wantLastEvent)
@@ -1092,6 +1177,15 @@ func TestDanglingInstanceDetection(t *testing.T) {
 					includeWaiting:    true,
 					agentsPerInstance: tc.agentsPerInstance,
 				},
+				// The healthy scale-in case reaches the graceful path. EC2
+				// reports no instances, so it falls back to a plain
+				// desired-capacity change; the graceful wiring itself is
+				// covered by TestScaleInGracefulPathConverges.
+				ec2: &scaleInEC2TestClient{
+					stubDescribeInstancesClient:  &stubDescribeInstancesClient{},
+					terminateInstancesTestClient: &terminateInstancesTestClient{events: &asg.events},
+				},
+				ssm: &stubSSMClient{},
 			}
 
 			_, err := s.Run(context.Background())
