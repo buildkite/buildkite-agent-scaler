@@ -390,10 +390,12 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 
 	if !s.elasticCIMode || len(current.InstanceIDs) == 0 || instancesToTerminate <= 0 {
 		log.Printf("Using standard scale-in (Elastic CI Mode disabled or no instances to terminate)")
+		if err := s.recordScaleIn(ctx); err != nil {
+			return err
+		}
 		if err := s.setDesiredCapacity(ctx, desired); err != nil {
 			return err
 		}
-		s.recordScaleIn(ctx)
 		return nil
 	}
 
@@ -424,10 +426,12 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 		log.Printf("[Elastic CI Mode] no scale-in candidates reachable via SSM; falling back to a desired-capacity change")
 	}
 
+	if err := s.recordScaleIn(ctx); err != nil {
+		return err
+	}
 	if err := s.setDesiredCapacity(ctx, desired); err != nil {
 		return errors.Join(targetsErr, err)
 	}
-	s.recordScaleIn(ctx)
 
 	// The Elastic CI Stack protects instances from scale-in by default, so
 	// the ASG won't act on the capacity change and a lone instance whose
@@ -447,23 +451,9 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 // agents decrement desired capacity themselves once drained, so the caller
 // must leave it alone.
 func (s *Scaler) dispatchGracefulStops(ctx context.Context, targets []string) error {
-	// Start the cooldown before dispatching, so a recycled or overlapping
-	// container sees it before it can scale in on top of us. Every attempt
-	// counts: draining instances stay in the ASG, so an early retry would
-	// pick the same ones again. A failed write dispatches nothing; the next
-	// poll retries.
-	now := time.Now()
-	if s.lastScaleInStore != nil {
-		err := s.lastScaleInStore.Save(ctx, now)
-		if errors.Is(err, errAnotherScaleIn) {
-			log.Printf("⏲ Want to scale IN but another container got there first")
-			return nil
-		}
-		if err != nil {
-			return fmt.Errorf("persist last scale-in time: %w", err)
-		}
+	if err := s.recordScaleIn(ctx); err != nil {
+		return err
 	}
-	s.scaleInParams.LastEvent = now
 
 	log.Printf("[Elastic CI Mode] Attempting graceful termination for %d instance(s): %v", len(targets), targets)
 	accepted, err := s.autoscaling.SendSIGTERMToAgentsBatch(ctx, targets)
@@ -479,18 +469,19 @@ func (s *Scaler) dispatchGracefulStops(ctx context.Context, targets []string) er
 	return err
 }
 
-// recordScaleIn starts the cooldown after a desired-capacity change. Capacity
-// is absolute, so overlapping containers can't over-terminate here: losing the
-// race just means another container set the same capacity, and a store that
-// can't be written isn't worth failing the poll over.
-func (s *Scaler) recordScaleIn(ctx context.Context) {
-	s.scaleInParams.LastEvent = time.Now()
-	if s.lastScaleInStore == nil {
-		return
+// recordScaleIn starts the cooldown before any scale-in action. Even an
+// absolute capacity change needs this: a fresh container could otherwise
+// apply the scale-in factor again to the reduced capacity. Failed actions
+// consume the cooldown too, since AWS may have accepted them.
+func (s *Scaler) recordScaleIn(ctx context.Context) error {
+	now := time.Now()
+	if s.lastScaleInStore != nil {
+		if err := s.lastScaleInStore.Save(ctx, now); err != nil {
+			return fmt.Errorf("persist last scale-in time: %w", err)
+		}
 	}
-	if err := s.lastScaleInStore.Save(ctx, s.scaleInParams.LastEvent); err != nil && !errors.Is(err, errAnotherScaleIn) {
-		log.Printf("⚠️  Failed to persist last scale-in time: %v", err)
-	}
+	s.scaleInParams.LastEvent = now
+	return nil
 }
 
 func (s *Scaler) scaleOut(ctx context.Context, desired int64, current AutoscaleGroupDetails) error {
