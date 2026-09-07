@@ -106,6 +106,10 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		return "", err
 	}
 
+	// When set, the scaler keeps the last scale-in time in this SSM parameter
+	// instead of guessing it from the ASG's activity history.
+	lastScaleInSSMParameter := os.Getenv("LAST_SCALE_IN_SSM_PARAMETER")
+
 	// get last scale in and out from asg's activities
 	// This is wrapped in a mutex to avoid multiple outbound requests if the
 	// lambda ever runs multiple times in parallel.
@@ -115,6 +119,12 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 
 		if lastScaleTimesFetched {
 			// We've already fetched the last scaling times that we need.
+			return
+		}
+
+		findScaleOut := !disableScaleOut
+		findScaleIn := lastScaleInSSMParameter == "" && !disableScaleIn
+		if !findScaleOut && !findScaleIn {
 			return
 		}
 
@@ -128,7 +138,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		defer cancel()
 
 		scalingLastActivityStartTime := time.Now()
-		scaleOutOutput, scaleInOutput, err := asg.GetLastScalingInAndOutActivity(cctx, !disableScaleOut, !disableScaleIn)
+		scaleOutOutput, scaleInOutput, err := asg.GetLastScalingInAndOutActivity(cctx, findScaleOut, findScaleIn)
 		if errors.Is(err, context.DeadlineExceeded) {
 			log.Printf("Failed to retrieve last scaling activity events due to %v timeout", asgActivityTimeoutDuration)
 			return
@@ -198,6 +208,7 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 		MaxDanglingInstancesToCheck:    maxDanglingInstancesToCheck,
 		MaxInstanceCap:                 maxInstanceCap,
 		DanglingInstancesCheckInterval: interval,
+		LastScaleInSSMParameter:        lastScaleInSSMParameter,
 	}
 
 	scaler, err := scaler.NewScaler(client, cfg, params)
