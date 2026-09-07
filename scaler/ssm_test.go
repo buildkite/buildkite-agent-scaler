@@ -48,10 +48,6 @@ func TestSSMLastScaleInStoreLoad(t *testing.T) {
 			wantVersion: 7,
 		},
 		{
-			name:   "missing parameter means never",
-			getErr: &types.ParameterNotFound{},
-		},
-		{
 			name:    "other API errors propagate",
 			getErr:  errors.New("access denied"),
 			wantErr: true,
@@ -67,12 +63,16 @@ func TestSSMLastScaleInStoreLoad(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			api := &fakeLastScaleInParameterAPI{getOutput: tc.getOutput, getErr: tc.getErr}
 			store := &ssmLastScaleInStore{
-				client: &fakeLastScaleInParameterAPI{getOutput: tc.getOutput, getErr: tc.getErr},
+				client: api,
 				name:   "/scaler/last-scale-in",
 			}
 
 			got, err := store.Load(t.Context())
+			if api.putInput != nil {
+				t.Error("Load must not overwrite an existing timestamp or mask a read error")
+			}
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("Load() error = %v, wantErr %t", err, tc.wantErr)
 			}
@@ -84,6 +84,37 @@ func TestSSMLastScaleInStoreLoad(t *testing.T) {
 			}
 			if store.version != tc.wantVersion {
 				t.Errorf("version = %d, want %d", store.version, tc.wantVersion)
+			}
+		})
+	}
+}
+
+func TestSSMLastScaleInStoreInitializesMissingParameter(t *testing.T) {
+	for name, putErr := range map[string]error{"created": nil, "another container created it first": &types.ParameterAlreadyExists{}} {
+		t.Run(name, func(t *testing.T) {
+			api := &fakeLastScaleInParameterAPI{
+				getErr: &types.ParameterNotFound{}, putVersion: 1, putErr: putErr,
+			}
+			store := &ssmLastScaleInStore{client: api, name: "/scaler/last-scale-in"}
+			before := time.Now().UTC().Truncate(time.Second)
+			got, err := store.Load(t.Context())
+			if !errors.Is(err, putErr) {
+				t.Fatalf("Load() error = %v, want %v", err, putErr)
+			}
+			if api.putInput == nil {
+				t.Fatal("missing parameter was not initialized")
+			}
+			if aws.ToBool(api.putInput.Overwrite) {
+				t.Error("initialization must not overwrite another container's timestamp")
+			}
+			if putErr != nil {
+				return
+			}
+			if got.Before(before) || got.After(time.Now()) || store.version != 1 {
+				t.Fatalf("Load() = %v, version %d, want current time and version 1", got, store.version)
+			}
+			if aws.ToString(api.putInput.Value) != got.Format(time.RFC3339) {
+				t.Errorf("persisted %q, want %s", aws.ToString(api.putInput.Value), got.Format(time.RFC3339))
 			}
 		})
 	}
