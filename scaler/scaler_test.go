@@ -14,6 +14,31 @@ import (
 	"github.com/buildkite/buildkite-agent-scaler/buildkite"
 )
 
+func TestNewScalerSeedsMissingElasticCooldown(t *testing.T) {
+	// Custom-role Lambdas and the CLI share this constructor. Seed a cold
+	// start, but preserve the timestamp carried across warm invocations.
+	for _, lastEvent := range []time.Time{{}, time.Now().Add(-time.Minute)} {
+		t.Run(lastEvent.String(), func(t *testing.T) {
+			before := time.Now()
+			s, err := NewScaler(nil, aws.Config{Region: "us-east-1"}, Params{
+				ElasticCIMode: true,
+				ScaleInParams: ScaleParams{Disable: true, CooldownPeriod: time.Hour, LastEvent: lastEvent},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := s.LastScaleIn()
+			if lastEvent.IsZero() {
+				if got.Before(before) || got.After(time.Now()) {
+					t.Errorf("LastScaleIn() = %v, want startup time", got)
+				}
+			} else if !got.Equal(lastEvent) {
+				t.Errorf("LastScaleIn() = %v, want unchanged %v", got, lastEvent)
+			}
+		})
+	}
+}
+
 func TestScalingOutWithoutError(t *testing.T) {
 	for _, tc := range []struct {
 		params                  Params

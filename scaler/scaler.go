@@ -119,6 +119,10 @@ func NewScaler(client *buildkite.Client, cfg aws.Config, params Params) (*Scaler
 
 	if params.LastScaleInSSMParameter != "" {
 		scaler.lastScaleInStore = &ssmLastScaleInStore{client: ssmClient, name: params.LastScaleInSSMParameter}
+	} else if params.ElasticCIMode && scaler.scaleInParams.LastEvent.IsZero() {
+		// Without a durable timestamp, we can't distinguish a fresh fleet
+		// from a restart during a graceful scale-in. Wait one cooldown.
+		scaler.scaleInParams.LastEvent = time.Now()
 	}
 
 	danglingInstancesCheckInterval := params.DanglingInstancesCheckInterval
