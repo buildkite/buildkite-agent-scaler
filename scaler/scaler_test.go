@@ -656,6 +656,18 @@ func TestScaleInGracefulPathConverges(t *testing.T) {
 			saveErr:     errAnotherScaleIn,
 			wantEvents:  "[resolve stop targets]",
 			wantDesired: 3,
+			wantErrText: "persist last scale-in time: " + errAnotherScaleIn.Error(),
+		},
+		{
+			name:           "unwritable store blocks Windows fallback",
+			current:        threeInstances,
+			desired:        1,
+			describe:       instances("i-a", "i-b", "i-c"),
+			stopTargetsErr: ErrWindowsGracefulScaleInNotSupported,
+			saveErr:        errors.New("access denied"),
+			wantEvents:     "[resolve stop targets]",
+			wantDesired:    3,
+			wantErrText:    "persist last scale-in time: access denied",
 		},
 		{
 			name:          "unreachable candidates fall back to a desired-capacity change",
@@ -775,7 +787,7 @@ func TestScaleInGracefulPathConverges(t *testing.T) {
 			wantEvents:     "[resolve stop targets set desired capacity terminate instance]",
 			wantDesired:    0,
 		},
-		// A capacity change that didn't land isn't an attempt either.
+		// AWS errors don't guarantee that the capacity change wasn't applied.
 		{
 			name:           "desired-capacity fallback failure is reported",
 			current:        threeInstances,
@@ -786,7 +798,6 @@ func TestScaleInGracefulPathConverges(t *testing.T) {
 			wantEvents:     "[resolve stop targets set desired capacity]",
 			wantDesired:    1,
 			wantErrText:    errors.Join(ErrWindowsGracefulScaleInNotSupported, errors.New("throttled")).Error(),
-			wantNoCooldown: true,
 		},
 	}
 
@@ -830,9 +841,8 @@ func TestScaleInGracefulPathConverges(t *testing.T) {
 			if got := asg.desiredCapacity; got != tc.wantDesired {
 				t.Errorf("desired capacity = %d, want %d", got, tc.wantDesired)
 			}
-			// Every attempt starts the cooldown, persisted before a stop is
-			// dispatched. Read-only lookups and a failed capacity change
-			// aren't attempts.
+			// Every scale-in action starts the cooldown, even on failure.
+			// Read-only lookups aren't attempts.
 			if tc.wantNoCooldown {
 				if !s.scaleInParams.LastEvent.IsZero() || len(store.saved) != 0 {
 					t.Errorf("LastEvent = %v, persisted %v, want neither", s.scaleInParams.LastEvent, store.saved)
@@ -878,9 +888,7 @@ func (f *fakeLastScaleInStore) Save(_ context.Context, t time.Time) error {
 
 // TestScaleInHonoursStoredCooldown pins that the stored last scale-in is the
 // source of truth: another Lambda container's scale-in holds this one back,
-// and a store that can't be read scales nothing in. The standard path sets
-// an absolute capacity, so it records the cooldown only after that lands and
-// shrugs off a store it can't write to.
+// and a store that can't be read or written scales nothing in.
 func TestScaleInHonoursStoredCooldown(t *testing.T) {
 	testCases := []struct {
 		name          string
@@ -890,12 +898,6 @@ func TestScaleInHonoursStoredCooldown(t *testing.T) {
 		wantErrText   string
 		wantSaved     int
 	}{
-		{
-			name:       "nothing stored scales in",
-			store:      &fakeLastScaleInStore{},
-			wantEvents: "[set desired capacity]",
-			wantSaved:  1,
-		},
 		{
 			name:       "expired stored cooldown scales in",
 			store:      &fakeLastScaleInStore{loaded: time.Now().Add(-2 * time.Hour)},
@@ -914,23 +916,26 @@ func TestScaleInHonoursStoredCooldown(t *testing.T) {
 			wantErrText: "read last scale-in time: access denied",
 		},
 		{
-			name:       "unwritable store still scales in",
-			store:      &fakeLastScaleInStore{saveErr: errors.New("access denied")},
-			wantEvents: "[set desired capacity]",
-			wantSaved:  1,
+			name:        "unwritable store blocks scale-in",
+			store:       &fakeLastScaleInStore{saveErr: errors.New("access denied")},
+			wantEvents:  "[]",
+			wantErrText: "persist last scale-in time: access denied",
+			wantSaved:   1,
 		},
 		{
-			name:       "losing the race to another container still scales in",
-			store:      &fakeLastScaleInStore{loaded: time.Now().Add(-2 * time.Hour), saveErr: errAnotherScaleIn},
-			wantEvents: "[set desired capacity]",
-			wantSaved:  1,
+			name:        "losing the race to another container blocks scale-in",
+			store:       &fakeLastScaleInStore{loaded: time.Now().Add(-2 * time.Hour), saveErr: errAnotherScaleIn},
+			wantEvents:  "[]",
+			wantErrText: "persist last scale-in time: " + errAnotherScaleIn.Error(),
+			wantSaved:   1,
 		},
 		{
-			name:          "failed capacity change starts no cooldown",
+			name:          "failed capacity change keeps cooldown",
 			store:         &fakeLastScaleInStore{},
 			setDesiredErr: errors.New("throttled"),
 			wantEvents:    "[set desired capacity]",
 			wantErrText:   "throttled",
+			wantSaved:     1,
 		},
 	}
 
@@ -962,15 +967,8 @@ func TestScaleInHonoursStoredCooldown(t *testing.T) {
 				t.Errorf("Save called %d times, want %d", got, tc.wantSaved)
 			}
 
-			// A failed poll leaves the in-memory cooldown alone; a held-back
-			// scale-in keeps the stored time; a dispatched one records what
-			// it tried to persist.
-			want := time.Time{}
-			switch {
-			case tc.wantErrText != "":
-			case tc.wantEvents == "[]":
-				want = tc.store.loaded
-			default:
+			want := tc.store.loaded
+			if tc.wantSaved > 0 && tc.store.saveErr == nil {
 				want = tc.store.saved[0]
 			}
 			if got := s.scaleInParams.LastEvent; !got.Equal(want) {
