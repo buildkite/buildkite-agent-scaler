@@ -455,10 +455,13 @@ func (d *buildkiteTestDriver) GetAgentMetrics(ctx context.Context) (buildkite.Ag
 
 type asgTestDriver struct {
 	err                     error
+	setDesiredErr           error // Fails only SetDesiredCapacity; err fails every call.
 	desiredCapacity         int64
 	actualCapacity          int64 // If 0, will default to desiredCapacity
 	pendingCapacity         int64
 	maxSize                 int64 // If 0, defaults to 100
+	noStopTargets           bool  // GracefulStopTargets finds nothing reachable.
+	stopTargetsErr          error // GracefulStopTargets fails.
 	sigTermsSent            []string
 	sigTermsAccepted        int
 	sigTermErr              error
@@ -500,7 +503,21 @@ func (d *asgTestDriver) SetDesiredCapacity(ctx context.Context, count int64) err
 	d.setDesiredCapacityCalls++
 	d.desiredCapacity = count
 	d.events = append(d.events, "set desired capacity")
+	if d.setDesiredErr != nil {
+		return d.setDesiredErr
+	}
 	return d.err
+}
+
+func (d *asgTestDriver) GracefulStopTargets(ctx context.Context, instanceIDs []string) ([]string, error) {
+	d.events = append(d.events, "resolve stop targets")
+	if d.stopTargetsErr != nil {
+		return nil, d.stopTargetsErr
+	}
+	if d.noStopTargets {
+		return nil, nil
+	}
+	return instanceIDs, nil
 }
 
 func (d *asgTestDriver) SendSIGTERMToAgentsBatch(ctx context.Context, instanceIDs []string) (int, error) {
@@ -602,131 +619,174 @@ func TestScaleInGracefulPathConverges(t *testing.T) {
 	singleInstance := AutoscaleGroupDetails{DesiredCount: 1, TotalCount: 1, InstanceIDs: []string{"i-a"}}
 
 	testCases := []struct {
-		name          string
-		current       AutoscaleGroupDetails
-		desired       int64
-		describe      *ec2.DescribeInstancesOutput
-		accepted      int
-		dispatchErr   error
-		setDesiredErr error
-		ssmErr        error
-		wantEvents    string
-		wantDesired   int64
-		wantErrText   string
-		wantLastEvent bool
+		name           string
+		current        AutoscaleGroupDetails
+		desired        int64
+		describe       *ec2.DescribeInstancesOutput
+		describeErr    error
+		noStopTargets  bool
+		stopTargetsErr error
+		accepted       int
+		dispatchErr    error
+		setDesiredErr  error
+		ssmErr         error
+		saveErr        error
+		wantEvents     string
+		wantDesired    int64
+		wantErrText    string
+		wantNoCooldown bool // Nothing was attempted, so the next poll retries.
 	}{
+		// The cooldown is persisted before any stop goes out, so a store
+		// that can't be written or a lost race dispatches nothing.
+		{
+			name:        "unwritable store dispatches nothing",
+			current:     threeInstances,
+			desired:     1,
+			describe:    instances("i-a", "i-b", "i-c"),
+			saveErr:     errors.New("access denied"),
+			wantEvents:  "[resolve stop targets]",
+			wantDesired: 3,
+			wantErrText: "persist last scale-in time: access denied",
+		},
+		{
+			name:        "losing the race to another container dispatches nothing",
+			current:     threeInstances,
+			desired:     1,
+			describe:    instances("i-a", "i-b", "i-c"),
+			saveErr:     errAnotherScaleIn,
+			wantEvents:  "[resolve stop targets]",
+			wantDesired: 3,
+		},
 		{
 			name:          "unreachable candidates fall back to a desired-capacity change",
 			current:       threeInstances,
 			desired:       1,
 			describe:      instances("i-a", "i-b", "i-c"),
-			wantEvents:    "[send graceful stop set desired capacity]",
+			noStopTargets: true,
+			wantEvents:    "[resolve stop targets set desired capacity]",
 			wantDesired:   1,
-			wantLastEvent: true,
+		},
+		// Selection and target lookup only read EC2 and SSM, so a throttle
+		// must not start the cooldown.
+		{
+			name:           "candidate selection failure retries next poll",
+			current:        threeInstances,
+			desired:        1,
+			describeErr:    errors.New("throttled"),
+			wantEvents:     "[]",
+			wantDesired:    3,
+			wantErrText:    "select scale-in candidates: describe instance launch times: throttled",
+			wantNoCooldown: true,
 		},
 		{
-			name:          "candidates already gone from EC2 fall back without a stop",
-			current:       threeInstances,
-			desired:       1,
-			describe:      describeOutput(),
-			wantEvents:    "[set desired capacity]",
-			wantDesired:   1,
-			wantLastEvent: true,
+			name:           "target lookup failure retries next poll",
+			current:        threeInstances,
+			desired:        1,
+			describe:       instances("i-a", "i-b", "i-c"),
+			stopTargetsErr: errors.New("throttled"),
+			wantEvents:     "[resolve stop targets]",
+			wantDesired:    3,
+			wantErrText:    "resolve graceful-stop targets: throttled",
+			wantNoCooldown: true,
 		},
 		{
-			name:          "SSM dispatch failure backs off without touching desired capacity",
-			current:       threeInstances,
-			desired:       1,
-			describe:      instances("i-a", "i-b", "i-c"),
-			dispatchErr:   errors.New("ssm down"),
-			wantEvents:    "[send graceful stop]",
-			wantDesired:   3,
-			wantErrText:   "ssm down",
-			wantLastEvent: true,
+			name:        "candidates already gone from EC2 fall back without a stop",
+			current:     threeInstances,
+			desired:     1,
+			describe:    describeOutput(),
+			wantEvents:  "[resolve stop targets set desired capacity]",
+			wantDesired: 1,
 		},
 		{
-			name:          "accepted stop leaves desired capacity to the agent",
-			current:       threeInstances,
-			desired:       1,
-			describe:      instances("i-a", "i-b", "i-c"),
-			accepted:      1,
-			wantEvents:    "[send graceful stop]",
-			wantDesired:   3,
-			wantLastEvent: true,
+			name:        "SSM dispatch failure backs off without touching desired capacity",
+			current:     threeInstances,
+			desired:     1,
+			describe:    instances("i-a", "i-b", "i-c"),
+			dispatchErr: errors.New("ssm down"),
+			wantEvents:  "[resolve stop targets send graceful stop]",
+			wantDesired: 3,
+			wantErrText: "ssm down",
+		},
+		{
+			name:        "accepted stop leaves desired capacity to the agent",
+			current:     threeInstances,
+			desired:     1,
+			describe:    instances("i-a", "i-b", "i-c"),
+			accepted:    1,
+			wantEvents:  "[resolve stop targets send graceful stop]",
+			wantDesired: 3,
 		},
 		// One accepted batch is a dispatch: the failed batches are only logged.
 		{
-			name:          "partially accepted stop still counts as a dispatch",
-			current:       threeInstances,
-			desired:       1,
-			describe:      instances("i-a", "i-b", "i-c"),
-			accepted:      1,
-			dispatchErr:   errors.New("send command to later batch"),
-			wantEvents:    "[send graceful stop]",
-			wantDesired:   3,
-			wantLastEvent: true,
+			name:        "partially accepted stop still counts as a dispatch",
+			current:     threeInstances,
+			desired:     1,
+			describe:    instances("i-a", "i-b", "i-c"),
+			accepted:    1,
+			dispatchErr: errors.New("send command to later batch"),
+			wantEvents:  "[resolve stop targets send graceful stop]",
+			wantDesired: 3,
 		},
 		{
 			name:          "single unreachable instance is terminated directly",
 			current:       singleInstance,
 			desired:       0,
 			describe:      instances("i-a"),
+			noStopTargets: true,
 			ssmErr:        errors.New("InvalidInstanceId"),
-			wantEvents:    "[send graceful stop set desired capacity terminate instance]",
+			wantEvents:    "[resolve stop targets set desired capacity terminate instance]",
 			wantDesired:   0,
-			wantLastEvent: true,
 		},
 		{
 			name:          "single instance that answers the probe is kept",
 			current:       singleInstance,
 			desired:       0,
 			describe:      instances("i-a"),
-			wantEvents:    "[send graceful stop set desired capacity]",
+			noStopTargets: true,
+			wantEvents:    "[resolve stop targets set desired capacity]",
 			wantDesired:   0,
-			wantLastEvent: true,
 		},
 		{
 			name:          "rescue is skipped while another instance is still terminating",
 			current:       AutoscaleGroupDetails{DesiredCount: 1, TotalCount: 2, InstanceIDs: []string{"i-a"}},
 			desired:       0,
 			describe:      instances("i-a"),
+			noStopTargets: true,
 			ssmErr:        errors.New("InvalidInstanceId"),
-			wantEvents:    "[send graceful stop set desired capacity]",
+			wantEvents:    "[resolve stop targets set desired capacity]",
 			wantDesired:   0,
-			wantLastEvent: true,
 		},
 		{
-			name:          "Windows candidates get a desired-capacity change",
-			current:       threeInstances,
-			desired:       1,
-			describe:      instances("i-a", "i-b", "i-c"),
-			dispatchErr:   ErrWindowsGracefulScaleInNotSupported,
-			wantEvents:    "[send graceful stop set desired capacity]",
-			wantDesired:   1,
-			wantLastEvent: true,
+			name:           "Windows candidates get a desired-capacity change",
+			current:        threeInstances,
+			desired:        1,
+			describe:       instances("i-a", "i-b", "i-c"),
+			stopTargetsErr: ErrWindowsGracefulScaleInNotSupported,
+			wantEvents:     "[resolve stop targets set desired capacity]",
+			wantDesired:    1,
 		},
 		{
-			name:          "single Windows instance that SSM cannot reach is terminated directly",
-			current:       singleInstance,
-			desired:       0,
-			describe:      instances("i-a"),
-			dispatchErr:   ErrWindowsGracefulScaleInNotSupported,
-			ssmErr:        errors.New("InvalidInstanceId"),
-			wantEvents:    "[send graceful stop set desired capacity terminate instance]",
-			wantDesired:   0,
-			wantLastEvent: true,
+			name:           "single Windows instance that SSM cannot reach is terminated directly",
+			current:        singleInstance,
+			desired:        0,
+			describe:       instances("i-a"),
+			stopTargetsErr: ErrWindowsGracefulScaleInNotSupported,
+			ssmErr:         errors.New("InvalidInstanceId"),
+			wantEvents:     "[resolve stop targets set desired capacity terminate instance]",
+			wantDesired:    0,
 		},
+		// A capacity change that didn't land isn't an attempt either.
 		{
-			name:          "desired-capacity fallback failure is reported",
-			current:       threeInstances,
-			desired:       1,
-			describe:      instances("i-a", "i-b", "i-c"),
-			dispatchErr:   ErrWindowsGracefulScaleInNotSupported,
-			setDesiredErr: errors.New("throttled"),
-			wantEvents:    "[send graceful stop set desired capacity]",
-			wantDesired:   1,
-			wantErrText:   errors.Join(ErrWindowsGracefulScaleInNotSupported, errors.New("throttled")).Error(),
-			wantLastEvent: false,
+			name:           "desired-capacity fallback failure is reported",
+			current:        threeInstances,
+			desired:        1,
+			describe:       instances("i-a", "i-b", "i-c"),
+			stopTargetsErr: ErrWindowsGracefulScaleInNotSupported,
+			setDesiredErr:  errors.New("throttled"),
+			wantEvents:     "[resolve stop targets set desired capacity]",
+			wantDesired:    1,
+			wantErrText:    errors.Join(ErrWindowsGracefulScaleInNotSupported, errors.New("throttled")).Error(),
+			wantNoCooldown: true,
 		},
 	}
 
@@ -734,21 +794,25 @@ func TestScaleInGracefulPathConverges(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			asg := &asgTestDriver{
 				desiredCapacity:  tc.current.DesiredCount,
+				noStopTargets:    tc.noStopTargets,
+				stopTargetsErr:   tc.stopTargetsErr,
 				sigTermsAccepted: tc.accepted,
 				sigTermErr:       tc.dispatchErr,
-				err:              tc.setDesiredErr,
+				setDesiredErr:    tc.setDesiredErr,
 			}
 			ec2Client := &scaleInEC2TestClient{
 				stubDescribeInstancesClient: &stubDescribeInstancesClient{
-					responses: []stubDescribeResponse{{out: tc.describe}},
+					responses: []stubDescribeResponse{{out: tc.describe, err: tc.describeErr}},
 				},
 				terminateInstancesTestClient: &terminateInstancesTestClient{events: &asg.events},
 			}
+			store := &fakeLastScaleInStore{saveErr: tc.saveErr}
 			s := Scaler{
-				autoscaling:   asg,
-				elasticCIMode: true,
-				ec2:           ec2Client,
-				ssm:           &stubSSMClient{sendErr: tc.ssmErr},
+				autoscaling:      asg,
+				elasticCIMode:    true,
+				ec2:              ec2Client,
+				ssm:              &stubSSMClient{sendErr: tc.ssmErr},
+				lastScaleInStore: store,
 			}
 
 			err := s.scaleIn(t.Context(), tc.desired, tc.current)
@@ -766,8 +830,218 @@ func TestScaleInGracefulPathConverges(t *testing.T) {
 			if got := asg.desiredCapacity; got != tc.wantDesired {
 				t.Errorf("desired capacity = %d, want %d", got, tc.wantDesired)
 			}
-			if got := !s.scaleInParams.LastEvent.IsZero(); got != tc.wantLastEvent {
-				t.Errorf("LastEvent recorded = %t, want %t", got, tc.wantLastEvent)
+			// Every attempt starts the cooldown, persisted before a stop is
+			// dispatched. Read-only lookups and a failed capacity change
+			// aren't attempts.
+			if tc.wantNoCooldown {
+				if !s.scaleInParams.LastEvent.IsZero() || len(store.saved) != 0 {
+					t.Errorf("LastEvent = %v, persisted %v, want neither", s.scaleInParams.LastEvent, store.saved)
+				}
+				return
+			}
+			if len(store.saved) != 1 {
+				t.Fatalf("Save called %d times, want 1", len(store.saved))
+			}
+			if tc.saveErr != nil {
+				if !s.scaleInParams.LastEvent.IsZero() {
+					t.Errorf("LastEvent = %v, want zero after a failed persist", s.scaleInParams.LastEvent)
+				}
+				return
+			}
+			if s.scaleInParams.LastEvent.IsZero() {
+				t.Error("LastEvent not recorded")
+			}
+			if !store.saved[0].Equal(s.scaleInParams.LastEvent) {
+				t.Errorf("persisted %v, want exactly LastEvent %v", store.saved[0], s.scaleInParams.LastEvent)
+			}
+		})
+	}
+}
+
+// fakeLastScaleInStore records every Save so tests can check the scale-in
+// cooldown is persisted exactly when it is started.
+type fakeLastScaleInStore struct {
+	loaded  time.Time
+	loadErr error
+	saved   []time.Time
+	saveErr error
+}
+
+func (f *fakeLastScaleInStore) Load(context.Context) (time.Time, error) {
+	return f.loaded, f.loadErr
+}
+
+func (f *fakeLastScaleInStore) Save(_ context.Context, t time.Time) error {
+	f.saved = append(f.saved, t)
+	return f.saveErr
+}
+
+// TestScaleInHonoursStoredCooldown pins that the stored last scale-in is the
+// source of truth: another Lambda container's scale-in holds this one back,
+// and a store that can't be read scales nothing in. The standard path sets
+// an absolute capacity, so it records the cooldown only after that lands and
+// shrugs off a store it can't write to.
+func TestScaleInHonoursStoredCooldown(t *testing.T) {
+	testCases := []struct {
+		name          string
+		store         *fakeLastScaleInStore
+		setDesiredErr error
+		wantEvents    string
+		wantErrText   string
+		wantSaved     int
+	}{
+		{
+			name:       "nothing stored scales in",
+			store:      &fakeLastScaleInStore{},
+			wantEvents: "[set desired capacity]",
+			wantSaved:  1,
+		},
+		{
+			name:       "expired stored cooldown scales in",
+			store:      &fakeLastScaleInStore{loaded: time.Now().Add(-2 * time.Hour)},
+			wantEvents: "[set desired capacity]",
+			wantSaved:  1,
+		},
+		{
+			name:       "another container's recent scale-in holds this one back",
+			store:      &fakeLastScaleInStore{loaded: time.Now().Add(-time.Minute)},
+			wantEvents: "[]",
+		},
+		{
+			name:        "unreadable store scales nothing in",
+			store:       &fakeLastScaleInStore{loadErr: errors.New("access denied")},
+			wantEvents:  "[]",
+			wantErrText: "read last scale-in time: access denied",
+		},
+		{
+			name:       "unwritable store still scales in",
+			store:      &fakeLastScaleInStore{saveErr: errors.New("access denied")},
+			wantEvents: "[set desired capacity]",
+			wantSaved:  1,
+		},
+		{
+			name:       "losing the race to another container still scales in",
+			store:      &fakeLastScaleInStore{loaded: time.Now().Add(-2 * time.Hour), saveErr: errAnotherScaleIn},
+			wantEvents: "[set desired capacity]",
+			wantSaved:  1,
+		},
+		{
+			name:          "failed capacity change starts no cooldown",
+			store:         &fakeLastScaleInStore{},
+			setDesiredErr: errors.New("throttled"),
+			wantEvents:    "[set desired capacity]",
+			wantErrText:   "throttled",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// One scheduled job on three instances: Run wants to scale in to 1.
+			asg := &asgTestDriver{desiredCapacity: 3, setDesiredErr: tc.setDesiredErr}
+			s := Scaler{
+				autoscaling:      asg,
+				bk:               &buildkiteTestDriver{metrics: buildkite.AgentMetrics{ScheduledJobs: 1}},
+				scaling:          ScalingCalculator{agentsPerInstance: 1},
+				scaleInParams:    ScaleParams{CooldownPeriod: time.Hour},
+				lastScaleInStore: tc.store,
+			}
+
+			_, err := s.Run(t.Context())
+			if tc.wantErrText != "" {
+				if err == nil || err.Error() != tc.wantErrText {
+					t.Fatalf("Run() error = %v, want %q", err, tc.wantErrText)
+				}
+			} else if err != nil {
+				t.Fatalf("Run() error = %v, want nil", err)
+			}
+
+			if got := fmt.Sprint(asg.events); got != tc.wantEvents {
+				t.Errorf("calls = %s, want %s", got, tc.wantEvents)
+			}
+			if got := len(tc.store.saved); got != tc.wantSaved {
+				t.Errorf("Save called %d times, want %d", got, tc.wantSaved)
+			}
+
+			// A failed poll leaves the in-memory cooldown alone; a held-back
+			// scale-in keeps the stored time; a dispatched one records what
+			// it tried to persist.
+			want := time.Time{}
+			switch {
+			case tc.wantErrText != "":
+			case tc.wantEvents == "[]":
+				want = tc.store.loaded
+			default:
+				want = tc.store.saved[0]
+			}
+			if got := s.scaleInParams.LastEvent; !got.Equal(want) {
+				t.Errorf("LastEvent = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+// TestScaleOutHonoursStoredScaleInCooldown pins that the stored last scale-in
+// is read before the scaling direction is chosen, so SCALE_ONLY_AFTER_ALL_EVENT
+// holds a scale-out back during another container's scale-in cooldown, and
+// that a plain scale-out never touches the store.
+func TestScaleOutHonoursStoredScaleInCooldown(t *testing.T) {
+	testCases := []struct {
+		name                   string
+		scaleOnlyAfterAllEvent bool
+		store                  *fakeLastScaleInStore
+		wantEvents             string
+		wantErrText            string
+	}{
+		{
+			name:                   "nothing stored scales out",
+			scaleOnlyAfterAllEvent: true,
+			store:                  &fakeLastScaleInStore{},
+			wantEvents:             "[set desired capacity]",
+		},
+		{
+			name:                   "another container's recent scale-in holds this one back",
+			scaleOnlyAfterAllEvent: true,
+			store:                  &fakeLastScaleInStore{loaded: time.Now().Add(-time.Minute)},
+			wantEvents:             "[]",
+		},
+		{
+			name:                   "unreadable store scales nothing out",
+			scaleOnlyAfterAllEvent: true,
+			store:                  &fakeLastScaleInStore{loadErr: errors.New("access denied")},
+			wantEvents:             "[]",
+			wantErrText:            "read last scale-in time: access denied",
+		},
+		{
+			name:       "plain scale-out doesn't need the store",
+			store:      &fakeLastScaleInStore{loadErr: errors.New("access denied")},
+			wantEvents: "[set desired capacity]",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Three scheduled jobs on two instances: Run wants to scale out to 3.
+			asg := &asgTestDriver{desiredCapacity: 2}
+			s := Scaler{
+				autoscaling:            asg,
+				bk:                     &buildkiteTestDriver{metrics: buildkite.AgentMetrics{ScheduledJobs: 3}},
+				scaling:                ScalingCalculator{agentsPerInstance: 1},
+				scaleOnlyAfterAllEvent: tc.scaleOnlyAfterAllEvent,
+				scaleInParams:          ScaleParams{CooldownPeriod: time.Hour},
+				scaleOutParams:         ScaleParams{CooldownPeriod: time.Hour, LastEvent: time.Now().Add(-2 * time.Hour)},
+				lastScaleInStore:       tc.store,
+			}
+
+			_, err := s.Run(t.Context())
+			if tc.wantErrText != "" {
+				if err == nil || err.Error() != tc.wantErrText {
+					t.Fatalf("Run() error = %v, want %q", err, tc.wantErrText)
+				}
+			} else if err != nil {
+				t.Fatalf("Run() error = %v, want nil", err)
+			}
+			if got := fmt.Sprint(asg.events); got != tc.wantEvents {
+				t.Errorf("calls = %s, want %s", got, tc.wantEvents)
 			}
 		})
 	}
