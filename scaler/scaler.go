@@ -44,12 +44,14 @@ type Params struct {
 	MaxDanglingInstancesToCheck    int           // Maximum number of instances to check for dangling instances (only used for dangling instance scanning, not for normal scale-in)
 	MaxInstanceCap                 int           // Maximum instance count cap (0 means no cap)
 	DanglingInstancesCheckInterval time.Duration // Interval between dangling-instance checks; used to rotate the check window. Defaults to 60s when 0.
+	LastScaleInSSMParameter        string        // SSM parameter that shares the last scale-in time across Lambda containers; empty keeps it in memory only. Ignored in DryRun.
 }
 
 type Scaler struct {
 	autoscaling interface {
 		Describe(ctx context.Context) (AutoscaleGroupDetails, error)
 		SetDesiredCapacity(ctx context.Context, count int64) error
+		GracefulStopTargets(ctx context.Context, instanceIDs []string) ([]string, error)
 		SendSIGTERMToAgentsBatch(ctx context.Context, instanceIDs []string) (int, error)
 		CleanupDanglingInstances(ctx context.Context, minimumInstanceUptime time.Duration, maxDanglingInstancesToCheck int) error
 	}
@@ -73,9 +75,13 @@ type Scaler struct {
 	ec2     scaleInEC2API
 	ssm     ssmCheckAPI
 	asgName string
+	// lastScaleInStore, when set, shares scaleInParams.LastEvent with other
+	// Lambda containers.
+	lastScaleInStore lastScaleInStore
 }
 
 func NewScaler(client *buildkite.Client, cfg aws.Config, params Params) (*Scaler, error) {
+	ssmClient := ssm.NewFromConfig(cfg)
 	scaler := &Scaler{
 		bk: &buildkiteDriver{
 			client: client,
@@ -88,7 +94,7 @@ func NewScaler(client *buildkite.Client, cfg aws.Config, params Params) (*Scaler
 		asgActivityCooldown:    params.ASGActivityCooldown,
 		elasticCIMode:          params.ElasticCIMode,
 		ec2:                    ec2.NewFromConfig(cfg),
-		ssm:                    ssm.NewFromConfig(cfg),
+		ssm:                    ssmClient,
 		asgName:                params.AutoScalingGroupName,
 	}
 
@@ -109,6 +115,10 @@ func NewScaler(client *buildkite.Client, cfg aws.Config, params Params) (*Scaler
 			scaler.metrics = &dryRunMetricsPublisher{}
 		}
 		return scaler, nil
+	}
+
+	if params.LastScaleInSSMParameter != "" {
+		scaler.lastScaleInStore = &ssmLastScaleInStore{client: ssmClient, name: params.LastScaleInSSMParameter}
 	}
 
 	danglingInstancesCheckInterval := params.DanglingInstancesCheckInterval
@@ -253,6 +263,22 @@ func (s *Scaler) Run(ctx context.Context) (time.Duration, error) {
 		return metrics.PollDuration, nil
 	}
 
+	// Another container may have scaled in since we last looked. Read before
+	// choosing a direction, as scale-out checks the scale-in cooldown too when
+	// SCALE_ONLY_AFTER_ALL_EVENT is set. Only read when the cooldown matters,
+	// so a broken parameter can't hold up a plain scale-out. A failed read
+	// scales nothing this poll; the next one retries.
+	cooldownMatters := desired < asg.DesiredCount || (desired > asg.DesiredCount && s.scaleOnlyAfterAllEvent)
+	if s.lastScaleInStore != nil && cooldownMatters {
+		stored, err := s.lastScaleInStore.Load(ctx)
+		if err != nil {
+			return metrics.PollDuration, fmt.Errorf("read last scale-in time: %w", err)
+		}
+		if stored.After(s.scaleInParams.LastEvent) {
+			s.scaleInParams.LastEvent = stored
+		}
+	}
+
 	if desired > asg.DesiredCount {
 		log.Printf("Scaling decision: calculated desired %d instances. ASG current desired: %d, ASG actual running: %d (approx %d agents), Buildkite scheduled: %d, running: %d, waiting: %d",
 			desired, asg.DesiredCount, instanceCount, instanceCount*int64(s.scaling.agentsPerInstance), metrics.ScheduledJobs, metrics.RunningJobs, metrics.WaitingJobs)
@@ -306,7 +332,8 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 		log.Printf("ℹ️ [Elastic CI Mode] Ignoring DISABLE_SCALE_IN=true since ElasticCIMode has safer scaling mechanisms")
 	}
 
-	// If we've scaled down before, check if a cooldown should be enforced
+	// If we've scaled down before, check if a cooldown should be enforced.
+	// Run has already merged in the stored time from other containers.
 	if !s.scaleInParams.LastEvent.IsZero() {
 		lastScaleInEvent := s.scaleInParams.LastEvent
 		lastScaleOutEvent := s.scaleOutParams.LastEvent
@@ -319,53 +346,6 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 		if cooldownRemaining > 0 {
 			log.Printf("⏲ Want to scale IN but in cooldown for %d seconds", cooldownRemaining/time.Second)
 			return nil
-		}
-	}
-
-	// Special Elastic CI Stack mode with additional safety checks
-	if s.elasticCIMode {
-		// Only walk the ASG activity history when this process has no
-		// scale-in on record, e.g. cold-start seeding failed. Once we've sent
-		// a graceful stop ourselves, LastEvent is the better signal: Elastic
-		// CI Stack agents decrement desired capacity with the same activity
-		// cause whether we asked them to stop or they idled out on their own,
-		// so the history can't tell our scale-ins apart from idle churn.
-		if driver, ok := s.autoscaling.(*ASGDriver); ok && s.scaleInParams.LastEvent.IsZero() {
-			// In ElasticCIMode, override the page limit to allow unlimited pages
-			if driver.MaxDescribeScalingActivitiesPages >= 0 {
-				// Override to allow unlimited pages (-1) for full activity history in ElasticCIMode
-				log.Printf("ℹ️ [Elastic CI Mode] Setting MAX_DESCRIBE_SCALING_ACTIVITIES_PAGES from %d to -1 (unlimited) for better safety checks",
-					driver.MaxDescribeScalingActivitiesPages)
-				driver.MaxDescribeScalingActivitiesPages = -1
-			}
-
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-
-			// Get the last scale-in activity from ASG history
-			_, lastScaleInActivity, err := driver.GetLastScalingInAndOutActivity(ctx, false, true)
-			if err != nil {
-				log.Printf("⚠️ [Elastic CI Mode] Could not check last ASG scale-in activity: %v", err)
-			} else if lastScaleInActivity != nil && lastScaleInActivity.StartTime != nil {
-				// Check how recently the ASG scaled down
-				lastScaleInTime := *lastScaleInActivity.StartTime
-				timeSinceLastScaleIn := time.Since(lastScaleInTime)
-
-				// Remember it so the next poll uses the in-process cooldown
-				// instead of paging through the history again.
-				s.scaleInParams.LastEvent = lastScaleInTime
-
-				// Check if we're in cooldown period based on the last ASG scale-in activity
-				if s.scaleInParams.CooldownPeriod > 0 && timeSinceLastScaleIn < s.scaleInParams.CooldownPeriod {
-					log.Printf("⏲ [Elastic CI Mode] Last successful ASG scale-in was %s ago, in cooldown period for %s more (cooldown: %s)",
-						timeSinceLastScaleIn.Round(time.Second),
-						(s.scaleInParams.CooldownPeriod - timeSinceLastScaleIn).Round(time.Second),
-						s.scaleInParams.CooldownPeriod)
-					return nil
-				}
-
-				log.Printf("[Elastic CI Mode] Last successful ASG scale-in was %s ago", timeSinceLastScaleIn.Round(time.Second))
-			}
 		}
 	}
 
@@ -408,104 +388,109 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 
 	instancesToTerminate := current.DesiredCount - desired
 
-	// In Elastic CI Mode, use graceful termination if we have instance IDs
-	if s.elasticCIMode && len(current.InstanceIDs) > 0 && instancesToTerminate > 0 {
-		log.Printf("[Elastic CI Mode] Using graceful termination for %d instances", instancesToTerminate)
-
-		instancesForTermination, err := oldestInstances(ctx, s.ec2, current.InstanceIDs, instancesToTerminate, s.asgName)
-		if err != nil {
-			return fmt.Errorf("select scale-in candidates: %w", err)
-		}
-
-		log.Printf("[Elastic CI Mode] Attempting graceful termination for %d instance(s): %v", len(instancesForTermination), instancesForTermination)
-		gracefulScaleInErr := s.gracefullyScaleIn(ctx, instancesForTermination)
-		if gracefulScaleInErr == nil {
-			return nil
-		}
-
-		// Nothing is draining in any of these cases, so there's no agent-side
-		// decrement to collide with. Change desired capacity the way the
-		// non-graceful path does, otherwise the scaler keeps picking the same
-		// unreachable instances every poll and never converges.
-		switch {
-		case errors.Is(gracefulScaleInErr, ErrWindowsGracefulScaleInNotSupported):
-			log.Printf("ℹ️  Skipped %d Windows instance(s) - graceful scale-in not supported, will be terminated directly by ASG", len(instancesForTermination))
-		case errors.Is(gracefulScaleInErr, errNoReachableScaleInCandidates), errors.Is(gracefulScaleInErr, errNoScaleInCandidates):
-			log.Printf("[Elastic CI Mode] %v; falling back to a desired-capacity change", gracefulScaleInErr)
-		default:
-			// A failed SSM or EC2 call tells us nothing about the instances.
-			// Some of them may have taken the command, so changing desired
-			// capacity now could decrement twice. Back off and retry after
-			// the cooldown.
-			return gracefulScaleInErr
-		}
-
-		if err := s.setDesiredCapacity(ctx, desired); err != nil {
-			return errors.Join(gracefulScaleInErr, err)
-		}
-		s.scaleInParams.LastEvent = time.Now()
-
-		// The Elastic CI Stack protects instances from scale-in by default, so
-		// the ASG won't act on the capacity change and a lone instance whose
-		// agent is gone would sit there forever. Probe it and terminate
-		// directly when SSM can't even reach it. Windows instances are never
-		// checked against SSM before this point, so they always get the probe.
-		singleInstanceASG := current.DesiredCount <= 1 && current.TotalCount == 1 && len(current.InstanceIDs) == 1
-		if !errors.Is(gracefulScaleInErr, errNoScaleInCandidates) && singleInstanceASG {
-			if err := terminateIfAgentUnreachable(ctx, s.ec2, s.ssm, current.InstanceIDs[0]); err != nil {
-				return fmt.Errorf("directly terminate probable dangling instance: %w", err)
-			}
-		}
-		return nil
-	} else {
+	if !s.elasticCIMode || len(current.InstanceIDs) == 0 || instancesToTerminate <= 0 {
 		log.Printf("Using standard scale-in (Elastic CI Mode disabled or no instances to terminate)")
 		if err := s.setDesiredCapacity(ctx, desired); err != nil {
 			return err
 		}
-		s.scaleInParams.LastEvent = time.Now()
+		s.recordScaleIn(ctx)
 		return nil
 	}
+
+	// In Elastic CI Mode, use graceful termination. Pick the candidates and
+	// work out which ones a graceful stop can reach first: both steps only
+	// read EC2 and SSM, so a throttled lookup should retry next poll rather
+	// than start the cooldown.
+	log.Printf("[Elastic CI Mode] Using graceful termination for %d instances", instancesToTerminate)
+	instancesForTermination, err := oldestInstances(ctx, s.ec2, current.InstanceIDs, instancesToTerminate, s.asgName)
+	if err != nil {
+		return fmt.Errorf("select scale-in candidates: %w", err)
+	}
+	targets, targetsErr := s.autoscaling.GracefulStopTargets(ctx, instancesForTermination)
+	if targetsErr == nil && len(targets) > 0 {
+		return s.dispatchGracefulStops(ctx, targets)
+	}
+
+	// Nothing is draining in any of these cases, so there's no agent-side
+	// decrement to collide with. Change desired capacity the way the
+	// non-graceful path does, otherwise the scaler keeps picking the same
+	// unreachable instances every poll and never converges.
+	switch {
+	case errors.Is(targetsErr, ErrWindowsGracefulScaleInNotSupported):
+		log.Printf("ℹ️  Skipped %d Windows instance(s) - graceful scale-in not supported, will be terminated directly by ASG", len(instancesForTermination))
+	case targetsErr != nil:
+		return fmt.Errorf("resolve graceful-stop targets: %w", targetsErr)
+	default:
+		log.Printf("[Elastic CI Mode] no scale-in candidates reachable via SSM; falling back to a desired-capacity change")
+	}
+
+	if err := s.setDesiredCapacity(ctx, desired); err != nil {
+		return errors.Join(targetsErr, err)
+	}
+	s.recordScaleIn(ctx)
+
+	// The Elastic CI Stack protects instances from scale-in by default, so
+	// the ASG won't act on the capacity change and a lone instance whose
+	// agent is gone would sit there forever. Probe it and terminate
+	// directly when SSM can't even reach it. Windows instances are never
+	// checked against SSM before this point, so they always get the probe.
+	singleInstanceASG := current.DesiredCount <= 1 && current.TotalCount == 1 && len(current.InstanceIDs) == 1
+	if len(instancesForTermination) > 0 && singleInstanceASG {
+		if err := terminateIfAgentUnreachable(ctx, s.ec2, s.ssm, current.InstanceIDs[0]); err != nil {
+			return fmt.Errorf("directly terminate probable dangling instance: %w", err)
+		}
+	}
+	return nil
 }
 
-// Nothing was dispatched, and unlike an API error we know why. The caller can
-// safely fall back to a desired-capacity change.
-var (
-	// None of the candidates is online in SSM.
-	errNoReachableScaleInCandidates = errors.New("no graceful-stop commands dispatched: no scale-in candidates reachable via SSM")
-	// Every candidate had already left EC2 when we looked up launch times.
-	errNoScaleInCandidates = errors.New("no graceful-stop commands dispatched: no scale-in candidates")
-)
-
-// gracefullyScaleIn asks the selected instances to drain and stop. It returns
-// nil only when at least one instance accepted the command; the caller must
-// then leave desired capacity alone, because Elastic CI Stack agents decrement
-// it themselves once drained. Windows instances can't be drained this way and
-// report ErrWindowsGracefulScaleInNotSupported.
-func (s *Scaler) gracefullyScaleIn(ctx context.Context, instanceIDs []string) error {
-	if len(instanceIDs) == 0 {
-		return errNoScaleInCandidates
+// dispatchGracefulStops asks targets to drain and stop. Elastic CI Stack
+// agents decrement desired capacity themselves once drained, so the caller
+// must leave it alone.
+func (s *Scaler) dispatchGracefulStops(ctx context.Context, targets []string) error {
+	// Start the cooldown before dispatching, so a recycled or overlapping
+	// container sees it before it can scale in on top of us. Every attempt
+	// counts: draining instances stay in the ASG, so an early retry would
+	// pick the same ones again. A failed write dispatches nothing; the next
+	// poll retries.
+	now := time.Now()
+	if s.lastScaleInStore != nil {
+		err := s.lastScaleInStore.Save(ctx, now)
+		if errors.Is(err, errAnotherScaleIn) {
+			log.Printf("⏲ Want to scale IN but another container got there first")
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("persist last scale-in time: %w", err)
+		}
 	}
+	s.scaleInParams.LastEvent = now
 
-	accepted, err := s.autoscaling.SendSIGTERMToAgentsBatch(ctx, instanceIDs)
-	if errors.Is(err, ErrWindowsGracefulScaleInNotSupported) {
-		return err
-	}
+	log.Printf("[Elastic CI Mode] Attempting graceful termination for %d instance(s): %v", len(targets), targets)
+	accepted, err := s.autoscaling.SendSIGTERMToAgentsBatch(ctx, targets)
 	if err != nil {
 		log.Printf("⚠️  Failed to send graceful-stop command to one or more instances: %v", err)
 	}
-
-	// Every attempt starts the cooldown: draining instances stay in the ASG,
-	// so an earlier retry would pick the same ones, and a failed attempt
-	// should back off rather than retry every poll.
-	s.scaleInParams.LastEvent = time.Now()
-
 	if accepted > 0 {
 		return nil
 	}
-	if err != nil {
-		return err
+	// A failed SendCommand tells us nothing about the instances. Some of
+	// them may have taken the command, so changing desired capacity now
+	// could decrement twice. Back off and retry after the cooldown.
+	return err
+}
+
+// recordScaleIn starts the cooldown after a desired-capacity change. Capacity
+// is absolute, so overlapping containers can't over-terminate here: losing the
+// race just means another container set the same capacity, and a store that
+// can't be written isn't worth failing the poll over.
+func (s *Scaler) recordScaleIn(ctx context.Context) {
+	s.scaleInParams.LastEvent = time.Now()
+	if s.lastScaleInStore == nil {
+		return
 	}
-	return errNoReachableScaleInCandidates
+	if err := s.lastScaleInStore.Save(ctx, s.scaleInParams.LastEvent); err != nil && !errors.Is(err, errAnotherScaleIn) {
+		log.Printf("⚠️  Failed to persist last scale-in time: %v", err)
+	}
 }
 
 func (s *Scaler) scaleOut(ctx context.Context, desired int64, current AutoscaleGroupDetails) error {

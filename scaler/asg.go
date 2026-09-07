@@ -558,24 +558,46 @@ func (a *ASGDriver) GetLastScalingInAndOutActivity(ctx context.Context, findScal
 type dryRunASG struct {
 }
 
-// SendSIGTERMToAgentsBatch submits the graceful-stop command for all reachable
-// Linux instances without waiting for command completion. Elastic CI Stack
-// agents self-terminate and decrement desired capacity after draining. The
-// returned count is the number of instances included in accepted commands.
-func (a *ASGDriver) SendSIGTERMToAgentsBatch(ctx context.Context, instanceIDs []string) (int, error) {
+// GracefulStopTargets narrows scale-in candidates down to the Linux instances
+// whose SSM agent is online, so a graceful-stop command can reach them. It only
+// reads EC2 and SSM, so callers can retry it freely. Windows ASGs report
+// ErrWindowsGracefulScaleInNotSupported.
+func (a *ASGDriver) GracefulStopTargets(ctx context.Context, instanceIDs []string) ([]string, error) {
 	if len(instanceIDs) == 0 {
-		return 0, nil
+		return nil, nil
 	}
+	return a.gracefulStopTargets(ctx, ec2.NewFromConfig(a.Cfg), ssm.NewFromConfig(a.Cfg), instanceIDs)
+}
 
-	platform, err := a.detectPlatform(ctx, ec2.NewFromConfig(a.Cfg), instanceIDs)
+func (a *ASGDriver) gracefulStopTargets(ctx context.Context, ec2Client describeInstancesAPI, ssmSvc ssmCheckAPI, instanceIDs []string) ([]string, error) {
+	platform, err := a.detectPlatform(ctx, ec2Client, instanceIDs)
 	if err != nil {
 		// The instance owns the capacity decrement on Linux while Windows
 		// needs the SetDesiredCapacity fallback, so guessing the platform
 		// wrong loses the decrement. Fail closed and retry next run.
-		return 0, fmt.Errorf("detect platform for graceful scale-in: %w", err)
+		return nil, fmt.Errorf("detect platform for graceful scale-in: %w", err)
+	}
+	if strings.EqualFold(platform, "windows") {
+		return nil, ErrWindowsGracefulScaleInNotSupported
 	}
 
-	return a.sendSIGTERMToAgentsBatch(ctx, ssm.NewFromConfig(a.Cfg), instanceIDs, platform)
+	onlineIDs, err := filterOnlineSSMInstances(ctx, ssmSvc, instanceIDs)
+	if err != nil {
+		return nil, fmt.Errorf("describe SSM instance information: %w", err)
+	}
+	if offline := len(instanceIDs) - len(onlineIDs); offline > 0 {
+		log.Printf("[Elastic CI Mode] SSM agent not online for %d of %d graceful scale-in candidate(s); skipping those", offline, len(instanceIDs))
+	}
+	return onlineIDs, nil
+}
+
+// SendSIGTERMToAgentsBatch submits the graceful-stop command to instanceIDs,
+// which should come from GracefulStopTargets, without waiting for command
+// completion. Elastic CI Stack agents self-terminate and decrement desired
+// capacity after draining. The returned count is the number of instances
+// included in accepted commands.
+func (a *ASGDriver) SendSIGTERMToAgentsBatch(ctx context.Context, instanceIDs []string) (int, error) {
+	return a.sendSIGTERMToAgentsBatch(ctx, ssm.NewFromConfig(a.Cfg), instanceIDs)
 }
 
 // detectPlatform inspects one scale-in candidate to choose the SSM document
@@ -595,27 +617,12 @@ func (a *ASGDriver) detectPlatform(ctx context.Context, client describeInstances
 	return a.getASGPlatform(instances), nil
 }
 
-func (a *ASGDriver) sendSIGTERMToAgentsBatch(ctx context.Context, ssmSvc ssmCheckAPI, instanceIDs []string, platform string) (int, error) {
-	if strings.EqualFold(platform, "windows") {
-		return 0, ErrWindowsGracefulScaleInNotSupported
-	}
-
-	onlineIDs, err := filterOnlineSSMInstances(ctx, ssmSvc, instanceIDs)
-	if err != nil {
-		return 0, fmt.Errorf("describe SSM instance information: %w", err)
-	}
-	if offline := len(instanceIDs) - len(onlineIDs); offline > 0 {
-		log.Printf("[Elastic CI Mode] SSM agent not online for %d of %d graceful scale-in candidate(s); skipping those", offline, len(instanceIDs))
-	}
-	if len(onlineIDs) == 0 {
-		return 0, nil
-	}
-
+func (a *ASGDriver) sendSIGTERMToAgentsBatch(ctx context.Context, ssmSvc ssmCheckAPI, instanceIDs []string) (int, error) {
 	command := a.getStopCommand()
 
 	var sendErrors []error
 	accepted := 0
-	for instanceBatch := range slices.Chunk(onlineIDs, ssmMaxInstanceIDs) {
+	for instanceBatch := range slices.Chunk(instanceIDs, ssmMaxInstanceIDs) {
 		_, err := ssmSvc.SendCommand(ctx, &ssm.SendCommandInput{
 			InstanceIds:  instanceBatch,
 			DocumentName: aws.String("AWS-RunShellScript"),
@@ -787,6 +794,11 @@ func (a *dryRunASG) Describe(ctx context.Context) (AutoscaleGroupDetails, error)
 
 func (a *dryRunASG) SetDesiredCapacity(ctx context.Context, count int64) error {
 	return nil
+}
+
+func (a *dryRunASG) GracefulStopTargets(ctx context.Context, instanceIDs []string) ([]string, error) {
+	log.Printf("[DryRun] Would check which of %v can take a graceful stop", instanceIDs)
+	return instanceIDs, nil
 }
 
 func (a *dryRunASG) SendSIGTERMToAgentsBatch(ctx context.Context, instanceIDs []string) (int, error) {
