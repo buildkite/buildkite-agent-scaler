@@ -34,8 +34,8 @@ var errAnotherScaleIn = errors.New("another container started a scale-in first")
 // Mode agents leave the group themselves after draining, and their "instance
 // terminated" activity looks the same whether the scaler asked them to or not.
 type lastScaleInStore interface {
-	// Load returns the stored time, or the zero time when nothing has been
-	// stored yet.
+	// Load returns the stored time, initializing a missing parameter with
+	// the current time so upgrades wait out any previous cooldown.
 	Load(ctx context.Context) (time.Time, error)
 	// Save stores t. It returns errAnotherScaleIn if the store changed since
 	// Load, so of two containers racing to scale in, only one proceeds.
@@ -70,8 +70,20 @@ func (s *ssmLastScaleInStore) Load(ctx context.Context) (time.Time, error) {
 	})
 	var notFound *types.ParameterNotFound
 	if errors.As(err, &notFound) {
-		s.version = 0
-		return time.Time{}, nil
+		// Don't overwrite a timestamp another container created after our
+		// read. If creation fails (including a race), the next poll reloads.
+		now := time.Now().UTC().Truncate(time.Second)
+		created, err := s.client.PutParameter(ctx, &ssm.PutParameterInput{
+			Name:      aws.String(s.name),
+			Value:     aws.String(now.Format(time.RFC3339)),
+			Type:      types.ParameterTypeString,
+			Overwrite: aws.Bool(false),
+		})
+		if err != nil {
+			return time.Time{}, fmt.Errorf("initialize parameter %s: %w", s.name, err)
+		}
+		s.version = created.Version
+		return now, nil
 	}
 	if err != nil {
 		return time.Time{}, fmt.Errorf("get parameter %s: %w", s.name, err)
