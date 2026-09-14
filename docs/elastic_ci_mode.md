@@ -103,4 +103,4 @@ Job dispatch delays, other issues related to job processing.
 - `ELASTIC_CI_MODE`: Enable enhanced safety features, only for [Elastic CI Stack](https://github.com/buildkite/elastic-ci-stack-for-aws)! (boolean)
 - `DANGLING_CHECK_MINIMUM_INSTANCE_UPTIME`: Minimum instance uptime before checking for dangling instances (default 1h)
 - `MAX_DANGLING_INSTANCES_TO_CHECK`: Maximum number of instances to scan for dangling detection (default 5)
-- `SCALE_IN_COOLDOWN_PERIOD`: Time to wait between scale-in operations (default 1h for Elastic CI Mode, 0 otherwise)
+- `SCALE_IN_COOLDOWN_PERIOD`: Time to wait between scale-in operations (default 1h for Elastic CI Mode, 0 otherwise). The time of the last scale-in is persisted in the SSM parameter named by `LAST_SCALE_IN_SSM_PARAMETER`, so the cooldown holds across Lambda cold starts and concurrent containers.

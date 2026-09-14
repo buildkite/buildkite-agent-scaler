@@ -268,6 +268,15 @@ Resources:
                   - IsAgentTokenARN
                   - !Ref BuildkiteAgentTokenParameter
                   - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${BuildkiteAgentTokenParameter}
+        - PolicyName: PersistLastScaleIn
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:PutParameter
+                Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/buildkite-agent-scaler/${AWS::StackName}/last-scale-in
         - !If
           - UseKmsKeyForParameterStore
           - PolicyName: DecryptAgentToken
@@ -356,6 +365,13 @@ Resources:
           MAX_DESCRIBE_SCALING_ACTIVITIES_PAGES: !Ref MaxDescribeScalingActivitiesPages
           AVAILABILITY_THRESHOLD:        !Ref AvailabilityThreshold
           SCALE_IN_COOLDOWN_PERIOD:      !Sub "${ScaleInCooldownPeriod}s"
+          # Only the template-created role is granted access to the parameter;
+          # a supplied role keeps the in-memory cooldown.
+          LAST_SCALE_IN_SSM_PARAMETER:
+            !If
+              - CreateRole
+              - !Sub /buildkite-agent-scaler/${AWS::StackName}/last-scale-in
+              - !Ref AWS::NoValue
           SCALE_OUT_COOLDOWN_PERIOD:     !Sub "${ScaleOutCooldownPeriod}s"
           DANGLING_CHECK_MINIMUM_INSTANCE_UPTIME: !Sub "${DanglingCheckMinimumInstanceUptime}s"
           MAX_DANGLING_INSTANCES_TO_CHECK: !Ref MaxDanglingInstancesToCheck
