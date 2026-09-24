@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## [v1.14.0](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.13.0...v1.14.0) (2026-09-24)
+
+### Fixed
+
+- Avoid decrementing desired capacity twice during Linux Elastic CI graceful scale-in. The draining instance now owns the decrement, preventing stopped agents from becoming stranded at `MinSize` and avoiding premature ASG termination of unprotected instances. Batch graceful-stop requests and exclude instances already terminating from scale-in candidates [#351](https://github.com/buildkite/buildkite-agent-scaler/pull/351) (@scadu)
+- Distinguish draining agents from stopped agents during dangling-instance cleanup, and avoid repeated scale-in while the ASG is converging [#345](https://github.com/buildkite/buildkite-agent-scaler/pull/345) (@scadu)
+- Route scaling decisions using ASG desired capacity so new demand can scale out while older instances are still draining [#346](https://github.com/buildkite/buildkite-agent-scaler/pull/346) (@scadu)
+
+### Dependencies
+
+- Update Go to v1.27.0 [#348](https://github.com/buildkite/buildkite-agent-scaler/pull/348) (@renovate[bot])
+- Update aws-sdk-go [#349](https://github.com/buildkite/buildkite-agent-scaler/pull/349) (@renovate[bot])
+- Update Go to v1.27.1 [#355](https://github.com/buildkite/buildkite-agent-scaler/pull/355) (@renovate[bot])
+- Update aws-sdk-go [#356](https://github.com/buildkite/buildkite-agent-scaler/pull/356) (@renovate[bot])
+- Update aws-sdk-go [#357](https://github.com/buildkite/buildkite-agent-scaler/pull/357) (@renovate[bot])
+- Update aws-sdk-go [#358](https://github.com/buildkite/buildkite-agent-scaler/pull/358) (@renovate[bot])
+
 ## [v1.13.0](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.12.0...v1.13.0) (2026-08-25)
 
 ### Added
