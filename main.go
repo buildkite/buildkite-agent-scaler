@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"time"
 
@@ -48,15 +49,18 @@ func main() {
 		log.Fatal("unable to load SDK config, ", err)
 	}
 
+	agentTokenSource := "-agent-token flag"
 	if *ssmTokenKey != "" {
 		token, err := scaler.RetrieveFromParameterStore(cfg, *ssmTokenKey)
 		if err != nil {
 			log.Fatal(err)
 		}
 		buildkiteAgentToken = &token
+		agentTokenSource = fmt.Sprintf("SSM parameter %q (-agent-token-ssm-key)", *ssmTokenKey)
 	}
 
 	client := buildkite.NewClient(*buildkiteAgentToken, *buildkiteAgentEndpoint)
+	client.AgentTokenSource = agentTokenSource
 
 	scaler, err := scaler.NewScaler(client, cfg, scaler.Params{
 		BuildkiteQueue:           *buildkiteQueue,
