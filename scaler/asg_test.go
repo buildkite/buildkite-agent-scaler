@@ -839,6 +839,56 @@ func TestFilterOnlineSSMInstancesChunksAndPaginates(t *testing.T) {
 	}
 }
 
+func TestGracefulStopTargets(t *testing.T) {
+	platformResponse := func(platform ec2Types.PlatformValues) stubDescribeResponse {
+		return stubDescribeResponse{out: &ec2.DescribeInstancesOutput{
+			Reservations: []ec2Types.Reservation{{Instances: []ec2Types.Instance{{Platform: platform}}}},
+		}}
+	}
+
+	t.Run("keeps only targets whose SSM agent is online", func(t *testing.T) {
+		ec2Stub := &stubDescribeInstancesClient{responses: []stubDescribeResponse{platformResponse("")}}
+		ssmStub := &stubSSMClient{describeOut: onlineSSMOutput("i-a", "i-c")}
+
+		got, err := (&ASGDriver{}).gracefulStopTargets(t.Context(), ec2Stub, ssmStub, []string{"i-a", "i-b", "i-c"})
+		if err != nil {
+			t.Fatalf("gracefulStopTargets() error = %v", err)
+		}
+		if want := []string{"i-a", "i-c"}; !slices.Equal(got, want) {
+			t.Errorf("gracefulStopTargets() = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("rejects Windows before contacting SSM", func(t *testing.T) {
+		ec2Stub := &stubDescribeInstancesClient{responses: []stubDescribeResponse{platformResponse("windows")}}
+		ssmStub := &stubSSMClient{}
+
+		_, err := (&ASGDriver{}).gracefulStopTargets(t.Context(), ec2Stub, ssmStub, []string{"i-windows"})
+		if !errors.Is(err, ErrWindowsGracefulScaleInNotSupported) {
+			t.Errorf("gracefulStopTargets() error = %v, want %v", err, ErrWindowsGracefulScaleInNotSupported)
+		}
+		if len(ssmStub.describeCalls) != 0 {
+			t.Errorf("DescribeInstanceInformation calls = %d, want 0", len(ssmStub.describeCalls))
+		}
+	})
+
+	// Both lookups are read-only, so their failures surface to the caller
+	// instead of being swallowed as "no targets".
+	t.Run("reports EC2 and SSM failures", func(t *testing.T) {
+		ec2Err := errors.New("ec2 throttled")
+		ec2Stub := &stubDescribeInstancesClient{responses: []stubDescribeResponse{{err: ec2Err}}}
+		if _, err := (&ASGDriver{}).gracefulStopTargets(t.Context(), ec2Stub, &stubSSMClient{}, []string{"i-a"}); !errors.Is(err, ec2Err) {
+			t.Errorf("gracefulStopTargets() error = %v, want %v", err, ec2Err)
+		}
+
+		ssmErr := errors.New("ssm throttled")
+		ec2Stub = &stubDescribeInstancesClient{responses: []stubDescribeResponse{platformResponse("")}}
+		if _, err := (&ASGDriver{}).gracefulStopTargets(t.Context(), ec2Stub, &stubSSMClient{describeErr: ssmErr}, []string{"i-a"}); !errors.Is(err, ssmErr) {
+			t.Errorf("gracefulStopTargets() error = %v, want %v", err, ssmErr)
+		}
+	})
+}
+
 func TestSendSIGTERMToAgentsBatch(t *testing.T) {
 	instanceIDs := make([]string, 120)
 	for i := range instanceIDs {
@@ -846,9 +896,9 @@ func TestSendSIGTERMToAgentsBatch(t *testing.T) {
 	}
 
 	t.Run("chunks more than 50 targets without polling completion", func(t *testing.T) {
-		stub := &stubSSMClient{describeOut: onlineSSMOutput(instanceIDs...)}
+		stub := &stubSSMClient{}
 
-		accepted, err := (&ASGDriver{}).sendSIGTERMToAgentsBatch(t.Context(), stub, instanceIDs, "linux")
+		accepted, err := (&ASGDriver{}).sendSIGTERMToAgentsBatch(t.Context(), stub, instanceIDs)
 		if err != nil {
 			t.Fatalf("sendSIGTERMToAgentsBatch() error = %v", err)
 		}
@@ -870,30 +920,12 @@ func TestSendSIGTERMToAgentsBatch(t *testing.T) {
 		}
 	})
 
-	t.Run("skips targets whose SSM agent is offline", func(t *testing.T) {
-		stub := &stubSSMClient{describeOut: onlineSSMOutput("i-a", "i-c")}
-
-		accepted, err := (&ASGDriver{}).sendSIGTERMToAgentsBatch(t.Context(), stub, []string{"i-a", "i-b", "i-c"}, "linux")
-		if err != nil {
-			t.Fatalf("sendSIGTERMToAgentsBatch() error = %v", err)
-		}
-		if accepted != 2 {
-			t.Errorf("accepted instances = %d, want 2", accepted)
-		}
-		if len(stub.sendBatches) != 1 || !slices.Equal(stub.sendBatches[0], []string{"i-a", "i-c"}) {
-			t.Errorf("SendCommand targets = %v, want [[i-a i-c]]", stub.sendBatches)
-		}
-	})
-
 	t.Run("attempts later batches after partial failures", func(t *testing.T) {
 		firstErr := errors.New("first batch failed")
 		lastErr := errors.New("last batch failed")
-		stub := &stubSSMClient{
-			describeOut: onlineSSMOutput(instanceIDs...),
-			sendErrors:  []error{firstErr, nil, lastErr},
-		}
+		stub := &stubSSMClient{sendErrors: []error{firstErr, nil, lastErr}}
 
-		accepted, err := (&ASGDriver{}).sendSIGTERMToAgentsBatch(t.Context(), stub, instanceIDs, "linux")
+		accepted, err := (&ASGDriver{}).sendSIGTERMToAgentsBatch(t.Context(), stub, instanceIDs)
 		if !errors.Is(err, firstErr) || !errors.Is(err, lastErr) {
 			t.Errorf("sendSIGTERMToAgentsBatch() error = %v, want both batch errors", err)
 		}
@@ -902,21 +934,6 @@ func TestSendSIGTERMToAgentsBatch(t *testing.T) {
 		}
 		if got, want := len(stub.sendBatches), 3; got != want {
 			t.Errorf("SendCommand calls = %d, want %d", got, want)
-		}
-	})
-
-	t.Run("rejects Windows before contacting SSM", func(t *testing.T) {
-		stub := &stubSSMClient{}
-
-		accepted, err := (&ASGDriver{}).sendSIGTERMToAgentsBatch(t.Context(), stub, []string{"i-windows"}, "windows")
-		if !errors.Is(err, ErrWindowsGracefulScaleInNotSupported) {
-			t.Errorf("sendSIGTERMToAgentsBatch() error = %v, want %v", err, ErrWindowsGracefulScaleInNotSupported)
-		}
-		if accepted != 0 {
-			t.Errorf("accepted instances = %d, want 0", accepted)
-		}
-		if len(stub.describeCalls) != 0 || len(stub.sendBatches) != 0 {
-			t.Errorf("SSM calls made for Windows: describe=%d send=%d, want none", len(stub.describeCalls), len(stub.sendBatches))
 		}
 	})
 }

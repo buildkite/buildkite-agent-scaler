@@ -105,6 +105,20 @@ same-account use, or a full SSM parameter ARN (e.g., `arn:aws:ssm:us-east-1:1234
 to read a parameter in a different AWS account. For encrypted (`SecureString`) parameters, pass the
 full KMS key ARN via `BuildkiteAgentTokenParameterStoreKMSKey` so the Lambda can decrypt cross-account.
 
+If `LAST_SCALE_IN_SSM_PARAMETER` is set, the time of the last scale-in is kept in that SSM parameter
+so `SCALE_IN_COOLDOWN_PERIOD` holds across Lambda container recycling and overlapping containers.
+The Lambda needs `ssm:GetParameter` and `ssm:PutParameter` on it. A missing parameter is initialized
+to the current time, so the first scale-in after an upgrade waits one cooldown. A failed read or
+initialization blocks that poll; the next one retries. The cooldown must be saved before either
+a graceful stop or a desired-capacity reduction. Failed scale-in actions also consume the cooldown,
+since AWS may have accepted them despite returning an error. The template sets the parameter to
+`/buildkite-agent-scaler/<nested scaler stack name>/last-scale-in`, only when it creates the
+execution role. Deployments that supply `AutoscalingLambdaExecutionRole` leave it unset and only
+seed the cooldown from the ASG's activity history on cold start, and only when `DISABLE_SCALE_IN`
+is not set. In Elastic CI Mode, if there is neither a store nor a known scale-in timestamp, the
+scaler waits one cooldown from startup. This also applies to the CLI. Without the store, frequent
+restarts can delay scale-in, and overlapping containers still do not share subsequent cooldowns.
+
 `BuildkiteAgentTokenParameterStoreKMSKey` accepts a key ID (e.g., `abcd1234-...`) or a full key ARN
 (e.g., `arn:aws:kms:us-east-1:123456789012:key/abcd1234-...`). KMS aliases are **not** supported in
 either form — neither a bare alias (e.g., `alias/buildkite-token`) nor a full alias ARN
