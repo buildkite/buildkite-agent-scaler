@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -12,6 +15,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/autoscaling"
+	"github.com/aws/aws-sdk-go-v2/service/autoscaling/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2Types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
@@ -21,7 +25,6 @@ import (
 
 func TestGetASGPlatform(t *testing.T) {
 	driver := &ASGDriver{}
-	ctx := context.Background()
 
 	testCases := []struct {
 		name             string
@@ -74,9 +77,80 @@ func TestGetASGPlatform(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			platform := driver.getASGPlatform(ctx, tc.instances)
+			platform := driver.getASGPlatform(tc.instances)
 			if platform != tc.expectedPlatform {
 				t.Errorf("expected platform %q, got %q", tc.expectedPlatform, platform)
+			}
+		})
+	}
+}
+
+func TestAutoscaleGroupDetailsUsesOnlyInServiceInstancesAsCandidates(t *testing.T) {
+	details := autoscaleGroupDetails(types.AutoScalingGroup{
+		DesiredCapacity: aws.Int32(4),
+		MinSize:         aws.Int32(1),
+		MaxSize:         aws.Int32(10),
+		Instances: []types.Instance{
+			{InstanceId: aws.String("i-pending"), LifecycleState: types.LifecycleStatePending},
+			{InstanceId: aws.String("i-pending-wait"), LifecycleState: types.LifecycleStatePendingWait},
+			{InstanceId: aws.String("i-in-service"), LifecycleState: types.LifecycleStateInService},
+			{InstanceId: aws.String("i-terminating"), LifecycleState: types.LifecycleStateTerminating},
+			{InstanceId: aws.String("i-standby"), LifecycleState: types.LifecycleStateStandby},
+		},
+	})
+
+	if got, want := details.Pending, int64(2); got != want {
+		t.Errorf("pending count = %d, want %d", got, want)
+	}
+	if got, want := details.ActualCount, int64(1); got != want {
+		t.Errorf("actual count = %d, want %d", got, want)
+	}
+	if got, want := details.TotalCount, int64(5); got != want {
+		t.Errorf("total count = %d, want %d", got, want)
+	}
+	if got, want := details.InstanceIDs, []string{"i-in-service"}; !slices.Equal(got, want) {
+		t.Errorf("scale-in candidates = %v, want %v", got, want)
+	}
+}
+
+func TestIsUserRequestedScaleIn(t *testing.T) {
+	testCases := []struct {
+		name  string
+		cause string
+		want  bool
+	}{
+		{
+			name:  "desired capacity change",
+			cause: "At 2026-09-02T08:00:00Z a user request explicitly set group desired capacity changing the desired capacity from 4 to 3.  At 2026-09-02T08:00:30Z an instance was taken out of service in response to a difference between desired and actual capacity, shrinking the capacity from 4 to 3.  At 2026-09-02T08:00:31Z instance i-0123456789abcdef0 was selected for termination.",
+			want:  true,
+		},
+		{
+			name:  "instance terminates with decrement",
+			cause: "At 2026-09-02T08:00:00Z instance i-0123456789abcdef0 was taken out of service in response to a user request, shrinking the capacity from 4 to 3.",
+			want:  true,
+		},
+		{
+			name:  "desired capacity change scaling out",
+			cause: "At 2026-09-02T08:00:00Z a user request explicitly set group desired capacity changing the desired capacity from 3 to 4.  At 2026-09-02T08:00:30Z an instance was started in response to a difference between desired and actual capacity, increasing the capacity from 3 to 4.",
+		},
+		{
+			name:  "instance termination without decrement",
+			cause: "At 2026-09-02T08:00:00Z instance i-0123456789abcdef0 was taken out of service in response to a user request.",
+		},
+		{
+			name:  "unhealthy instance replaced",
+			cause: "At 2026-09-02T08:00:00Z an instance was taken out of service in response to an EC2 health check indicating it has been terminated or stopped.",
+		},
+		{
+			name:  "alarm-driven scale-in",
+			cause: "At 2026-09-02T08:00:00Z a monitor alarm in state ALARM triggered policy changing the desired capacity from 4 to 3.  At 2026-09-02T08:00:30Z an instance was taken out of service in response to a difference between desired and actual capacity, shrinking the capacity from 4 to 3.",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isUserRequestedScaleIn(tc.cause); got != tc.want {
+				t.Errorf("isUserRequestedScaleIn(%q) = %t, want %t", tc.cause, got, tc.want)
 			}
 		})
 	}
@@ -253,6 +327,52 @@ func TestDescribeInstancesTolerant(t *testing.T) {
 	})
 }
 
+func TestDetectPlatform(t *testing.T) {
+	driver := &ASGDriver{Name: "asg-1"}
+	describeErr := errors.New("describe failed")
+
+	platformResponse := func(platform ec2Types.PlatformValues) stubDescribeResponse {
+		return stubDescribeResponse{out: &ec2.DescribeInstancesOutput{
+			Reservations: []ec2Types.Reservation{{Instances: []ec2Types.Instance{{Platform: platform}}}},
+		}}
+	}
+
+	tests := []struct {
+		name         string
+		response     stubDescribeResponse
+		wantPlatform string
+		wantErr      bool
+	}{
+		{name: "linux instance", response: platformResponse(""), wantPlatform: "linux"},
+		{name: "windows instance", response: platformResponse("windows"), wantPlatform: "windows"},
+		{name: "describe error fails closed", response: stubDescribeResponse{err: describeErr}, wantErr: true},
+		// Missing candidates must fail closed: guessing Linux for a Windows ASG skips the capacity fallback.
+		{name: "missing instance fails closed", response: stubDescribeResponse{out: &ec2.DescribeInstancesOutput{}}, wantErr: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &stubDescribeInstancesClient{responses: []stubDescribeResponse{tc.response}}
+			platform, err := driver.detectPlatform(t.Context(), stub, []string{"i-a", "i-b"})
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("detectPlatform() error = nil, want error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("detectPlatform() error = %v", err)
+			}
+			if platform != tc.wantPlatform {
+				t.Errorf("detectPlatform() = %q, want %q", platform, tc.wantPlatform)
+			}
+			if got := stub.calls[0].InstanceIds; !slices.Equal(got, []string{"i-a"}) {
+				t.Errorf("described %v, want only the first candidate", got)
+			}
+		})
+	}
+}
+
 func TestGetCheckCommand(t *testing.T) {
 	driver := &ASGDriver{}
 
@@ -271,11 +391,11 @@ func TestGetCheckCommand(t *testing.T) {
 				"ActiveState",
 				"RUNNING",
 				"NOT_RUNNING",
-				"MARKER_EXISTS",
 			},
 			expectedNotContains: []string{
 				"PowerShell",
 				"Get-Service",
+				"MARKER_EXISTS",
 			},
 		},
 		{
@@ -308,6 +428,160 @@ func TestGetCheckCommand(t *testing.T) {
 				if strings.Contains(cmd, notExpected) {
 					t.Errorf("expected command NOT to contain %q, but it did.\nCommand: %s", notExpected, cmd)
 				}
+			}
+		})
+	}
+}
+
+func TestLinuxCheckCommand(t *testing.T) {
+	binDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(binDir, "systemctl"), []byte(`#!/bin/sh
+if [ -n "$SYSTEMCTL_ERROR" ]; then
+  echo "$SYSTEMCTL_ERROR"
+  exit 1
+fi
+printf 'ActiveState=%s\nMainPID=%s\n' "$ACTIVE_STATE" "$MAIN_PID"
+`), 0o755); err != nil {
+		t.Fatalf("write systemctl stub: %v", err)
+	}
+
+	tests := []struct {
+		name         string
+		activeState  string
+		mainPID      string
+		marker       bool
+		systemctlErr string
+		want         string
+	}{
+		{name: "running", activeState: "active", mainPID: "123", want: "RUNNING"},
+		{name: "draining", activeState: "active", mainPID: "123", marker: true, want: "DRAINING: ActiveState=active MainPID=123"},
+		{name: "marked but stopped", activeState: "inactive", mainPID: "0", marker: true, want: "NOT_RUNNING: ActiveState=inactive"},
+		{name: "activating", activeState: "activating", mainPID: "0", marker: true, want: "DRAINING: ActiveState=activating MainPID=0"},
+		// A live process in deactivating may still be draining a job, so it
+		// must not be classified NOT_RUNNING while the PID exists.
+		{name: "deactivating without marker", activeState: "deactivating", mainPID: "123", want: "RUNNING"},
+		// The normal graceful scale-in window: marker written, systemd
+		// stopping the unit, agent finishing its last job.
+		{name: "deactivating with marker", activeState: "deactivating", mainPID: "123", marker: true, want: "DRAINING: ActiveState=deactivating MainPID=123"},
+		// After the agent exits, ExecStopPost (the stack's terminate-instance
+		// script) runs with MainPID=0 while the unit stays deactivating. The
+		// instance is about to decrement desired capacity and terminate
+		// itself, so marking it unhealthy here would race that handoff.
+		{name: "deactivating in ExecStopPost with marker", activeState: "deactivating", mainPID: "0", marker: true, want: "DRAINING: ActiveState=deactivating MainPID=0"},
+		{name: "deactivating in ExecStopPost without marker", activeState: "deactivating", mainPID: "0", want: "RUNNING"},
+		{name: "failed unit", activeState: "failed", mainPID: "0", want: "NOT_RUNNING: ActiveState=failed"},
+		// Type=simple assumption: active with MainPID=0 means the process is
+		// gone even though systemd still reports the unit active.
+		{name: "active without main PID", activeState: "active", mainPID: "0", want: "NOT_RUNNING: ActiveState=active"},
+		{name: "systemctl failure", systemctlErr: "systemctl unavailable", want: "UNKNOWN: systemctl unavailable"},
+		{name: "malformed PID", activeState: "active", mainPID: "invalid", want: "UNKNOWN: ActiveState=active MainPID=invalid"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			marker := filepath.Join(t.TempDir(), "termination-marker")
+			if tc.marker {
+				if err := os.WriteFile(marker, nil, 0o600); err != nil {
+					t.Fatalf("write termination marker: %v", err)
+				}
+			}
+
+			script := strings.ReplaceAll((&ASGDriver{}).getCheckCommand("linux"), terminationMarkerPath, marker)
+			cmd := exec.Command("bash", "-c", script)
+			cmd.Env = append(os.Environ(),
+				"PATH="+binDir+":"+os.Getenv("PATH"),
+				"ACTIVE_STATE="+tc.activeState,
+				"MAIN_PID="+tc.mainPID,
+				"SYSTEMCTL_ERROR="+tc.systemctlErr,
+			)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("run check command: %v\n%s", err, out)
+			}
+			if got := strings.TrimSpace(string(out)); got != tc.want {
+				t.Errorf("output = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestLinuxStopCommand runs the graceful-stop script against stubbed sudo,
+// systemctl and buildkite-agent binaries. Each stub appends its name to a log
+// file so the test can see which stop attempts ran, and the marker file
+// stands in for terminationMarkerPath.
+func TestLinuxStopCommand(t *testing.T) {
+	binDir := t.TempDir()
+	stubs := map[string]string{
+		"sudo": `#!/bin/sh
+exec "$@"
+`,
+		"systemctl": `#!/bin/sh
+echo systemctl >> "$STOP_LOG"
+[ -z "$SYSTEMCTL_FAIL" ]
+`,
+		"buildkite-agent": `#!/bin/sh
+echo buildkite-agent >> "$STOP_LOG"
+[ -z "$AGENT_FAIL" ]
+`,
+	}
+	for name, body := range stubs {
+		if err := os.WriteFile(filepath.Join(binDir, name), []byte(body), 0o755); err != nil {
+			t.Fatalf("write %s stub: %v", name, err)
+		}
+	}
+
+	tests := []struct {
+		name          string
+		marker        bool
+		systemctlFail bool
+		agentFail     bool
+		wantExit      int
+		wantCalls     string
+		wantMarker    bool
+	}{
+		{name: "marker already present skips the stop", marker: true, wantExit: 0, wantCalls: "", wantMarker: true},
+		{name: "systemctl stops the unit", wantExit: 0, wantCalls: "systemctl\n", wantMarker: true},
+		{name: "agent binary is the fallback", systemctlFail: true, wantExit: 0, wantCalls: "systemctl\nbuildkite-agent\n", wantMarker: true},
+		{name: "both failing clears the marker", systemctlFail: true, agentFail: true, wantExit: 1, wantCalls: "systemctl\nbuildkite-agent\n", wantMarker: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			marker := filepath.Join(dir, "termination-marker")
+			stopLog := filepath.Join(dir, "stop.log")
+			if tc.marker {
+				if err := os.WriteFile(marker, nil, 0o600); err != nil {
+					t.Fatalf("write termination marker: %v", err)
+				}
+			}
+
+			script := (&ASGDriver{}).getStopCommand()
+			script = strings.ReplaceAll(script, terminationMarkerPath, marker)
+			script = strings.ReplaceAll(script, buildkiteAgentBinary, filepath.Join(binDir, "buildkite-agent"))
+			cmd := exec.Command("bash", "-c", script)
+			cmd.Env = append(os.Environ(),
+				"PATH="+binDir+":"+os.Getenv("PATH"),
+				"STOP_LOG="+stopLog,
+			)
+			if tc.systemctlFail {
+				cmd.Env = append(cmd.Env, "SYSTEMCTL_FAIL=1")
+			}
+			if tc.agentFail {
+				cmd.Env = append(cmd.Env, "AGENT_FAIL=1")
+			}
+			out, err := cmd.CombinedOutput()
+			if got := cmd.ProcessState.ExitCode(); got != tc.wantExit {
+				t.Fatalf("exit code = %d (err %v), want %d\n%s", got, err, tc.wantExit, out)
+			}
+
+			calls, _ := os.ReadFile(stopLog)
+			if got := string(calls); got != tc.wantCalls {
+				t.Errorf("stop attempts = %q, want %q", got, tc.wantCalls)
+			}
+			_, statErr := os.Stat(marker)
+			if got := statErr == nil; got != tc.wantMarker {
+				t.Errorf("marker present = %t, want %t", got, tc.wantMarker)
 			}
 		})
 	}
@@ -397,15 +671,26 @@ func makeInstancesForRotation(n int) []ec2Types.Instance {
 // stubSSMClient implements ssmCheckAPI for unit tests. Each
 // ListCommandInvocations call returns the next listResponses entry, or repeats
 // the last one if exhausted (so deadline-driven tests don't have to enumerate
-// every poll).
+// every poll). DescribeInstanceInformation resolves in priority order:
+// describeResponses (one entry per call), then describeErr, then describeOut
+// filtered down to the instance IDs requested in that call.
 type stubSSMClient struct {
-	describeOut   *ssm.DescribeInstanceInformationOutput
-	describeErr   error
-	listResponses []stubListResponse
-	listCalls     int
+	describeOut       *ssm.DescribeInstanceInformationOutput
+	describeErr       error
+	describeResponses []stubSSMDescribeResponse
+	describeCalls     []ssm.DescribeInstanceInformationInput
+	listResponses     []stubListResponse
+	listCalls         int
 
 	sendErr     error
+	sendErrors  []error
 	sendBatches [][]string // InstanceIds passed to each SendCommand call
+	maxErrors   []string
+}
+
+type stubSSMDescribeResponse struct {
+	out *ssm.DescribeInstanceInformationOutput
+	err error
 }
 
 type stubListResponse struct {
@@ -414,11 +699,41 @@ type stubListResponse struct {
 }
 
 func (s *stubSSMClient) DescribeInstanceInformation(ctx context.Context, params *ssm.DescribeInstanceInformationInput, _ ...func(*ssm.Options)) (*ssm.DescribeInstanceInformationOutput, error) {
-	return s.describeOut, s.describeErr
+	s.describeCalls = append(s.describeCalls, *params)
+	if len(s.describeResponses) > 0 {
+		response := s.describeResponses[len(s.describeCalls)-1]
+		return response.out, response.err
+	}
+	if s.describeErr != nil {
+		return nil, s.describeErr
+	}
+	if s.describeOut == nil {
+		return &ssm.DescribeInstanceInformationOutput{}, nil
+	}
+
+	requested := make(map[string]bool)
+	for _, filter := range params.Filters {
+		if aws.ToString(filter.Key) == "InstanceIds" {
+			for _, instanceID := range filter.Values {
+				requested[instanceID] = true
+			}
+		}
+	}
+	output := &ssm.DescribeInstanceInformationOutput{}
+	for _, info := range s.describeOut.InstanceInformationList {
+		if requested[aws.ToString(info.InstanceId)] {
+			output.InstanceInformationList = append(output.InstanceInformationList, info)
+		}
+	}
+	return output, nil
 }
 
 func (s *stubSSMClient) SendCommand(ctx context.Context, params *ssm.SendCommandInput, _ ...func(*ssm.Options)) (*ssm.SendCommandOutput, error) {
-	s.sendBatches = append(s.sendBatches, params.InstanceIds)
+	s.sendBatches = append(s.sendBatches, slices.Clone(params.InstanceIds))
+	s.maxErrors = append(s.maxErrors, aws.ToString(params.MaxErrors))
+	if index := len(s.sendBatches) - 1; index < len(s.sendErrors) && s.sendErrors[index] != nil {
+		return nil, s.sendErrors[index]
+	}
 	if s.sendErr != nil {
 		return nil, s.sendErr
 	}
@@ -472,6 +787,138 @@ func TestFilterOnlineSSMInstances(t *testing.T) {
 	if !slices.Equal(got, []string{"i-a", "i-c"}) {
 		t.Errorf("got %v, want [i-a i-c]", got)
 	}
+	if got := aws.ToInt32(stub.describeCalls[0].MaxResults); got != ssmMaxInstanceIDs {
+		t.Errorf("MaxResults = %d, want %d", got, ssmMaxInstanceIDs)
+	}
+}
+
+func onlineSSMOutput(instanceIDs ...string) *ssm.DescribeInstanceInformationOutput {
+	output := &ssm.DescribeInstanceInformationOutput{}
+	for _, instanceID := range instanceIDs {
+		output.InstanceInformationList = append(output.InstanceInformationList, ssmTypes.InstanceInformation{
+			InstanceId: aws.String(instanceID),
+			PingStatus: ssmTypes.PingStatusOnline,
+		})
+	}
+	return output
+}
+
+func TestFilterOnlineSSMInstancesChunksAndPaginates(t *testing.T) {
+	instanceIDs := make([]string, 51)
+	for i := range instanceIDs {
+		instanceIDs[i] = fmt.Sprintf("i-%03d", i)
+	}
+	firstPage := onlineSSMOutput("i-000")
+	firstPage.NextToken = aws.String("page-2")
+	stub := &stubSSMClient{
+		describeResponses: []stubSSMDescribeResponse{
+			{out: firstPage},
+			{out: onlineSSMOutput("i-001")},
+			{out: onlineSSMOutput("i-050")},
+		},
+	}
+
+	got, err := filterOnlineSSMInstances(t.Context(), stub, instanceIDs)
+	if err != nil {
+		t.Fatalf("filterOnlineSSMInstances() error = %v", err)
+	}
+	if want := []string{"i-000", "i-001", "i-050"}; !slices.Equal(got, want) {
+		t.Errorf("online instances = %v, want %v", got, want)
+	}
+	if got, want := len(stub.describeCalls), 3; got != want {
+		t.Fatalf("DescribeInstanceInformation calls = %d, want %d", got, want)
+	}
+	if got, want := len(stub.describeCalls[0].Filters[0].Values), ssmMaxInstanceIDs; got != want {
+		t.Errorf("first instance filter size = %d, want %d", got, want)
+	}
+	if got, want := aws.ToString(stub.describeCalls[1].NextToken), "page-2"; got != want {
+		t.Errorf("second NextToken = %q, want %q", got, want)
+	}
+	if got, want := len(stub.describeCalls[2].Filters[0].Values), 1; got != want {
+		t.Errorf("last instance filter size = %d, want %d", got, want)
+	}
+}
+
+func TestSendSIGTERMToAgentsBatch(t *testing.T) {
+	instanceIDs := make([]string, 120)
+	for i := range instanceIDs {
+		instanceIDs[i] = fmt.Sprintf("i-%03d", i)
+	}
+
+	t.Run("chunks more than 50 targets without polling completion", func(t *testing.T) {
+		stub := &stubSSMClient{describeOut: onlineSSMOutput(instanceIDs...)}
+
+		accepted, err := (&ASGDriver{}).sendSIGTERMToAgentsBatch(t.Context(), stub, instanceIDs, "linux")
+		if err != nil {
+			t.Fatalf("sendSIGTERMToAgentsBatch() error = %v", err)
+		}
+		if accepted != 120 {
+			t.Errorf("accepted instances = %d, want 120", accepted)
+		}
+		gotBatchSizes := make([]int, len(stub.sendBatches))
+		for i, batch := range stub.sendBatches {
+			gotBatchSizes[i] = len(batch)
+		}
+		if want := []int{50, 50, 20}; !slices.Equal(gotBatchSizes, want) {
+			t.Errorf("SendCommand batch sizes = %v, want %v", gotBatchSizes, want)
+		}
+		if want := []string{"100%", "100%", "100%"}; !slices.Equal(stub.maxErrors, want) {
+			t.Errorf("SendCommand MaxErrors = %v, want %v", stub.maxErrors, want)
+		}
+		if stub.listCalls != 0 {
+			t.Errorf("ListCommandInvocations calls = %d, want 0", stub.listCalls)
+		}
+	})
+
+	t.Run("skips targets whose SSM agent is offline", func(t *testing.T) {
+		stub := &stubSSMClient{describeOut: onlineSSMOutput("i-a", "i-c")}
+
+		accepted, err := (&ASGDriver{}).sendSIGTERMToAgentsBatch(t.Context(), stub, []string{"i-a", "i-b", "i-c"}, "linux")
+		if err != nil {
+			t.Fatalf("sendSIGTERMToAgentsBatch() error = %v", err)
+		}
+		if accepted != 2 {
+			t.Errorf("accepted instances = %d, want 2", accepted)
+		}
+		if len(stub.sendBatches) != 1 || !slices.Equal(stub.sendBatches[0], []string{"i-a", "i-c"}) {
+			t.Errorf("SendCommand targets = %v, want [[i-a i-c]]", stub.sendBatches)
+		}
+	})
+
+	t.Run("attempts later batches after partial failures", func(t *testing.T) {
+		firstErr := errors.New("first batch failed")
+		lastErr := errors.New("last batch failed")
+		stub := &stubSSMClient{
+			describeOut: onlineSSMOutput(instanceIDs...),
+			sendErrors:  []error{firstErr, nil, lastErr},
+		}
+
+		accepted, err := (&ASGDriver{}).sendSIGTERMToAgentsBatch(t.Context(), stub, instanceIDs, "linux")
+		if !errors.Is(err, firstErr) || !errors.Is(err, lastErr) {
+			t.Errorf("sendSIGTERMToAgentsBatch() error = %v, want both batch errors", err)
+		}
+		if accepted != 50 {
+			t.Errorf("accepted instances = %d, want 50", accepted)
+		}
+		if got, want := len(stub.sendBatches), 3; got != want {
+			t.Errorf("SendCommand calls = %d, want %d", got, want)
+		}
+	})
+
+	t.Run("rejects Windows before contacting SSM", func(t *testing.T) {
+		stub := &stubSSMClient{}
+
+		accepted, err := (&ASGDriver{}).sendSIGTERMToAgentsBatch(t.Context(), stub, []string{"i-windows"}, "windows")
+		if !errors.Is(err, ErrWindowsGracefulScaleInNotSupported) {
+			t.Errorf("sendSIGTERMToAgentsBatch() error = %v, want %v", err, ErrWindowsGracefulScaleInNotSupported)
+		}
+		if accepted != 0 {
+			t.Errorf("accepted instances = %d, want 0", accepted)
+		}
+		if len(stub.describeCalls) != 0 || len(stub.sendBatches) != 0 {
+			t.Errorf("SSM calls made for Windows: describe=%d send=%d, want none", len(stub.describeCalls), len(stub.sendBatches))
+		}
+	})
 }
 
 func TestPollCommandInvocations(t *testing.T) {
@@ -575,40 +1022,79 @@ func TestCheckAndMarkUnhealthy(t *testing.T) {
 		}
 	}
 
-	t.Run("marks dangling instances and skips healthy or already-marked", func(t *testing.T) {
+	t.Run("classifies conclusive results", func(t *testing.T) {
 		ssmStub := &stubSSMClient{
-			describeOut: online("i-dangling", "i-healthy", "i-failed", "i-marked"),
+			describeOut: online("i-dangling", "i-healthy", "i-draining"),
 			listResponses: []stubListResponse{{out: &ssm.ListCommandInvocationsOutput{
 				CommandInvocations: []ssmTypes.CommandInvocation{
 					invOut("i-dangling", ssmTypes.CommandInvocationStatusSuccess, "NOT_RUNNING: dead"),
 					invOut("i-healthy", ssmTypes.CommandInvocationStatusSuccess, "RUNNING"),
-					invOut("i-failed", ssmTypes.CommandInvocationStatusFailed, ""),
-					invOut("i-marked", ssmTypes.CommandInvocationStatusSuccess, "MARKER_EXISTS: already marked"),
+					invOut("i-draining", ssmTypes.CommandInvocationStatusSuccess, "DRAINING: ActiveState=active MainPID=123"),
 				},
 			}}},
 		}
 		asgStub := &stubASGClient{}
 
-		// i-offline is not in the describe output, so it should be filtered out.
-		marked, checked, err := driver.checkAndMarkUnhealthy(ctx,
-			[]string{"i-dangling", "i-healthy", "i-failed", "i-marked", "i-offline"},
+		result, err := driver.checkAndMarkUnhealthy(ctx,
+			[]string{"i-dangling", "i-healthy", "i-draining"},
 			ssmStub, asgStub, "linux")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if checked != 4 {
-			t.Errorf("checkedCount = %d, want 4", checked)
+		if want := (danglingCheckResult{healthy: 1, draining: 1, markedUnhealthy: 1}); result != want {
+			t.Errorf("result = %+v, want %+v", result, want)
 		}
-		if marked != 2 {
-			t.Errorf("markedUnhealthyCount = %d, want 2", marked)
+		if !slices.Equal(asgStub.markedUnhealthy, []string{"i-dangling"}) {
+			t.Errorf("marked unhealthy = %v, want [i-dangling]", asgStub.markedUnhealthy)
 		}
-		got := slices.Clone(asgStub.markedUnhealthy)
-		sort.Strings(got)
-		if !slices.Equal(got, []string{"i-dangling", "i-failed"}) {
-			t.Errorf("marked unhealthy = %v, want [i-dangling i-failed]", got)
+	})
+
+	t.Run("treats failed or ambiguous results as inconclusive", func(t *testing.T) {
+		ids := []string{"i-failed", "i-timed-out", "i-future-status", "i-empty", "i-ambiguous", "i-unknown"}
+		ssmStub := &stubSSMClient{
+			describeOut: online(ids...),
+			listResponses: []stubListResponse{{out: &ssm.ListCommandInvocationsOutput{
+				CommandInvocations: []ssmTypes.CommandInvocation{
+					invOut("i-failed", ssmTypes.CommandInvocationStatusFailed, "NOT_RUNNING: dead"),
+					invOut("i-timed-out", ssmTypes.CommandInvocationStatusTimedOut, ""),
+					invOut("i-future-status", ssmTypes.CommandInvocationStatus("FutureStatus"), ""),
+					invOut("i-empty", ssmTypes.CommandInvocationStatusSuccess, ""),
+					invOut("i-ambiguous", ssmTypes.CommandInvocationStatusSuccess, "RUNNING: maybe"),
+					invOut("i-unknown", ssmTypes.CommandInvocationStatusSuccess, "UNKNOWN: systemctl failed"),
+				},
+			}}},
 		}
-		if len(ssmStub.sendBatches) != 1 || len(ssmStub.sendBatches[0]) != 4 {
-			t.Errorf("expected one SendCommand of 4 instances, got %v", ssmStub.sendBatches)
+		asgStub := &stubASGClient{}
+
+		result, err := driver.checkAndMarkUnhealthy(ctx, ids, ssmStub, asgStub, "linux")
+		if err == nil {
+			t.Fatal("expected an inconclusive-result error")
+		}
+		if result != (danglingCheckResult{}) {
+			t.Errorf("result = %+v, want all zero", result)
+		}
+		if len(asgStub.markedUnhealthy) != 0 {
+			t.Errorf("marked unhealthy = %v, want none", asgStub.markedUnhealthy)
+		}
+	})
+
+	t.Run("excludes a failed unhealthy mark from every bucket", func(t *testing.T) {
+		ssmStub := &stubSSMClient{
+			describeOut: online("i-dangling"),
+			listResponses: []stubListResponse{{out: &ssm.ListCommandInvocationsOutput{
+				CommandInvocations: []ssmTypes.CommandInvocation{
+					invOut("i-dangling", ssmTypes.CommandInvocationStatusSuccess, "NOT_RUNNING: dead"),
+				},
+			}}},
+		}
+		asgStub := &stubASGClient{setHealthErr: errors.New("unavailable")}
+
+		result, err := driver.checkAndMarkUnhealthy(ctx, []string{"i-dangling"}, ssmStub, asgStub, "linux")
+		if err == nil {
+			t.Fatal("expected SetInstanceHealth error")
+		}
+		if result != (danglingCheckResult{}) {
+			t.Errorf("result = %+v, want all zero", result)
 		}
 	})
 
@@ -624,7 +1110,7 @@ func TestCheckAndMarkUnhealthy(t *testing.T) {
 			listResponses: []stubListResponse{{out: &ssm.ListCommandInvocationsOutput{CommandInvocations: invs}}},
 		}
 
-		_, checked, err := driver.checkAndMarkUnhealthy(ctx, ids, ssmStub, &stubASGClient{}, "linux")
+		result, err := driver.checkAndMarkUnhealthy(ctx, ids, ssmStub, &stubASGClient{}, "linux")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -636,8 +1122,8 @@ func TestCheckAndMarkUnhealthy(t *testing.T) {
 		if !slices.Equal(gotSizes, []int{50, 1}) {
 			t.Errorf("SendCommand batch sizes = %v, want [50 1]", gotSizes)
 		}
-		if checked != 51 {
-			t.Errorf("checkedCount = %d, want 51", checked)
+		if result.healthy != 51 {
+			t.Errorf("healthy = %d, want 51", result.healthy)
 		}
 	})
 }

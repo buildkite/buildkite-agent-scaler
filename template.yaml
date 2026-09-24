@@ -90,6 +90,11 @@ Parameters:
     Type: Number
     Default: 300
 
+  DanglingCheckMinimumInstanceUptime:
+    Description: Minimum instance uptime in seconds before checking for an inactive buildkite-agent service during a dangling instance scan
+    Type: Number
+    Default: 3600
+
   MaxDanglingInstancesToCheck:
     Description: Maximum number of instances to check for inactive buildkite-agent service during dangling instance scan (only used for dangling instance scanning, not for normal scale-in)
     Type: Number
@@ -352,6 +357,7 @@ Resources:
           AVAILABILITY_THRESHOLD:        !Ref AvailabilityThreshold
           SCALE_IN_COOLDOWN_PERIOD:      !Sub "${ScaleInCooldownPeriod}s"
           SCALE_OUT_COOLDOWN_PERIOD:     !Sub "${ScaleOutCooldownPeriod}s"
+          DANGLING_CHECK_MINIMUM_INSTANCE_UPTIME: !Sub "${DanglingCheckMinimumInstanceUptime}s"
           MAX_DANGLING_INSTANCES_TO_CHECK: !Ref MaxDanglingInstancesToCheck
           ELASTIC_CI_MODE:               !Ref EnableElasticCIMode
       Events:
