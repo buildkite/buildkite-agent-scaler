@@ -96,6 +96,10 @@ Its handler is `bootstrap`, it uses a `provided.al2023` runtime and requires the
 * `AGENTS_PER_INSTANCE`
 * `ASG_NAME`
 
+Optional:
+
+* `BUILDKITE_AGENT_TOKEN_SSM_REGION` — region to read `BUILDKITE_AGENT_TOKEN_SSM_KEY` from (see below)
+
 If `BUILDKITE_AGENT_TOKEN_SSM_KEY` is set, the token will be read from
 [AWS Systems Manager Parameter Store GetParameter](https://docs.aws.amazon.com/systems-manager/latest/APIReference/API_GetParameter.html)
 which [can also read from AWS Secrets Manager](https://docs.aws.amazon.com/systems-manager/latest/userguide/integration-ps-secretsmanager.html).
@@ -104,6 +108,12 @@ which [can also read from AWS Secrets Manager](https://docs.aws.amazon.com/syste
 same-account use, or a full SSM parameter ARN (e.g., `arn:aws:ssm:us-east-1:123456789012:parameter/buildkite/shared-token`)
 to read a parameter in a different AWS account. For encrypted (`SecureString`) parameters, pass the
 full KMS key ARN via `BuildkiteAgentTokenParameterStoreKMSKey` so the Lambda can decrypt cross-account.
+
+`BUILDKITE_AGENT_TOKEN_SSM_REGION` (optional) sets the region the SSM client reads the token from;
+when unset it uses the Lambda's own region. Set it to read a parameter in another region — required
+**even when `BUILDKITE_AGENT_TOKEN_SSM_KEY` is a full ARN**, since `GetParameter` routes by the
+client's region, not the ARN's. For path-based (non-ARN) reads the CloudFormation `ssm:GetParameter`
+permission is scoped to the deploy region and would need widening; a full ARN avoids this.
 
 `BuildkiteAgentTokenParameterStoreKMSKey` accepts a key ID (e.g., `abcd1234-...`) or a full key ARN
 (e.g., `arn:aws:kms:us-east-1:123456789012:key/abcd1234-...`). KMS aliases are **not** supported in
