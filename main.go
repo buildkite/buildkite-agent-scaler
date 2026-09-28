@@ -17,6 +17,7 @@ func main() {
 		agentsPerInstance = flag.Int("agents-per-instance", 1, "The number of agents per instance")
 		cwMetrics         = flag.Bool("cloudwatch-metrics", false, "Whether to publish cloudwatch metrics")
 		ssmTokenKey       = flag.String("agent-token-ssm-key", "", "The AWS SSM Parameter Store key for the agent token")
+		ssmTokenRegion    = flag.String("agent-token-ssm-region", "", "The AWS region to read the agent token SSM parameter from (defaults to the process's region)")
 
 		// buildkite params
 		buildkiteAgentEndpoint = flag.String("agent-endpoint", "https://agent.buildkite.com/v3", "The buildkite agent API endpoint")
@@ -49,7 +50,7 @@ func main() {
 	}
 
 	if *ssmTokenKey != "" {
-		token, err := scaler.RetrieveFromParameterStore(cfg, *ssmTokenKey)
+		token, err := scaler.RetrieveFromParameterStore(cfg, *ssmTokenKey, *ssmTokenRegion)
 		if err != nil {
 			log.Fatal(err)
 		}

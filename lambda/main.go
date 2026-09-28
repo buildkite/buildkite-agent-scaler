@@ -157,9 +157,10 @@ func Handler(ctx context.Context, evt json.RawMessage) (string, error) {
 
 	token := os.Getenv("BUILDKITE_AGENT_TOKEN")
 	ssmTokenKey := os.Getenv("BUILDKITE_AGENT_TOKEN_SSM_KEY")
+	ssmTokenRegion := os.Getenv("BUILDKITE_AGENT_TOKEN_SSM_REGION")
 
 	if ssmTokenKey != "" {
-		tk, err := scaler.RetrieveFromParameterStore(cfg, ssmTokenKey)
+		tk, err := scaler.RetrieveFromParameterStore(cfg, ssmTokenKey, ssmTokenRegion)
 		if err != nil {
 			return "", err
 		}

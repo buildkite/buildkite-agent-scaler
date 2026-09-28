@@ -18,6 +18,14 @@ Parameters:
     Type: String
     Default: ""
 
+  BuildkiteAgentTokenParameterRegion:
+    Description: >
+      (Optional) AWS region to read the BuildkiteAgentTokenParameter from. Leave empty to use the
+      Lambda's own region. Set this to read a parameter that lives in a different region, since SSM
+      GetParameter is routed by the client's region even when a full parameter ARN is supplied.
+    Type: String
+    Default: ""
+
   AgentEndpoint:
     Description: Override API endpoint the Buildkite Agent connects to.
     Type: String
@@ -340,6 +348,7 @@ Resources:
         Variables:
           BUILDKITE_AGENT_ENDPOINT:      !Ref AgentEndpoint
           BUILDKITE_AGENT_TOKEN_SSM_KEY: !Ref BuildkiteAgentTokenParameter
+          BUILDKITE_AGENT_TOKEN_SSM_REGION: !Ref BuildkiteAgentTokenParameterRegion
           BUILDKITE_QUEUE:               !Ref BuildkiteQueue
           AGENTS_PER_INSTANCE:           !Ref AgentsPerInstance
           CLOUDWATCH_METRICS:            "1"
