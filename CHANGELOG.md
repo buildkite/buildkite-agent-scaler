@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## [v1.15.0](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.14.0...v1.15.0) (2026-09-29)
+
+### Fixed
+
+- Persist the last scale-in time in SSM Parameter Store to preserve the cooldown across Lambda cold starts and prevent overlapping containers from dispatching duplicate scale-ins [#352](https://github.com/buildkite/buildkite-agent-scaler/pull/352) (@scadu)
+
+### Dependencies
+
+- Update aws-sdk-go [#361](https://github.com/buildkite/buildkite-agent-scaler/pull/361) (@renovate[bot])
+
 ## [v1.14.0](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.13.0...v1.14.0) (2026-09-24)
 
 ### Fixed
