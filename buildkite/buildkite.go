@@ -21,6 +21,10 @@ const (
 	// defaultAgentTokenSource is used in error messages when the caller
 	// hasn't set AgentTokenSource to describe where the token came from.
 	defaultAgentTokenSource = "configured source"
+
+	// maxErrorBodyBytes caps how much of an error response body is read,
+	// since it may come from an intermediary rather than Buildkite.
+	maxErrorBodyBytes = 512
 )
 
 type Client struct {
@@ -155,9 +159,10 @@ func (c *Client) queryMetrics(ctx context.Context, into interface{}, queue strin
 
 // responseErrorDetail reads res.Body and folds it into a human-readable
 // status string, e.g. `401 Unauthorized: Eeep! You forgot to pass an agent
-// registration token`. Callers should not read res.Body afterwards.
+// registration token`. At most maxErrorBodyBytes of the body are read.
+// Callers should not read res.Body afterwards.
 func responseErrorDetail(res *http.Response) string {
-	body, err := io.ReadAll(res.Body)
+	body, err := io.ReadAll(io.LimitReader(res.Body, maxErrorBodyBytes))
 	if err != nil {
 		return res.Status
 	}
