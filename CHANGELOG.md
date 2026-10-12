@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.html).
 
+## [v1.16.0](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.15.0...v1.16.0) (2026-10-12)
+
+### Fixed
+
+- Improve the error message for 401 Unauthorized responses from the Buildkite metrics API [#337](https://github.com/buildkite/buildkite-agent-scaler/pull/337) (@CarlosZambonii)
+
+### Dependencies
+
+- Update aws-sdk-go [#363](https://github.com/buildkite/buildkite-agent-scaler/pull/363) (@renovate[bot])
+- Update aws-sdk-go [#365](https://github.com/buildkite/buildkite-agent-scaler/pull/365) (@renovate[bot])
+- Update Go to v1.27.2 [#367](https://github.com/buildkite/buildkite-agent-scaler/pull/367) (@renovate[bot])
+
+### Internal
+
+- Group Go toolchain updates across mise and go.mod [#366](https://github.com/buildkite/buildkite-agent-scaler/pull/366) (@scadu)
+
 ## [v1.15.0](https://github.com/buildkite/buildkite-agent-scaler/compare/v1.14.0...v1.15.0) (2026-09-29)
 
 ### Fixed
