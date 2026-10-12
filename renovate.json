@@ -17,6 +17,14 @@
       "matchPackagePrefixes": ["github.com/aws/"]
     },
     {
+      "description": "Keep Go toolchain versions in mise and go.mod in sync",
+      "matchManagers": ["mise", "gomod"],
+      "matchDepNames": ["go"],
+      "matchUpdateTypes": ["major", "minor", "patch"],
+      "groupName": "go-toolchain",
+      "minimumGroupSize": 2
+    },
+    {
       "groupName": "buildkite-plugins",
       "matchFileNames": [".buildkite/**"],
       "matchManagers": ["buildkite"]
