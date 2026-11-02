@@ -17,7 +17,8 @@ Job dispatch delays, other issues related to job processing.
 ## Technical Details
 - Graceful termination uses SSM to send `SIGTERM` to `buildkite-agent`
 - The scaler does not lower desired capacity itself after a graceful stop is accepted; the draining agent decrements it when it terminates, so the two never double up
-- When no candidate accepts the stop (SSM agent offline, instance already gone), the scaler falls back to lowering desired capacity like standard mode, so an unreachable instance can't stall scale-in forever
+- When no graceful-stop target is available, the scaler normally falls back to lowering desired capacity like standard mode. For a single-instance ASG with an existing candidate, it keeps desired capacity unchanged and retries on later polls instead of stranding a scale-in-protected host at desired capacity zero. Windows singletons retain the ASG fallback only when their per-instance scale-in protection is explicitly disabled
+- The scaler never directly terminates an instance because an SSM request failed, including `InvalidInstanceId`, which can also mean missing node permissions. Dangling cleanup requires a successful command result showing the agent is not running. A permanently SSM-offline host needs manual investigation; protected Windows singletons rely on agent-owned idle shutdown because scaler-initiated graceful stops are unsupported
 - Adds support for the [Elastic CI Stack's](https://github.com/buildkite/elastic-ci-stack-for-aws) `/usr/local/bin/stop-agent-gracefully` script
 - More predictable scale-in behavior with `MinimumInstanceUptime` and `MaxDanglingInstancesToCheck`
 

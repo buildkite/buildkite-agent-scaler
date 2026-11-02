@@ -35,13 +35,14 @@ const (
 )
 
 type AutoscaleGroupDetails struct {
-	Pending      int64
-	DesiredCount int64
-	MinSize      int64
-	MaxSize      int64
-	InstanceIDs  []string // InService instance IDs eligible for scale-in
-	ActualCount  int64    // Actual number of running instances
-	TotalCount   int64    // Total number of instances across all lifecycle states
+	Pending          int64
+	DesiredCount     int64
+	MinSize          int64
+	MaxSize          int64
+	InstanceIDs      []string // InService instance IDs eligible for scale-in
+	ActualCount      int64    // Actual number of running instances
+	TotalCount       int64    // Total number of instances across all lifecycle states
+	UnprotectedCount int64    // InService instances with scale-in protection explicitly disabled
 }
 
 type ASGDriver struct {
@@ -150,9 +151,7 @@ fi
 `
 }
 
-// ssmCheckAPI is the subset of ssm.Client used by the dangling-instance check,
-// the graceful-stop dispatch and the single-instance probe, extracted so tests
-// can stub it.
+// ssmCheckAPI covers dangling checks and graceful-stop dispatch.
 type ssmCheckAPI interface {
 	DescribeInstanceInformation(ctx context.Context, params *ssm.DescribeInstanceInformationInput, optFns ...func(*ssm.Options)) (*ssm.DescribeInstanceInformationOutput, error)
 	SendCommand(ctx context.Context, params *ssm.SendCommandInput, optFns ...func(*ssm.Options)) (*ssm.SendCommandOutput, error)
@@ -437,6 +436,9 @@ func autoscaleGroupDetails(asg types.AutoScalingGroup) AutoscaleGroupDetails {
 		}
 
 		details.ActualCount++
+		if instance.ProtectedFromScaleIn != nil && !*instance.ProtectedFromScaleIn {
+			details.UnprotectedCount++
+		}
 		if instance.InstanceId != nil {
 			details.InstanceIDs = append(details.InstanceIDs, *instance.InstanceId)
 		}

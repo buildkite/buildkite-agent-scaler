@@ -91,9 +91,11 @@ func TestAutoscaleGroupDetailsUsesOnlyInServiceInstancesAsCandidates(t *testing.
 		MinSize:         aws.Int32(1),
 		MaxSize:         aws.Int32(10),
 		Instances: []types.Instance{
-			{InstanceId: aws.String("i-pending"), LifecycleState: types.LifecycleStatePending},
+			{InstanceId: aws.String("i-pending"), LifecycleState: types.LifecycleStatePending, ProtectedFromScaleIn: aws.Bool(false)},
 			{InstanceId: aws.String("i-pending-wait"), LifecycleState: types.LifecycleStatePendingWait},
 			{InstanceId: aws.String("i-in-service"), LifecycleState: types.LifecycleStateInService},
+			{InstanceId: aws.String("i-protected"), LifecycleState: types.LifecycleStateInService, ProtectedFromScaleIn: aws.Bool(true)},
+			{InstanceId: aws.String("i-unprotected"), LifecycleState: types.LifecycleStateInService, ProtectedFromScaleIn: aws.Bool(false)},
 			{InstanceId: aws.String("i-terminating"), LifecycleState: types.LifecycleStateTerminating},
 			{InstanceId: aws.String("i-standby"), LifecycleState: types.LifecycleStateStandby},
 		},
@@ -102,13 +104,16 @@ func TestAutoscaleGroupDetailsUsesOnlyInServiceInstancesAsCandidates(t *testing.
 	if got, want := details.Pending, int64(2); got != want {
 		t.Errorf("pending count = %d, want %d", got, want)
 	}
-	if got, want := details.ActualCount, int64(1); got != want {
+	if got, want := details.ActualCount, int64(3); got != want {
 		t.Errorf("actual count = %d, want %d", got, want)
 	}
-	if got, want := details.TotalCount, int64(5); got != want {
+	if got, want := details.TotalCount, int64(7); got != want {
 		t.Errorf("total count = %d, want %d", got, want)
 	}
-	if got, want := details.InstanceIDs, []string{"i-in-service"}; !slices.Equal(got, want) {
+	if got, want := details.UnprotectedCount, int64(1); got != want {
+		t.Errorf("unprotected count = %d, want %d", got, want)
+	}
+	if got, want := details.InstanceIDs, []string{"i-in-service", "i-protected", "i-unprotected"}; !slices.Equal(got, want) {
 		t.Errorf("scale-in candidates = %v, want %v", got, want)
 	}
 }
