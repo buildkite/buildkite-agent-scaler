@@ -9,6 +9,20 @@ BASE_BUCKET=buildkite-lambdas
 BUCKET_PATH=buildkite-agent-scaler
 
 if [[ "${1:-}" == "release" ]]; then
+  if [[ "${RELEASE_DRY_RUN:-false}" != true && -z "$BUILDKITE_TAG" ]]; then
+    echo ^^^ +++
+    echo This step should only be run on a tag >&2
+    exit 1
+  fi
+
+  echo --- Checking tags
+  version=$(awk -F\" '/const Version/ {print $2}' version/version.go)
+  if [[ "${RELEASE_DRY_RUN:-false}" != true && "v${version#v}" != "$BUILDKITE_TAG" ]]; then
+    echo ^^^ +++
+    echo "Error: version.go has not been updated to ${BUILDKITE_TAG#v}" >&2
+    exit 1
+  fi
+
   BUCKET_PATH="${BUCKET_PATH}/${VERSION}"
 else
   BUCKET_PATH="${BUCKET_PATH}/builds/${BUILDKITE_BUILD_NUMBER}"

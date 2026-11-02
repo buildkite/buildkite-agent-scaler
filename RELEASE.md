@@ -14,6 +14,7 @@
     1. The SAR publishing pipeline: [buildkite-agent-scaler-publish pipeline](https://buildkite.com/buildkite-aws-stack/buildkite-agent-scaler-publish)
 to update the AWS Serverless Application Repository
     1. The tag build on the [usual pipeline](https://buildkite.com/buildkite/buildkite-agent-scaler)
+1. Review the release notes in `CHANGELOG.md`, then unblock **Release Approved?** on the usual pipeline. Both Lambda ZIPs must upload to S3 successfully before the GitHub draft is created.
 1. Check the [release page on GitHub](https://github.com/buildkite/buildkite-agent-scaler/releases) for a draft release that's been created
-1. If you approve of the draft github release, unblock the steps in both builds.
+1. If you approve of the draft GitHub release, unblock the SAR publishing pipeline.
 1. Once both builds are green, publish the draft GitHub release
