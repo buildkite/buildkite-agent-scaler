@@ -8,7 +8,6 @@ import (
 	"log"
 	"math"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -70,10 +69,8 @@ type Scaler struct {
 	elasticCIMode               bool // Special mode for Elastic CI Stack
 	minimumInstanceUptime       time.Duration
 	maxDanglingInstancesToCheck int
-	// ec2 and ssm back the graceful scale-in path in Elastic CI Mode. asgName
-	// only labels log lines from that path.
-	ec2     scaleInEC2API
-	ssm     ssmCheckAPI
+	// EC2 selects scale-in candidates; asgName labels their logs.
+	ec2     describeInstancesAPI
 	asgName string
 	// lastScaleInStore, when set, shares scaleInParams.LastEvent with other
 	// Lambda containers.
@@ -94,7 +91,6 @@ func NewScaler(client *buildkite.Client, cfg aws.Config, params Params) (*Scaler
 		asgActivityCooldown:    params.ASGActivityCooldown,
 		elasticCIMode:          params.ElasticCIMode,
 		ec2:                    ec2.NewFromConfig(cfg),
-		ssm:                    ssmClient,
 		asgName:                params.AutoScalingGroupName,
 	}
 
@@ -417,36 +413,30 @@ func (s *Scaler) scaleIn(ctx context.Context, desired int64, current AutoscaleGr
 		return s.dispatchGracefulStops(ctx, targets)
 	}
 
-	// Nothing is draining in any of these cases, so there's no agent-side
-	// decrement to collide with. Change desired capacity the way the
-	// non-graceful path does, otherwise the scaler keeps picking the same
-	// unreachable instances every poll and never converges.
 	switch {
 	case errors.Is(targetsErr, ErrWindowsGracefulScaleInNotSupported):
-		log.Printf("ℹ️  Skipped %d Windows instance(s) - graceful scale-in not supported, will be terminated directly by ASG", len(instancesForTermination))
+		log.Printf("ℹ️  Graceful scale-in is not supported for %d Windows instance(s)", len(instancesForTermination))
 	case targetsErr != nil:
 		return fmt.Errorf("resolve graceful-stop targets: %w", targetsErr)
 	default:
-		log.Printf("[Elastic CI Mode] no scale-in candidates reachable via SSM; falling back to a desired-capacity change")
+		log.Printf("[Elastic CI Mode] no scale-in candidates reachable via SSM")
 	}
 
+	// Even InvalidInstanceId can mean missing permissions. Keep capacity
+	// unchanged so a protected host can retry scale-in on later polls.
+	singleInstanceASG := current.DesiredCount <= 1 && current.TotalCount == 1 && len(current.InstanceIDs) == 1
+	windowsCapacityFallback := errors.Is(targetsErr, ErrWindowsGracefulScaleInNotSupported) && current.UnprotectedCount == 1
+	if len(instancesForTermination) > 0 && singleInstanceASG && !windowsCapacityFallback {
+		log.Printf("[Elastic CI Mode] Keeping single instance %s: no graceful-stop target; leaving desired capacity unchanged", current.InstanceIDs[0])
+		return nil
+	}
+
+	// No stop was sent, so only the scaler can decrement capacity.
 	if err := s.recordScaleIn(ctx); err != nil {
 		return err
 	}
 	if err := s.setDesiredCapacity(ctx, desired); err != nil {
 		return errors.Join(targetsErr, err)
-	}
-
-	// The Elastic CI Stack protects instances from scale-in by default, so
-	// the ASG won't act on the capacity change and a lone instance whose
-	// agent is gone would sit there forever. Probe it and terminate
-	// directly when SSM can't even reach it. Windows instances are never
-	// checked against SSM before this point, so they always get the probe.
-	singleInstanceASG := current.DesiredCount <= 1 && current.TotalCount == 1 && len(current.InstanceIDs) == 1
-	if len(instancesForTermination) > 0 && singleInstanceASG {
-		if err := terminateIfAgentUnreachable(ctx, s.ec2, s.ssm, current.InstanceIDs[0]); err != nil {
-			return fmt.Errorf("directly terminate probable dangling instance: %w", err)
-		}
 	}
 	return nil
 }
@@ -557,69 +547,6 @@ func (s *Scaler) setDesiredCapacity(ctx context.Context, desired int64) error {
 	}
 
 	log.Printf("↳ Set desired to %d (took %v)", desired, time.Since(t))
-	return nil
-}
-
-// scaleInEC2API is the subset of ec2.Client the graceful scale-in path uses,
-// extracted so tests can stub it.
-type scaleInEC2API interface {
-	describeInstancesAPI
-	TerminateInstances(ctx context.Context, params *ec2.TerminateInstancesInput, optFns ...func(*ec2.Options)) (*ec2.TerminateInstancesOutput, error)
-}
-
-// terminateIfAgentUnreachable asks SSM to run a service status check on the
-// instance and terminates it only when SSM refuses the command outright.
-// That's what an instance whose agent and SSM agent are both gone looks like.
-// A command that SSM accepts means the box is alive, so we leave it alone
-// even if the agent turns out to be stopped.
-//
-// The caller must have lowered desired capacity already so the ASG does not
-// launch a replacement.
-func terminateIfAgentUnreachable(ctx context.Context, ec2Client scaleInEC2API, ssmClient ssmCheckAPI, instanceID string) error {
-	log.Printf("[Elastic CI Mode] Single-instance ASG detected - checking if instance %s is a dangling instance", instanceID)
-
-	descResp, descErr := ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
-		InstanceIds: []string{instanceID},
-	})
-
-	// Default to Linux when detection fails. We only get here after SSM
-	// reported the instance offline, so the probe is expected to fail with
-	// InvalidInstanceId whatever document we pick.
-	documentName := "AWS-RunShellScript"
-	checkCommand := "systemctl is-active buildkite-agent"
-	if descErr != nil {
-		log.Printf("[Elastic CI Mode] Warning: Failed to detect platform for %s, defaulting to Linux: %v", instanceID, descErr)
-	} else if len(descResp.Reservations) > 0 && len(descResp.Reservations[0].Instances) > 0 {
-		instance := descResp.Reservations[0].Instances[0]
-		if strings.EqualFold(string(instance.Platform), "windows") {
-			documentName = "AWS-RunPowerShellScript"
-			checkCommand = "nssm status buildkite-agent"
-			log.Printf("[Elastic CI Mode] Detected Windows platform for instance %s", instanceID)
-		}
-	}
-
-	_, err := ssmClient.SendCommand(ctx, &ssm.SendCommandInput{
-		InstanceIds:  []string{instanceID},
-		DocumentName: aws.String(documentName),
-		Parameters: map[string][]string{
-			"commands": {checkCommand},
-		},
-		Comment: aws.String("Check if buildkite-agent service is running"),
-	})
-	if err == nil {
-		log.Printf("[Elastic CI Mode] Instance appears responsive, not terminating directly")
-		return nil
-	}
-
-	log.Printf("[Elastic CI Mode] Warning: Cannot check agent status, assuming dangling instance: %v", err)
-	log.Printf("[Elastic CI Mode] Directly terminating probable dangling instance")
-	if _, err := ec2Client.TerminateInstances(ctx, &ec2.TerminateInstancesInput{
-		InstanceIds: []string{instanceID},
-	}); err != nil {
-		return err
-	}
-
-	log.Printf("[Elastic CI Mode] Successfully terminated instance %s via EC2 API", instanceID)
 	return nil
 }
 

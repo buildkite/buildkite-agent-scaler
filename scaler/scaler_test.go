@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/autoscaling/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2Types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/buildkite/buildkite-agent-scaler/buildkite"
@@ -556,22 +557,6 @@ func (d *asgTestDriver) CleanupDanglingInstances(ctx context.Context, minimumIns
 	return d.err
 }
 
-type terminateInstancesTestClient struct {
-	events *[]string
-}
-
-func (c *terminateInstancesTestClient) TerminateInstances(context.Context, *ec2.TerminateInstancesInput, ...func(*ec2.Options)) (*ec2.TerminateInstancesOutput, error) {
-	*c.events = append(*c.events, "terminate instance")
-	return &ec2.TerminateInstancesOutput{}, nil
-}
-
-// scaleInEC2TestClient satisfies scaleInEC2API by combining the existing
-// DescribeInstances and TerminateInstances stubs.
-type scaleInEC2TestClient struct {
-	*stubDescribeInstancesClient
-	*terminateInstancesTestClient
-}
-
 func describeOutput(instances ...ec2Types.Instance) *ec2.DescribeInstancesOutput {
 	return &ec2.DescribeInstancesOutput{Reservations: []ec2Types.Reservation{{Instances: instances}}}
 }
@@ -624,10 +609,8 @@ func TestOldestInstances(t *testing.T) {
 	}
 }
 
-// TestScaleInGracefulPathConverges drives scaleIn in Elastic CI mode with the
-// EC2 and SSM clients stubbed, so the wiring between the graceful stop, the
-// desired-capacity fallback and the single-instance rescue gets exercised
-// together, not just piece by piece.
+// TestScaleInGracefulPathConverges covers graceful stops, capacity fallback,
+// and single-instance protection together.
 func TestScaleInGracefulPathConverges(t *testing.T) {
 	launched := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	instances := func(ids ...string) *ec2.DescribeInstancesOutput {
@@ -642,6 +625,16 @@ func TestScaleInGracefulPathConverges(t *testing.T) {
 	}
 	threeInstances := AutoscaleGroupDetails{DesiredCount: 3, TotalCount: 3, InstanceIDs: []string{"i-a", "i-b", "i-c"}}
 	singleInstance := AutoscaleGroupDetails{DesiredCount: 1, TotalCount: 1, InstanceIDs: []string{"i-a"}}
+	unprotectedInstance := autoscaleGroupDetails(types.AutoScalingGroup{
+		DesiredCapacity: aws.Int32(1),
+		MinSize:         aws.Int32(0),
+		MaxSize:         aws.Int32(1),
+		Instances: []types.Instance{{
+			InstanceId:           aws.String("i-a"),
+			LifecycleState:       types.LifecycleStateInService,
+			ProtectedFromScaleIn: aws.Bool(false),
+		}},
+	})
 
 	testCases := []struct {
 		name           string
@@ -654,7 +647,6 @@ func TestScaleInGracefulPathConverges(t *testing.T) {
 		accepted       int
 		dispatchErr    error
 		setDesiredErr  error
-		ssmErr         error
 		saveErr        error
 		wantEvents     string
 		wantDesired    int64
@@ -765,31 +757,21 @@ func TestScaleInGracefulPathConverges(t *testing.T) {
 			wantDesired: 3,
 		},
 		{
-			name:          "single unreachable instance is terminated directly",
-			current:       singleInstance,
-			desired:       0,
-			describe:      instances("i-a"),
-			noStopTargets: true,
-			ssmErr:        errors.New("InvalidInstanceId"),
-			wantEvents:    "[resolve stop targets set desired capacity terminate instance]",
-			wantDesired:   0,
+			name:           "single unreachable instance is kept without changing desired capacity",
+			current:        singleInstance,
+			desired:        0,
+			describe:       instances("i-a"),
+			noStopTargets:  true,
+			wantEvents:     "[resolve stop targets]",
+			wantDesired:    1,
+			wantNoCooldown: true,
 		},
 		{
-			name:          "single instance that answers the probe is kept",
-			current:       singleInstance,
-			desired:       0,
-			describe:      instances("i-a"),
-			noStopTargets: true,
-			wantEvents:    "[resolve stop targets set desired capacity]",
-			wantDesired:   0,
-		},
-		{
-			name:          "rescue is skipped while another instance is still terminating",
+			name:          "capacity fallback is kept while another instance is still terminating",
 			current:       AutoscaleGroupDetails{DesiredCount: 1, TotalCount: 2, InstanceIDs: []string{"i-a"}},
 			desired:       0,
 			describe:      instances("i-a"),
 			noStopTargets: true,
-			ssmErr:        errors.New("InvalidInstanceId"),
 			wantEvents:    "[resolve stop targets set desired capacity]",
 			wantDesired:   0,
 		},
@@ -803,14 +785,33 @@ func TestScaleInGracefulPathConverges(t *testing.T) {
 			wantDesired:    1,
 		},
 		{
-			name:           "single Windows instance that SSM cannot reach is terminated directly",
+			name:           "single Windows instance is kept without changing desired capacity",
 			current:        singleInstance,
 			desired:        0,
 			describe:       instances("i-a"),
 			stopTargetsErr: ErrWindowsGracefulScaleInNotSupported,
-			ssmErr:         errors.New("InvalidInstanceId"),
-			wantEvents:     "[resolve stop targets set desired capacity terminate instance]",
+			wantEvents:     "[resolve stop targets]",
+			wantDesired:    1,
+			wantNoCooldown: true,
+		},
+		{
+			name:           "unprotected Windows singleton uses ASG fallback",
+			current:        unprotectedInstance,
+			desired:        0,
+			describe:       instances("i-a"),
+			stopTargetsErr: ErrWindowsGracefulScaleInNotSupported,
+			wantEvents:     "[resolve stop targets set desired capacity]",
 			wantDesired:    0,
+		},
+		{
+			name:           "unprotected Linux singleton still waits for SSM recovery",
+			current:        unprotectedInstance,
+			desired:        0,
+			describe:       instances("i-a"),
+			noStopTargets:  true,
+			wantEvents:     "[resolve stop targets]",
+			wantDesired:    1,
+			wantNoCooldown: true,
 		},
 		// AWS errors don't guarantee that the capacity change wasn't applied.
 		{
@@ -836,18 +837,14 @@ func TestScaleInGracefulPathConverges(t *testing.T) {
 				sigTermErr:       tc.dispatchErr,
 				setDesiredErr:    tc.setDesiredErr,
 			}
-			ec2Client := &scaleInEC2TestClient{
-				stubDescribeInstancesClient: &stubDescribeInstancesClient{
-					responses: []stubDescribeResponse{{out: tc.describe, err: tc.describeErr}},
-				},
-				terminateInstancesTestClient: &terminateInstancesTestClient{events: &asg.events},
+			ec2Client := &stubDescribeInstancesClient{
+				responses: []stubDescribeResponse{{out: tc.describe, err: tc.describeErr}},
 			}
 			store := &fakeLastScaleInStore{saveErr: tc.saveErr}
 			s := Scaler{
 				autoscaling:      asg,
 				elasticCIMode:    true,
 				ec2:              ec2Client,
-				ssm:              &stubSSMClient{sendErr: tc.ssmErr},
 				lastScaleInStore: store,
 			}
 
@@ -890,6 +887,56 @@ func TestScaleInGracefulPathConverges(t *testing.T) {
 				t.Errorf("persisted %v, want exactly LastEvent %v", store.saved[0], s.scaleInParams.LastEvent)
 			}
 		})
+	}
+}
+
+func TestScalerRunRetriesUnreachableSingleInstance(t *testing.T) {
+	asg := &asgTestDriver{
+		desiredCapacity: 1,
+		actualCapacity:  1,
+		noStopTargets:   true,
+	}
+	instance := describeOutput(ec2Types.Instance{
+		InstanceId: aws.String("i-000000000000"),
+		LaunchTime: aws.Time(time.Now().Add(-24 * time.Hour)),
+	})
+	store := &fakeLastScaleInStore{}
+	s := Scaler{
+		autoscaling:   asg,
+		bk:            &buildkiteTestDriver{},
+		elasticCIMode: true,
+		scaling:       ScalingCalculator{agentsPerInstance: 1},
+		scaleInParams: ScaleParams{CooldownPeriod: time.Hour},
+		ec2: &stubDescribeInstancesClient{
+			responses: []stubDescribeResponse{{out: instance}, {out: instance}},
+		},
+		lastScaleInStore: store,
+	}
+
+	if _, err := s.Run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if asg.desiredCapacity != 1 || asg.setDesiredCapacityCalls != 0 {
+		t.Fatalf("first poll: desired capacity = %d, capacity changes = %d; want 1 and 0", asg.desiredCapacity, asg.setDesiredCapacityCalls)
+	}
+	if !s.LastScaleIn().IsZero() || len(store.saved) != 0 {
+		t.Fatalf("first poll started cooldown: LastScaleIn = %v, saved = %v", s.LastScaleIn(), store.saved)
+	}
+
+	// Once SSM recovers, the next poll must reach graceful scale-in.
+	asg.noStopTargets = false
+	asg.sigTermsAccepted = 1
+	if _, err := s.Run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(asg.sigTermsSent, []string{"i-000000000000"}) {
+		t.Errorf("second poll: graceful-stop targets = %v, want [i-000000000000]", asg.sigTermsSent)
+	}
+	if asg.desiredCapacity != 1 || asg.setDesiredCapacityCalls != 0 {
+		t.Errorf("second poll: desired capacity = %d, capacity changes = %d; want agent-owned decrement", asg.desiredCapacity, asg.setDesiredCapacityCalls)
+	}
+	if s.LastScaleIn().IsZero() || len(store.saved) != 1 {
+		t.Errorf("second poll: LastScaleIn = %v, saved = %v; want one cooldown", s.LastScaleIn(), store.saved)
 	}
 }
 
@@ -1475,11 +1522,7 @@ func TestDanglingInstanceDetection(t *testing.T) {
 				// reports no instances, so it falls back to a plain
 				// desired-capacity change; the graceful wiring itself is
 				// covered by TestScaleInGracefulPathConverges.
-				ec2: &scaleInEC2TestClient{
-					stubDescribeInstancesClient:  &stubDescribeInstancesClient{},
-					terminateInstancesTestClient: &terminateInstancesTestClient{events: &asg.events},
-				},
-				ssm: &stubSSMClient{},
+				ec2: &stubDescribeInstancesClient{},
 			}
 
 			_, err := s.Run(context.Background())
