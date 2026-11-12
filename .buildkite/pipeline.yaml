@@ -6,13 +6,13 @@ steps:
     key: go-fmt
     command: .buildkite/steps/test-go-fmt.sh
     plugins:
-      - mise#v1.1.5: ~
+      - mise#v1.1.6: ~
 
   - name: ":golang: Run Tests"
     key: test
     command: .buildkite/steps/tests.sh
     plugins:
-      - mise#v1.1.5: ~
+      - mise#v1.1.6: ~
 
   - name: ":lambda: Build Lambda"
     key: build-lambda
@@ -20,7 +20,7 @@ steps:
       - go-fmt
     command: .buildkite/steps/build-lambda.sh
     plugins:
-      - mise#v1.1.5: ~
+      - mise#v1.1.6: ~
     artifact_paths:
       - handler.zip
       - handler-arm64.zip
@@ -32,7 +32,7 @@ steps:
       - build-lambda
     command: .buildkite/steps/upload-to-s3.sh
     plugins:
-      - aws-assume-role-with-web-identity#v1.8.1:
+      - aws-assume-role-with-web-identity#v1.8.2:
           role-arn: arn:aws:iam::172840064832:role/pipeline-buildkite-buildkite-agent-scaler
           session-tags:
             - organization_slug
@@ -52,7 +52,7 @@ steps:
       - block-s3-release
     command: .buildkite/steps/upload-to-s3.sh release
     plugins:
-      - aws-assume-role-with-web-identity#v1.8.1:
+      - aws-assume-role-with-web-identity#v1.8.2:
           role-arn: arn:aws:iam::172840064832:role/pipeline-buildkite-buildkite-agent-scaler
           session-tags:
             - organization_slug
@@ -68,7 +68,7 @@ steps:
     env:
       BUILDKITE_AGENT_GIT_FETCH_FLAGS: -v --prune --tags
     plugins:
-      - aws-assume-role-with-web-identity#v1.8.1:
+      - aws-assume-role-with-web-identity#v1.8.2:
           role-arn: arn:aws:iam::445615400570:role/pipeline-buildkite-buildkite-agent-scaler
           session-tags:
             - organization_slug
